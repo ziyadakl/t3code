@@ -21,7 +21,6 @@ export interface RelayConfigurationShape {
   readonly cloudMintPrivateKey: Redacted.Redacted<string>;
   readonly cloudMintPublicKey: string;
   readonly managedEndpointBaseDomain: string | undefined;
-  readonly cloudflareAccountId: string | undefined;
   readonly cloudflareZoneId: string | undefined;
   readonly cloudflareApiToken: Redacted.Redacted<string> | undefined;
 }

@@ -9,6 +9,7 @@ import * as Planetscale from "alchemy/Planetscale";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 
 import { PlanetscaleDatabase, RelayHyperdrive } from "./src/db.ts";
+import { ManagedEndpointZone } from "./src/managedEndpointStack.ts";
 import Api from "./src/worker.ts";
 
 export default Alchemy.Stack(
@@ -26,6 +27,7 @@ export default Alchemy.Stack(
   Effect.gen(function* () {
     const db = yield* PlanetscaleDatabase;
     const hyperdrive = yield* RelayHyperdrive;
+    const zone = yield* ManagedEndpointZone;
     const api = yield* Api;
 
     return {
@@ -33,6 +35,7 @@ export default Alchemy.Stack(
       hyperdriveName: hyperdrive.name,
       workerName: api.workerName,
       url: api.url,
+      managedEndpointZoneId: zone.zoneId,
     };
   }),
 );

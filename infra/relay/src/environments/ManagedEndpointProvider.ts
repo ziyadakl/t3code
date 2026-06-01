@@ -1,19 +1,20 @@
-// @effect-diagnostics nodeBuiltinImport:off
-
 import type {
   RelayManagedEndpoint,
   RelayManagedEndpointOrigin,
   RelayManagedEndpointRuntimeConfig,
 } from "@t3tools/contracts/relay";
+import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import { HttpClient, HttpClientRequest } from "effect/unstable/http";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import * as RelayConfiguration from "../Config.ts";
 
@@ -56,35 +57,54 @@ export class ManagedEndpointProvider extends Context.Service<
   ManagedEndpointProviderShape
 >()("t3code-relay/environments/ManagedEndpointProvider") {}
 
-const CloudflareTunnelCreateResponse = Schema.Struct({
-  success: Schema.Boolean,
-  result: Schema.Struct({
-    id: Schema.String,
-    name: Schema.String,
-  }),
-});
+interface ManagedEndpointTunnel {
+  readonly id?: string | null;
+  readonly name?: string | null;
+}
 
-const CloudflareTunnelListResponse = Schema.Struct({
-  success: Schema.Boolean,
-  result: Schema.Array(
-    Schema.Struct({
-      id: Schema.String,
-      name: Schema.String,
-    }),
-  ),
-});
+export class ManagedEndpointTunnelClientError extends Data.TaggedError(
+  "ManagedEndpointTunnelClientError",
+)<{
+  readonly cause: unknown;
+}> {}
 
-const CloudflareTunnelTokenResponse = Schema.Struct({
-  success: Schema.Boolean,
-  result: Schema.String,
-});
+export interface ManagedEndpointTunnelClientShape {
+  readonly list: (request: {
+    readonly name: string;
+    readonly isDeleted: false;
+  }) => Effect.Effect<
+    { readonly result: ReadonlyArray<ManagedEndpointTunnel> },
+    ManagedEndpointTunnelClientError
+  >;
+  readonly create: (request: {
+    readonly name: string;
+    readonly configSrc: "cloudflare";
+  }) => Effect.Effect<ManagedEndpointTunnel, ManagedEndpointTunnelClientError>;
+  readonly putConfiguration: (
+    tunnelId: string,
+    config: {
+      readonly ingress: Array<{
+        readonly hostname?: string;
+        readonly service: string;
+      }>;
+    },
+  ) => Effect.Effect<unknown, ManagedEndpointTunnelClientError>;
+  readonly getToken: (tunnelId: string) => Effect.Effect<string, ManagedEndpointTunnelClientError>;
+}
+
+export class ManagedEndpointTunnelClient extends Context.Service<
+  ManagedEndpointTunnelClient,
+  ManagedEndpointTunnelClientShape
+>()("t3code-relay/environments/ManagedEndpointProvider/ManagedEndpointTunnelClient") {}
 
 const CloudflareDnsRecordResponse = Schema.Struct({
   success: Schema.Boolean,
+  errors: Schema.optionalKey(Schema.Unknown),
 });
 
 const CloudflareDnsRecordListResponse = Schema.Struct({
   success: Schema.Boolean,
+  errors: Schema.optionalKey(Schema.Unknown),
   result: Schema.Array(
     Schema.Struct({
       id: Schema.String,
@@ -97,44 +117,17 @@ const requireCloudflareSettings = Effect.fnUntraced(function* (
 ) {
   if (
     !settings.managedEndpointBaseDomain ||
-    !settings.cloudflareAccountId ||
     !settings.cloudflareZoneId ||
     !settings.cloudflareApiToken
   ) {
     return yield* new ManagedEndpointProvisioningNotConfigured();
   }
   return {
-    accountId: settings.cloudflareAccountId,
     zoneId: settings.cloudflareZoneId,
     apiToken: Redacted.value(settings.cloudflareApiToken),
     baseDomain: settings.managedEndpointBaseDomain,
   };
 });
-
-function cloudflareRequest(input: {
-  readonly method: "GET" | "POST" | "PUT";
-  readonly url: string;
-  readonly apiToken: string;
-  readonly body?: unknown;
-}): Effect.Effect<HttpClientRequest.HttpClientRequest, ManagedEndpointProvisioningFailed> {
-  const base =
-    input.method === "GET"
-      ? HttpClientRequest.get(input.url)
-      : input.method === "POST"
-        ? HttpClientRequest.post(input.url)
-        : HttpClientRequest.put(input.url);
-
-  const request = base.pipe(
-    HttpClientRequest.setHeader("authorization", `Bearer ${input.apiToken}`),
-    HttpClientRequest.setHeader("content-type", "application/json"),
-  );
-  return input.body === undefined
-    ? Effect.succeed(request)
-    : request.pipe(
-        HttpClientRequest.bodyJson(input.body),
-        Effect.mapError((cause) => new ManagedEndpointProvisioningFailed({ cause })),
-      );
-}
 
 const MANAGED_ENDPOINT_HOST_PREFIX = "tunnels";
 const DNS_LABEL_MAX_LENGTH = 63;
@@ -191,37 +184,20 @@ const make = Effect.gen(function* () {
   const config = yield* RelayConfiguration.RelayConfiguration;
   const httpClient = yield* HttpClient.HttpClient;
   const crypto = yield* Crypto.Crypto;
+  const tunnels = yield* ManagedEndpointTunnelClient;
 
-  const requireCloudflareSuccess = (
-    json: unknown,
-  ): Effect.Effect<void, ManagedEndpointProvisioningFailed> =>
-    typeof json === "object" &&
-    json !== null &&
-    "success" in json &&
-    (json as { readonly success: unknown }).success === false
-      ? Effect.fail(new ManagedEndpointProvisioningFailed({ cause: json }))
-      : Effect.void;
-
-  const executeJson = Effect.fnUntraced(function* <A>(
-    request: HttpClientRequest.HttpClientRequest,
-    schema: Schema.Schema<A>,
-  ) {
-    const response = yield* httpClient
-      .execute(request)
-      .pipe(Effect.mapError((cause) => new ManagedEndpointProvisioningFailed({ cause })));
-    if (response.status < 200 || response.status >= 300) {
-      return yield* new ManagedEndpointProvisioningFailed({ cause: response.status });
-    }
-    const json = yield* response.json.pipe(
-      Effect.mapError((cause) => new ManagedEndpointProvisioningFailed({ cause })),
-    );
-    const isSchema = Schema.is(schema);
-    if (!isSchema(json)) {
-      return yield* new ManagedEndpointProvisioningFailed({ cause: json });
-    }
-    yield* requireCloudflareSuccess(json);
-    return json;
-  });
+  const executeJson =
+    <A extends { readonly success: boolean }>(schema: Schema.Codec<A, unknown, never, unknown>) =>
+    (request: HttpClientRequest.HttpClientRequest) =>
+      httpClient.execute(request).pipe(
+        Effect.flatMap(HttpClientResponse.filterStatusOk),
+        Effect.flatMap(HttpClientResponse.schemaBodyJson(schema)),
+        Effect.mapError((cause) => new ManagedEndpointProvisioningFailed({ cause })),
+        Effect.filterMapOrFail(
+          (body) => (body.success ? Result.succeed(body) : Result.fail(body)),
+          (cause) => new ManagedEndpointProvisioningFailed({ cause }),
+        ),
+      );
 
   return ManagedEndpointProvider.of({
     provision: Effect.fn("relay.managed_endpoint_provider.provision")(function* (input) {
@@ -245,83 +221,70 @@ const make = Effect.gen(function* () {
         );
       const hostname = managedHostname(input.environmentId, cf.baseDomain, environmentHash);
       const tunnelName = managedTunnelName(input.environmentId, environmentHash);
-      const existingTunnels = yield* cloudflareRequest({
-        method: "GET",
-        url: `https://api.cloudflare.com/client/v4/accounts/${cf.accountId}/cfd_tunnel?${new URLSearchParams(
-          [
-            ["name", tunnelName],
-            ["is_deleted", "false"],
-          ],
-        ).toString()}`,
-        apiToken: cf.apiToken,
-      }).pipe(Effect.flatMap((request) => executeJson(request, CloudflareTunnelListResponse)));
-      const existingTunnel = existingTunnels.result.find((tunnel) => tunnel.name === tunnelName);
-      const tunnel =
-        existingTunnel ??
-        (yield* cloudflareRequest({
-          method: "POST",
-          url: `https://api.cloudflare.com/client/v4/accounts/${cf.accountId}/cfd_tunnel`,
-          apiToken: cf.apiToken,
-          body: {
-            name: tunnelName,
-            config_src: "cloudflare",
-          },
-        }).pipe(
-          Effect.flatMap((request) => executeJson(request, CloudflareTunnelCreateResponse)),
-          Effect.map((response) => response.result),
-        ));
 
-      yield* cloudflareRequest({
-        method: "PUT",
-        url: `https://api.cloudflare.com/client/v4/accounts/${cf.accountId}/cfd_tunnel/${tunnel.id}/configurations`,
-        apiToken: cf.apiToken,
-        body: {
-          config: {
-            ingress: [
-              {
-                hostname,
-                service: formatOriginService(input.origin),
-              },
-              { service: "http_status:404" },
-            ],
-          },
-        },
-      }).pipe(
-        Effect.flatMap((request) =>
-          executeJson(request, Schema.Struct({ success: Schema.Boolean })),
+      const tunnel = yield* tunnels.list({ name: tunnelName, isDeleted: false }).pipe(
+        Effect.map((tunnels) => tunnels.result),
+        Effect.map(Arr.findFirst((tunnel) => tunnel.name === tunnelName)),
+        Effect.flatMap(
+          Option.match({
+            onSome: (tunnel) => Effect.succeed(tunnel),
+            onNone: () => tunnels.create({ name: tunnelName, configSrc: "cloudflare" }),
+          }),
         ),
+        Effect.filterMapOrFail((tunnel) =>
+          tunnel.id && tunnel.name
+            ? Result.succeed({ id: tunnel.id, name: tunnel.name })
+            : Result.fail(new ManagedEndpointProvisioningFailed({ cause: tunnel })),
+        ),
+        Effect.mapError((cause) => new ManagedEndpointProvisioningFailed({ cause })),
       );
 
-      const dnsRecords = yield* cloudflareRequest({
-        method: "GET",
-        url: `https://api.cloudflare.com/client/v4/zones/${cf.zoneId}/dns_records?${new URLSearchParams(
-          [
-            ["type", "CNAME"],
-            ["name", hostname],
+      yield* tunnels
+        .putConfiguration(tunnel.id, {
+          ingress: [
+            {
+              hostname,
+              service: formatOriginService(input.origin),
+            },
+            { service: "http_status:404" },
           ],
-        ).toString()}`,
-        apiToken: cf.apiToken,
-      }).pipe(Effect.flatMap((request) => executeJson(request, CloudflareDnsRecordListResponse)));
-      const existingDnsRecordId = dnsRecords.result[0]?.id;
-      yield* cloudflareRequest({
-        method: existingDnsRecordId ? "PUT" : "POST",
-        url: existingDnsRecordId
-          ? `https://api.cloudflare.com/client/v4/zones/${cf.zoneId}/dns_records/${existingDnsRecordId}`
-          : `https://api.cloudflare.com/client/v4/zones/${cf.zoneId}/dns_records`,
-        apiToken: cf.apiToken,
-        body: {
+        })
+        .pipe(Effect.mapError((cause) => new ManagedEndpointProvisioningFailed({ cause })));
+
+      const existingDnsRecordId = yield* HttpClientRequest.make("GET")(
+        "/zones/${cf.zoneId}/dns_records",
+      ).pipe(
+        HttpClientRequest.prependUrl("https://api.cloudflare.com/client/v4"),
+        HttpClientRequest.bearerToken(cf.apiToken),
+        HttpClientRequest.setUrlParams({
+          type: "CNAME",
+          name: hostname,
+        }),
+        executeJson(CloudflareDnsRecordListResponse),
+        Effect.map((body) => Arr.head(body.result)),
+        Effect.map(Option.map((record) => record.id)),
+      );
+
+      const upsertDnsRequest = Option.match(existingDnsRecordId, {
+        onSome: (id) => HttpClientRequest.make("PUT")(`/zones/${cf.zoneId}/dns_records/${id}`),
+        onNone: () => HttpClientRequest.make("POST")(`/zones/${cf.zoneId}/dns_records`),
+      });
+
+      yield* upsertDnsRequest.pipe(
+        HttpClientRequest.prependUrl("https://api.cloudflare.com/client/v4"),
+        HttpClientRequest.bearerToken(cf.apiToken),
+        HttpClientRequest.bodyJsonUnsafe({
           type: "CNAME",
           name: hostname,
           content: `${tunnel.id}.cfargotunnel.com`,
           proxied: true,
-        },
-      }).pipe(Effect.flatMap((request) => executeJson(request, CloudflareDnsRecordResponse)));
+        }),
+        executeJson(CloudflareDnsRecordResponse),
+      );
 
-      const token = yield* cloudflareRequest({
-        method: "GET",
-        url: `https://api.cloudflare.com/client/v4/accounts/${cf.accountId}/cfd_tunnel/${tunnel.id}/token`,
-        apiToken: cf.apiToken,
-      }).pipe(Effect.flatMap((request) => executeJson(request, CloudflareTunnelTokenResponse)));
+      const connectorToken = yield* tunnels
+        .getToken(tunnel.id)
+        .pipe(Effect.mapError((cause) => new ManagedEndpointProvisioningFailed({ cause })));
 
       return {
         endpoint: {
@@ -331,7 +294,7 @@ const make = Effect.gen(function* () {
         },
         runtime: {
           providerKind: "cloudflare_tunnel",
-          connectorToken: token.result,
+          connectorToken,
           tunnelId: tunnel.id,
           tunnelName: tunnel.name,
         },

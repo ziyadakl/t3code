@@ -28,7 +28,6 @@ const config = RelayConfiguration.RelayConfiguration.of({
   cloudMintPrivateKey: Redacted.make(keyPair.privateKey),
   cloudMintPublicKey: keyPair.publicKey,
   managedEndpointBaseDomain: undefined,
-  cloudflareAccountId: undefined,
   cloudflareZoneId: undefined,
   cloudflareApiToken: undefined,
 });

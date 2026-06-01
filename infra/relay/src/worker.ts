@@ -30,10 +30,8 @@ import {
   withoutCapturedParentSpan,
 } from "./http/Api.ts";
 import {
-  CLOUDFLARE_ACCOUNT_ID,
-  MANAGED_ENDPOINT_ZONE_ID,
-  MANAGED_ENDPOINT_ZONE_NAME,
-  ManagedEndpointProvisionerToken,
+  ManagedEndpointDNSToken,
+  ManagedEndpointZone,
   RELAY_PUBLIC_DOMAIN,
   RELAY_PUBLIC_ORIGIN,
 } from "./managedEndpointStack.ts";
@@ -112,8 +110,12 @@ export default class Api extends Cloudflare.Worker<Api>()(
     const alchemyRuntimeContext = yield* Alchemy.RuntimeContext;
     const cloudMintKeyPair = yield* CloudMintKeyPair;
     const hyperdrive = yield* Cloudflare.Hyperdrive.bind(yield* RelayHyperdrive);
-    const managedEndpointProvisionerToken = yield* ManagedEndpointProvisionerToken;
+    const managedEndpointZone = yield* ManagedEndpointZone;
+    const managedEndpointZoneId = yield* managedEndpointZone.zoneId;
+    const managedEndpointZoneName = yield* managedEndpointZone.name;
+    const managedEndpointProvisionerToken = yield* ManagedEndpointDNSToken;
     const managedEndpointCloudflareApiToken = yield* managedEndpointProvisionerToken.value;
+    const managedEndpointTunnelBinding = yield* Cloudflare.TunnelReadWrite.bind();
     const randomApnsDeliveryJobSigningSecret = yield* ApnsDeliveryJobSigningSecret;
     const observability = yield* RelayObservability;
 
@@ -146,6 +148,36 @@ export default class Api extends Cloudflare.Worker<Api>()(
           Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
         ),
     });
+    const managedEndpointTunnelClient = ManagedEndpointProvider.ManagedEndpointTunnelClient.of({
+      list: (request) =>
+        managedEndpointTunnelBinding.list(request).pipe(
+          Effect.mapError(
+            (cause) => new ManagedEndpointProvider.ManagedEndpointTunnelClientError({ cause }),
+          ),
+          Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+        ),
+      create: (request) =>
+        managedEndpointTunnelBinding.create(request).pipe(
+          Effect.mapError(
+            (cause) => new ManagedEndpointProvider.ManagedEndpointTunnelClientError({ cause }),
+          ),
+          Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+        ),
+      putConfiguration: (tunnelId, config) =>
+        managedEndpointTunnelBinding.putConfiguration(tunnelId, config).pipe(
+          Effect.mapError(
+            (cause) => new ManagedEndpointProvider.ManagedEndpointTunnelClientError({ cause }),
+          ),
+          Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+        ),
+      getToken: (tunnelId) =>
+        managedEndpointTunnelBinding.getToken(tunnelId).pipe(
+          Effect.mapError(
+            (cause) => new ManagedEndpointProvider.ManagedEndpointTunnelClientError({ cause }),
+          ),
+          Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+        ),
+    });
 
     //
     // 3. Runtime layers and app construction
@@ -165,9 +197,8 @@ export default class Api extends Cloudflare.Worker<Api>()(
         clerkSecretKey,
         cloudMintPrivateKey: yield* cloudMintPrivateKey,
         cloudMintPublicKey: yield* cloudMintPublicKey,
-        managedEndpointBaseDomain: MANAGED_ENDPOINT_ZONE_NAME,
-        cloudflareAccountId: CLOUDFLARE_ACCOUNT_ID,
-        cloudflareZoneId: MANAGED_ENDPOINT_ZONE_ID,
+        managedEndpointBaseDomain: yield* managedEndpointZoneName,
+        cloudflareZoneId: yield* managedEndpointZoneId,
         cloudflareApiToken: yield* managedEndpointCloudflareApiToken,
       });
     });
@@ -205,6 +236,12 @@ export default class Api extends Cloudflare.Worker<Api>()(
           Layer.provide(RelayTokens.layer),
           Layer.provide(Layer.succeed(RelayDb, db)),
           Layer.provide(Layer.succeed(ApnsDeliveryQueue.ApnsDeliveryQueueSender, queueSender)),
+          Layer.provide(
+            Layer.succeed(
+              ManagedEndpointProvider.ManagedEndpointTunnelClient,
+              managedEndpointTunnelClient,
+            ),
+          ),
           Layer.provide(Layer.succeed(RelayConfiguration.RelayConfiguration, settings)),
           Layer.provide(webcryptoLayer),
         );
@@ -273,11 +310,12 @@ export default class Api extends Cloudflare.Worker<Api>()(
     return { fetch };
   }).pipe(
     Effect.provide(
-      Layer.mergeAll(
-        Cloudflare.HyperdriveBindingLive,
-        Cloudflare.CronEventSourceLive,
-        Cloudflare.QueueBindingLive,
-        Cloudflare.QueueEventSourceLive,
+      Layer.empty.pipe(
+        Layer.provideMerge(Cloudflare.HyperdriveBindingLive),
+        Layer.provideMerge(Cloudflare.CronEventSourceLive),
+        Layer.provideMerge(Cloudflare.QueueBindingLive),
+        Layer.provideMerge(Cloudflare.QueueEventSourceLive),
+        Layer.provideMerge(Cloudflare.TunnelReadWriteLive),
       ),
     ),
   ),
