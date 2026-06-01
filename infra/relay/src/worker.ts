@@ -107,7 +107,7 @@ export default class Api extends Cloudflare.Worker<Api>()(
     const apnsDeliveryQueue = yield* RelayApnsDeliveryQueue;
     const apnsDeliveryDeadLetterQueue = yield* RelayApnsDeliveryDeadLetterQueue;
     const apnsDeliveryQueueSender = yield* Cloudflare.QueueBinding.bind(apnsDeliveryQueue);
-    const alchemyRuntimeContext = yield* Alchemy.RuntimeContext;
+
     const cloudMintKeyPair = yield* CloudMintKeyPair;
     const hyperdrive = yield* Cloudflare.Hyperdrive.bind(yield* RelayHyperdrive);
     const managedEndpointZone = yield* ManagedEndpointZone;
@@ -141,47 +141,11 @@ export default class Api extends Cloudflare.Worker<Api>()(
     const cloudMintPrivateKey = yield* cloudMintKeyPair.privateKey;
     const cloudMintPublicKey = yield* cloudMintKeyPair.publicKey;
     const db = yield* Drizzle.postgres(hyperdrive.connectionString);
-    const queueSender = ApnsDeliveryQueue.ApnsDeliveryQueueSender.of({
-      send: (body) =>
-        apnsDeliveryQueueSender.send(body).pipe(
-          Effect.mapError((cause) => new ApnsDeliveryQueue.ApnsDeliveryQueueSendError({ cause })),
-          Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
-        ),
-    });
-    const managedEndpointTunnelClient = ManagedEndpointProvider.ManagedEndpointTunnelClient.of({
-      list: (request) =>
-        managedEndpointTunnelBinding.list(request).pipe(
-          Effect.mapError(
-            (cause) => new ManagedEndpointProvider.ManagedEndpointTunnelClientError({ cause }),
-          ),
-          Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
-        ),
-      create: (request) =>
-        managedEndpointTunnelBinding.create(request).pipe(
-          Effect.mapError(
-            (cause) => new ManagedEndpointProvider.ManagedEndpointTunnelClientError({ cause }),
-          ),
-          Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
-        ),
-      putConfiguration: (tunnelId, config) =>
-        managedEndpointTunnelBinding.putConfiguration(tunnelId, config).pipe(
-          Effect.mapError(
-            (cause) => new ManagedEndpointProvider.ManagedEndpointTunnelClientError({ cause }),
-          ),
-          Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
-        ),
-      getToken: (tunnelId) =>
-        managedEndpointTunnelBinding.getToken(tunnelId).pipe(
-          Effect.mapError(
-            (cause) => new ManagedEndpointProvider.ManagedEndpointTunnelClientError({ cause }),
-          ),
-          Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
-        ),
-    });
 
     //
     // 3. Runtime layers and app construction
     //
+    const alchemyRuntimeContext = yield* Alchemy.RuntimeContext;
 
     const loadSettings = Effect.gen(function* () {
       return RelayConfiguration.RelayConfiguration.of({
@@ -219,14 +183,21 @@ export default class Api extends Cloudflare.Worker<Api>()(
           MobileRegistrations.layer.pipe(Layer.provideMerge(AgentActivityPublisher.layer)),
           EnvironmentConnector.layer,
           EnvironmentLinker.layer.pipe(
-            Layer.provideMerge(ManagedEndpointProvider.layer),
+            Layer.provideMerge(
+              ManagedEndpointProvider.layerCloudflareTunnels(
+                managedEndpointTunnelBinding,
+                alchemyRuntimeContext,
+              ),
+            ),
             Layer.provideMerge(DpopProofs.layer),
           ),
           EnvironmentPublishSignatures.layer.pipe(Layer.provideMerge(DpopProofs.layer)),
           DpopProofs.layer,
         ).pipe(
           Layer.provide(ApnsDeliveries.layer.pipe(Layer.provide(ApnsClient.layer))),
-          Layer.provide(ApnsDeliveryQueue.layer),
+          Layer.provide(
+            ApnsDeliveryQueue.layerCloudflareQueues(apnsDeliveryQueueSender, alchemyRuntimeContext),
+          ),
           Layer.provide(AgentActivityRows.layer),
           Layer.provide(Devices.layer),
           Layer.provide(EnvironmentCredentials.layer),
@@ -235,13 +206,6 @@ export default class Api extends Cloudflare.Worker<Api>()(
           Layer.provide(DeliveryAttempts.layer),
           Layer.provide(RelayTokens.layer),
           Layer.provide(Layer.succeed(RelayDb, db)),
-          Layer.provide(Layer.succeed(ApnsDeliveryQueue.ApnsDeliveryQueueSender, queueSender)),
-          Layer.provide(
-            Layer.succeed(
-              ManagedEndpointProvider.ManagedEndpointTunnelClient,
-              managedEndpointTunnelClient,
-            ),
-          ),
           Layer.provide(Layer.succeed(RelayConfiguration.RelayConfiguration, settings)),
           Layer.provide(webcryptoLayer),
         );
@@ -276,11 +240,10 @@ export default class Api extends Cloudflare.Worker<Api>()(
     }).subscribe((stream) =>
       stream.pipe(
         Stream.withSpan("relay.apn_delivery_queue.process_batch"),
-        Stream.runForEach(
-          Effect.fn("relay.apn_delivery_queue.process_message")((message) =>
-            ApnsDeliveries.ApnsDeliveries.pipe(
-              Effect.flatMap((deliveries) => deliveries.processSignedJob(message.body)),
-            ),
+        Stream.runForEach((message) =>
+          ApnsDeliveries.ApnsDeliveries.pipe(
+            Effect.flatMap((deliveries) => deliveries.processSignedJob(message.body)),
+            Effect.withSpan("relay.apn_delivery_queue.process_message"),
           ),
         ),
         Effect.provide(runtimeLayer),

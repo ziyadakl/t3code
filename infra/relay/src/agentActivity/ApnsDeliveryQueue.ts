@@ -1,10 +1,13 @@
-import type { RelayDeliveryResult } from "@t3tools/contracts/relay";
+import * as Alchemy from "alchemy";
+import * as Cloudflare from "alchemy/Cloudflare";
 import * as Crypto from "effect/Crypto";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+
+import type { RelayDeliveryResult } from "@t3tools/contracts/relay";
 
 import {
   sanitizeAgentActivityAggregateState,
@@ -139,3 +142,22 @@ const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(ApnsDeliveryQueue, make);
+
+export const layerCloudflareQueues = (
+  sender: Cloudflare.QueueSender,
+  alchemyRuntimeContext: Alchemy.BaseRuntimeContext,
+) =>
+  layer.pipe(
+    Layer.provide(
+      Layer.succeed(
+        ApnsDeliveryQueueSender,
+        ApnsDeliveryQueueSender.of({
+          send: (body) =>
+            sender.send(body).pipe(
+              Effect.mapError((cause) => new ApnsDeliveryQueueSendError({ cause })),
+              Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+            ),
+        }),
+      ),
+    ),
+  );

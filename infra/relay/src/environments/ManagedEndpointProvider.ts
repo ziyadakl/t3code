@@ -1,8 +1,5 @@
-import type {
-  RelayManagedEndpoint,
-  RelayManagedEndpointOrigin,
-  RelayManagedEndpointRuntimeConfig,
-} from "@t3tools/contracts/relay";
+import * as Alchemy from "alchemy";
+import * as Cloudflare from "alchemy/Cloudflare";
 import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -15,6 +12,12 @@ import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
+
+import type {
+  RelayManagedEndpoint,
+  RelayManagedEndpointOrigin,
+  RelayManagedEndpointRuntimeConfig,
+} from "@t3tools/contracts/relay";
 
 import * as RelayConfiguration from "../Config.ts";
 
@@ -304,3 +307,37 @@ const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(ManagedEndpointProvider, make);
+
+export const layerCloudflareTunnels = (
+  tunnelClient: Cloudflare.TunnelReadWriteClient,
+  alchemyRuntimeContext: Alchemy.BaseRuntimeContext,
+) =>
+  layer.pipe(
+    Layer.provide(
+      Layer.succeed(
+        ManagedEndpointTunnelClient,
+        ManagedEndpointTunnelClient.of({
+          list: (request) =>
+            tunnelClient.list(request).pipe(
+              Effect.mapError((cause) => new ManagedEndpointTunnelClientError({ cause })),
+              Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+            ),
+          create: (request) =>
+            tunnelClient.create(request).pipe(
+              Effect.mapError((cause) => new ManagedEndpointTunnelClientError({ cause })),
+              Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+            ),
+          putConfiguration: (tunnelId, config) =>
+            tunnelClient.putConfiguration(tunnelId, config).pipe(
+              Effect.mapError((cause) => new ManagedEndpointTunnelClientError({ cause })),
+              Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+            ),
+          getToken: (tunnelId) =>
+            tunnelClient.getToken(tunnelId).pipe(
+              Effect.mapError((cause) => new ManagedEndpointTunnelClientError({ cause })),
+              Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+            ),
+        }),
+      ),
+    ),
+  );
