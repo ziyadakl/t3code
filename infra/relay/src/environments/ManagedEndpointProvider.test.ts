@@ -5,7 +5,6 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import * as RelayConfiguration from "../Config.ts";
 import * as ManagedEndpointProvider from "./ManagedEndpointProvider.ts";
@@ -24,12 +23,15 @@ const config = RelayConfiguration.RelayConfiguration.of({
   cloudMintPrivateKey: Redacted.make("cloud-private-key"),
   cloudMintPublicKey: "cloud-public-key",
   managedEndpointBaseDomain: "t3code.test",
-  cloudflareZoneId: "zone-id",
-  cloudflareApiToken: Redacted.make("api-token"),
 });
 
 interface TunnelCall {
   readonly operation: "list" | "create" | "putConfiguration" | "getToken";
+  readonly input: unknown;
+}
+
+interface DnsCall {
+  readonly operation: "listCnameRecords" | "createCnameRecord" | "updateCnameRecord";
   readonly input: unknown;
 }
 
@@ -57,24 +59,34 @@ function makeTunnelClient(calls: TunnelCall[] = []) {
   });
 }
 
-function providerLayer(
-  execute: (
-    request: HttpClientRequest.HttpClientRequest,
-  ) => Effect.Effect<HttpClientResponse.HttpClientResponse>,
-  tunnelClient = makeTunnelClient(),
+function makeDnsClient(
+  calls: DnsCall[] = [],
+  records: ReadonlyArray<{ readonly id: string }> = [],
 ) {
+  return ManagedEndpointProvider.ManagedEndpointDnsClient.of({
+    listCnameRecords: (hostname) =>
+      Effect.sync(() => {
+        calls.push({ operation: "listCnameRecords", input: hostname });
+        return records;
+      }),
+    createCnameRecord: (request) =>
+      Effect.sync(() => {
+        calls.push({ operation: "createCnameRecord", input: request });
+      }),
+    updateCnameRecord: (dnsRecordId, request) =>
+      Effect.sync(() => {
+        calls.push({ operation: "updateCnameRecord", input: { dnsRecordId, request } });
+      }),
+  });
+}
+
+function providerLayer(tunnelClient = makeTunnelClient(), dnsClient = makeDnsClient()) {
   return ManagedEndpointProvider.layer.pipe(
     Layer.provideMerge(NodeServices.layer),
     Layer.provide(Layer.succeed(RelayConfiguration.RelayConfiguration, config)),
-    Layer.provide(Layer.succeed(HttpClient.HttpClient, HttpClient.make(execute))),
     Layer.provide(Layer.succeed(ManagedEndpointProvider.ManagedEndpointTunnelClient, tunnelClient)),
+    Layer.provide(Layer.succeed(ManagedEndpointProvider.ManagedEndpointDnsClient, dnsClient)),
   );
-}
-
-function decodeBody(request: HttpClientRequest.HttpClientRequest): unknown {
-  return request.body._tag === "Uint8Array"
-    ? JSON.parse(new TextDecoder().decode(request.body.body))
-    : null;
 }
 
 function expectedManagedHostname(environmentId: string): string {
@@ -87,59 +99,10 @@ function expectedManagedTunnelName(environmentId: string): string {
   return `t3-code-env-abc-${hash}`;
 }
 
-function cloudflareApplicationErrorResponse(request: HttpClientRequest.HttpClientRequest) {
-  return Effect.succeed(
-    HttpClientResponse.fromWeb(
-      request,
-      Response.json(
-        {
-          success: false,
-          result: [],
-          errors: [{ code: 10_000, message: "Cloudflare application failure" }],
-        },
-        { status: 200 },
-      ),
-    ),
-  );
-}
-
-function cloudflareNonSuccessHttpResponse(request: HttpClientRequest.HttpClientRequest) {
-  return Effect.succeed(
-    HttpClientResponse.fromWeb(request, Response.json({ success: false }, { status: 503 })),
-  );
-}
-
 describe("ManagedEndpointProvider", () => {
   it.effect("provisions a Cloudflare tunnel endpoint and connector token", () => {
     const tunnelCalls: TunnelCall[] = [];
-    const calls: Array<{
-      readonly method: string;
-      readonly url: string;
-      readonly body: unknown;
-      readonly authorization: string | undefined;
-    }> = [];
-    const execute = (request: HttpClientRequest.HttpClientRequest) =>
-      Effect.sync(() => {
-        calls.push({
-          method: request.method,
-          url: request.url,
-          body: decodeBody(request),
-          authorization: request.headers.authorization,
-        });
-        if (request.url.includes("/dns_records?")) {
-          return HttpClientResponse.fromWeb(
-            request,
-            Response.json({ success: true, result: [] }, { status: 200 }),
-          );
-        }
-        if (request.url.endsWith("/dns_records")) {
-          return HttpClientResponse.fromWeb(
-            request,
-            Response.json({ success: true }, { status: 200 }),
-          );
-        }
-        throw new Error(`Unexpected DNS request: ${request.method} ${request.url}`);
-      });
+    const dnsCalls: DnsCall[] = [];
 
     return Effect.gen(function* () {
       const hostname = expectedManagedHostname("env_ABC");
@@ -162,8 +125,19 @@ describe("ManagedEndpointProvider", () => {
           tunnelName: expectedManagedTunnelName("env_ABC"),
         },
       });
-      expect(calls.map((call) => call.method)).toEqual(["GET", "POST"]);
-      expect(calls.every((call) => call.authorization === "Bearer api-token")).toBe(true);
+      expect(dnsCalls).toEqual([
+        { operation: "listCnameRecords", input: hostname },
+        {
+          operation: "createCnameRecord",
+          input: {
+            type: "CNAME",
+            name: hostname,
+            content: "tunnel-id.cfargotunnel.com",
+            ttl: 1,
+            proxied: true,
+          },
+        },
+      ]);
       expect(tunnelCalls.map((call) => call.operation)).toEqual([
         "list",
         "create",
@@ -185,39 +159,13 @@ describe("ManagedEndpointProvider", () => {
         name: expectedManagedTunnelName("env_ABC"),
         isDeleted: false,
       });
-    }).pipe(Effect.provide(providerLayer(execute, makeTunnelClient(tunnelCalls))));
+    }).pipe(Effect.provide(providerLayer(makeTunnelClient(tunnelCalls), makeDnsClient(dnsCalls))));
   });
 
   it.effect(
     "normalizes unusual environment ids before using them in Cloudflare tunnel names",
     () => {
       const tunnelCalls: TunnelCall[] = [];
-      const calls: Array<{
-        readonly method: string;
-        readonly url: string;
-        readonly body: unknown;
-      }> = [];
-      const execute = (request: HttpClientRequest.HttpClientRequest) =>
-        Effect.sync(() => {
-          calls.push({
-            method: request.method,
-            url: request.url,
-            body: decodeBody(request),
-          });
-          if (request.url.includes("/dns_records?")) {
-            return HttpClientResponse.fromWeb(
-              request,
-              Response.json({ success: true, result: [] }, { status: 200 }),
-            );
-          }
-          if (request.url.endsWith("/dns_records")) {
-            return HttpClientResponse.fromWeb(
-              request,
-              Response.json({ success: true }, { status: 200 }),
-            );
-          }
-          throw new Error(`Unexpected DNS request: ${request.method} ${request.url}`);
-        });
 
       return Effect.gen(function* () {
         const environmentId = "ENV With Spaces/../Symbols!" + "x".repeat(80);
@@ -263,38 +211,12 @@ describe("ManagedEndpointProvider", () => {
           name: requestedName,
           configSrc: "cloudflare",
         });
-      }).pipe(Effect.provide(providerLayer(execute, makeTunnelClient(tunnelCalls))));
+      }).pipe(Effect.provide(providerLayer(makeTunnelClient(tunnelCalls))));
     },
   );
 
   it.effect("formats IPv6 loopback origins as valid Cloudflare ingress service URLs", () => {
     const tunnelCalls: TunnelCall[] = [];
-    const calls: Array<{
-      readonly method: string;
-      readonly url: string;
-      readonly body: unknown;
-    }> = [];
-    const execute = (request: HttpClientRequest.HttpClientRequest) =>
-      Effect.sync(() => {
-        calls.push({
-          method: request.method,
-          url: request.url,
-          body: decodeBody(request),
-        });
-        if (request.url.includes("/dns_records?")) {
-          return HttpClientResponse.fromWeb(
-            request,
-            Response.json({ success: true, result: [] }, { status: 200 }),
-          );
-        }
-        if (request.url.endsWith("/dns_records")) {
-          return HttpClientResponse.fromWeb(
-            request,
-            Response.json({ success: true }, { status: 200 }),
-          );
-        }
-        throw new Error(`Unexpected DNS request: ${request.method} ${request.url}`);
-      });
 
     return Effect.gen(function* () {
       const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
@@ -315,19 +237,11 @@ describe("ManagedEndpointProvider", () => {
           ],
         },
       });
-    }).pipe(Effect.provide(providerLayer(execute, makeTunnelClient(tunnelCalls))));
+    }).pipe(Effect.provide(providerLayer(makeTunnelClient(tunnelCalls))));
   });
 
   it.effect("rejects non-loopback managed endpoint origins before calling Cloudflare", () => {
-    const calls: Array<HttpClientRequest.HttpClientRequest> = [];
-    const execute = (request: HttpClientRequest.HttpClientRequest) =>
-      Effect.sync(() => {
-        calls.push(request);
-        return HttpClientResponse.fromWeb(
-          request,
-          Response.json({ success: true, result: [] }, { status: 200 }),
-        );
-      });
+    const dnsCalls: DnsCall[] = [];
 
     return Effect.gen(function* () {
       const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
@@ -338,24 +252,16 @@ describe("ManagedEndpointProvider", () => {
         }),
       );
 
-      expect(calls).toHaveLength(0);
+      expect(dnsCalls).toHaveLength(0);
       expect(result._tag).toBe("Failure");
       if (result._tag === "Failure") {
         expect(result.failure._tag).toBe("ManagedEndpointOriginNotAllowed");
       }
-    }).pipe(Effect.provide(providerLayer(execute)));
+    }).pipe(Effect.provide(providerLayer(makeTunnelClient(), makeDnsClient(dnsCalls))));
   });
 
   it.effect("rejects invalid managed endpoint origin ports before calling Cloudflare", () => {
-    const calls: Array<HttpClientRequest.HttpClientRequest> = [];
-    const execute = (request: HttpClientRequest.HttpClientRequest) =>
-      Effect.sync(() => {
-        calls.push(request);
-        return HttpClientResponse.fromWeb(
-          request,
-          Response.json({ success: true, result: [] }, { status: 200 }),
-        );
-      });
+    const dnsCalls: DnsCall[] = [];
 
     return Effect.gen(function* () {
       const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
@@ -366,33 +272,45 @@ describe("ManagedEndpointProvider", () => {
         }),
       );
 
-      expect(calls).toHaveLength(0);
+      expect(dnsCalls).toHaveLength(0);
       expect(result._tag).toBe("Failure");
       if (result._tag === "Failure") {
         expect(result.failure._tag).toBe("ManagedEndpointOriginNotAllowed");
       }
-    }).pipe(Effect.provide(providerLayer(execute)));
+    }).pipe(Effect.provide(providerLayer(makeTunnelClient(), makeDnsClient(dnsCalls))));
   });
 
-  it.effect("fails provisioning when Cloudflare returns a 2xx application error", () => {
+  it.effect("updates an existing CNAME record through the DNS client", () => {
+    const dnsCalls: DnsCall[] = [];
     return Effect.gen(function* () {
       const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
-      const error = yield* Effect.flip(
-        provider.provision({
-          environmentId: "env_ABC",
-          origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
-        }),
-      );
-
-      expect(error._tag).toBe("ManagedEndpointProvisioningFailed");
-      expect(error.cause).toMatchObject({
-        success: false,
-        errors: [{ message: "Cloudflare application failure" }],
+      yield* provider.provision({
+        environmentId: "env_ABC",
+        origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
       });
-    }).pipe(Effect.provide(providerLayer(cloudflareApplicationErrorResponse)));
+
+      expect(dnsCalls.map((call) => call.operation)).toEqual([
+        "listCnameRecords",
+        "updateCnameRecord",
+      ]);
+      expect(dnsCalls[1]?.input).toMatchObject({ dnsRecordId: "existing-record-id" });
+    }).pipe(
+      Effect.provide(
+        providerLayer(makeTunnelClient(), makeDnsClient(dnsCalls, [{ id: "existing-record-id" }])),
+      ),
+    );
   });
 
-  it.effect("fails provisioning when Cloudflare returns a non-success HTTP response", () => {
+  it.effect("fails provisioning when the DNS client fails", () => {
+    const failure = new ManagedEndpointProvider.ManagedEndpointDnsClientError({
+      cause: "Cloudflare DNS failure",
+    });
+    const dnsClient = ManagedEndpointProvider.ManagedEndpointDnsClient.of({
+      listCnameRecords: () => Effect.fail(failure),
+      createCnameRecord: () => Effect.die("unused"),
+      updateCnameRecord: () => Effect.die("unused"),
+    });
+
     return Effect.gen(function* () {
       const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
       const error = yield* Effect.flip(
@@ -403,6 +321,7 @@ describe("ManagedEndpointProvider", () => {
       );
 
       expect(error._tag).toBe("ManagedEndpointProvisioningFailed");
-    }).pipe(Effect.provide(providerLayer(cloudflareNonSuccessHttpResponse)));
+      expect(error.cause).toBe(failure);
+    }).pipe(Effect.provide(providerLayer(makeTunnelClient(), dnsClient)));
   });
 });

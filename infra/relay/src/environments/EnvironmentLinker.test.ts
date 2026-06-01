@@ -41,8 +41,6 @@ const config = RelayConfiguration.RelayConfiguration.of({
   cloudMintPrivateKey: Redacted.make(relayKeyPair.privateKey),
   cloudMintPublicKey: relayKeyPair.publicKey,
   managedEndpointBaseDomain: undefined,
-  cloudflareZoneId: undefined,
-  cloudflareApiToken: undefined,
 });
 
 function signTestJwt(payload: object, typ: string, privateKey: string): string {

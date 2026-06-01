@@ -130,8 +130,6 @@ const config = RelayConfiguration.RelayConfiguration.of({
   cloudMintPrivateKey: Redacted.make("cloud-private-key"),
   cloudMintPublicKey: "cloud-public-key",
   managedEndpointBaseDomain: undefined,
-  cloudflareZoneId: undefined,
-  cloudflareApiToken: undefined,
 });
 
 function makeRegistrationReplayLayer(input: {

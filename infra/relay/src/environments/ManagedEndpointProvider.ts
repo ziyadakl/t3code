@@ -8,10 +8,7 @@ import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
-import * as Schema from "effect/Schema";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import type {
   RelayManagedEndpoint,
@@ -100,34 +97,45 @@ export class ManagedEndpointTunnelClient extends Context.Service<
   ManagedEndpointTunnelClientShape
 >()("t3code-relay/environments/ManagedEndpointProvider/ManagedEndpointTunnelClient") {}
 
-const CloudflareDnsRecordResponse = Schema.Struct({
-  success: Schema.Boolean,
-  errors: Schema.optionalKey(Schema.Unknown),
-});
+interface ManagedEndpointCnameRecordInput {
+  readonly type: "CNAME";
+  readonly name: string;
+  readonly content: string;
+  readonly ttl: 1;
+  readonly proxied: true;
+}
 
-const CloudflareDnsRecordListResponse = Schema.Struct({
-  success: Schema.Boolean,
-  errors: Schema.optionalKey(Schema.Unknown),
-  result: Schema.Array(
-    Schema.Struct({
-      id: Schema.String,
-    }),
-  ),
-});
+export class ManagedEndpointDnsClientError extends Data.TaggedError(
+  "ManagedEndpointDnsClientError",
+)<{
+  readonly cause: unknown;
+}> {}
+
+export interface ManagedEndpointDnsClientShape {
+  readonly listCnameRecords: (
+    hostname: string,
+  ) => Effect.Effect<ReadonlyArray<{ readonly id: string }>, ManagedEndpointDnsClientError>;
+  readonly createCnameRecord: (
+    request: ManagedEndpointCnameRecordInput,
+  ) => Effect.Effect<unknown, ManagedEndpointDnsClientError>;
+  readonly updateCnameRecord: (
+    dnsRecordId: string,
+    request: ManagedEndpointCnameRecordInput,
+  ) => Effect.Effect<unknown, ManagedEndpointDnsClientError>;
+}
+
+export class ManagedEndpointDnsClient extends Context.Service<
+  ManagedEndpointDnsClient,
+  ManagedEndpointDnsClientShape
+>()("t3code-relay/environments/ManagedEndpointProvider/ManagedEndpointDnsClient") {}
 
 const requireCloudflareSettings = Effect.fnUntraced(function* (
   settings: RelayConfiguration.RelayConfigurationShape,
 ) {
-  if (
-    !settings.managedEndpointBaseDomain ||
-    !settings.cloudflareZoneId ||
-    !settings.cloudflareApiToken
-  ) {
+  if (!settings.managedEndpointBaseDomain) {
     return yield* new ManagedEndpointProvisioningNotConfigured();
   }
   return {
-    zoneId: settings.cloudflareZoneId,
-    apiToken: Redacted.value(settings.cloudflareApiToken),
     baseDomain: settings.managedEndpointBaseDomain,
   };
 });
@@ -185,22 +193,9 @@ function isLoopbackOrigin(origin: RelayManagedEndpointOrigin): boolean {
 
 const make = Effect.gen(function* () {
   const config = yield* RelayConfiguration.RelayConfiguration;
-  const httpClient = yield* HttpClient.HttpClient;
   const crypto = yield* Crypto.Crypto;
   const tunnels = yield* ManagedEndpointTunnelClient;
-
-  const executeJson =
-    <A extends { readonly success: boolean }>(schema: Schema.Codec<A, unknown, never, unknown>) =>
-    (request: HttpClientRequest.HttpClientRequest) =>
-      httpClient.execute(request).pipe(
-        Effect.flatMap(HttpClientResponse.filterStatusOk),
-        Effect.flatMap(HttpClientResponse.schemaBodyJson(schema)),
-        Effect.mapError((cause) => new ManagedEndpointProvisioningFailed({ cause })),
-        Effect.filterMapOrFail(
-          (body) => (body.success ? Result.succeed(body) : Result.fail(body)),
-          (cause) => new ManagedEndpointProvisioningFailed({ cause }),
-        ),
-      );
+  const dns = yield* ManagedEndpointDnsClient;
 
   return ManagedEndpointProvider.of({
     provision: Effect.fn("relay.managed_endpoint_provider.provision")(function* (input) {
@@ -254,36 +249,24 @@ const make = Effect.gen(function* () {
         })
         .pipe(Effect.mapError((cause) => new ManagedEndpointProvisioningFailed({ cause })));
 
-      const existingDnsRecordId = yield* HttpClientRequest.make("GET")(
-        "/zones/${cf.zoneId}/dns_records",
-      ).pipe(
-        HttpClientRequest.prependUrl("https://api.cloudflare.com/client/v4"),
-        HttpClientRequest.bearerToken(cf.apiToken),
-        HttpClientRequest.setUrlParams({
-          type: "CNAME",
-          name: hostname,
-        }),
-        executeJson(CloudflareDnsRecordListResponse),
-        Effect.map((body) => Arr.head(body.result)),
+      const existingDnsRecordId = yield* dns.listCnameRecords(hostname).pipe(
+        Effect.map(Arr.head),
         Effect.map(Option.map((record) => record.id)),
+        Effect.mapError((cause) => new ManagedEndpointProvisioningFailed({ cause })),
       );
 
-      const upsertDnsRequest = Option.match(existingDnsRecordId, {
-        onSome: (id) => HttpClientRequest.make("PUT")(`/zones/${cf.zoneId}/dns_records/${id}`),
-        onNone: () => HttpClientRequest.make("POST")(`/zones/${cf.zoneId}/dns_records`),
-      });
+      const dnsRecord = {
+        type: "CNAME",
+        name: hostname,
+        content: `${tunnel.id}.cfargotunnel.com`,
+        ttl: 1,
+        proxied: true,
+      } as const;
 
-      yield* upsertDnsRequest.pipe(
-        HttpClientRequest.prependUrl("https://api.cloudflare.com/client/v4"),
-        HttpClientRequest.bearerToken(cf.apiToken),
-        HttpClientRequest.bodyJsonUnsafe({
-          type: "CNAME",
-          name: hostname,
-          content: `${tunnel.id}.cfargotunnel.com`,
-          proxied: true,
-        }),
-        executeJson(CloudflareDnsRecordResponse),
-      );
+      yield* Option.match(existingDnsRecordId, {
+        onSome: (id) => dns.updateCnameRecord(id, dnsRecord),
+        onNone: () => dns.createCnameRecord(dnsRecord),
+      }).pipe(Effect.mapError((cause) => new ManagedEndpointProvisioningFailed({ cause })));
 
       const connectorToken = yield* tunnels
         .getToken(tunnel.id)
@@ -308,36 +291,60 @@ const make = Effect.gen(function* () {
 
 export const layer = Layer.effect(ManagedEndpointProvider, make);
 
-export const layerCloudflareTunnels = (
+export const layerCloudflareBindings = (
   tunnelClient: Cloudflare.TunnelReadWriteClient,
+  dnsClient: Cloudflare.DnsReadWriteClient,
   alchemyRuntimeContext: Alchemy.BaseRuntimeContext,
 ) =>
   layer.pipe(
     Layer.provide(
-      Layer.succeed(
-        ManagedEndpointTunnelClient,
-        ManagedEndpointTunnelClient.of({
-          list: (request) =>
-            tunnelClient.list(request).pipe(
-              Effect.mapError((cause) => new ManagedEndpointTunnelClientError({ cause })),
-              Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
-            ),
-          create: (request) =>
-            tunnelClient.create(request).pipe(
-              Effect.mapError((cause) => new ManagedEndpointTunnelClientError({ cause })),
-              Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
-            ),
-          putConfiguration: (tunnelId, config) =>
-            tunnelClient.putConfiguration(tunnelId, config).pipe(
-              Effect.mapError((cause) => new ManagedEndpointTunnelClientError({ cause })),
-              Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
-            ),
-          getToken: (tunnelId) =>
-            tunnelClient.getToken(tunnelId).pipe(
-              Effect.mapError((cause) => new ManagedEndpointTunnelClientError({ cause })),
-              Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
-            ),
-        }),
+      Layer.mergeAll(
+        Layer.succeed(
+          ManagedEndpointTunnelClient,
+          ManagedEndpointTunnelClient.of({
+            list: (request) =>
+              tunnelClient.list(request).pipe(
+                Effect.mapError((cause) => new ManagedEndpointTunnelClientError({ cause })),
+                Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+              ),
+            create: (request) =>
+              tunnelClient.create(request).pipe(
+                Effect.mapError((cause) => new ManagedEndpointTunnelClientError({ cause })),
+                Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+              ),
+            putConfiguration: (tunnelId, config) =>
+              tunnelClient.putConfiguration(tunnelId, config).pipe(
+                Effect.mapError((cause) => new ManagedEndpointTunnelClientError({ cause })),
+                Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+              ),
+            getToken: (tunnelId) =>
+              tunnelClient.getToken(tunnelId).pipe(
+                Effect.mapError((cause) => new ManagedEndpointTunnelClientError({ cause })),
+                Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+              ),
+          }),
+        ),
+        Layer.succeed(
+          ManagedEndpointDnsClient,
+          ManagedEndpointDnsClient.of({
+            listCnameRecords: (hostname) =>
+              dnsClient.listDnsRecords({ type: "CNAME", name: { exact: hostname } }).pipe(
+                Effect.map((response) => response.result),
+                Effect.mapError((cause) => new ManagedEndpointDnsClientError({ cause })),
+                Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+              ),
+            createCnameRecord: (request) =>
+              dnsClient.createDnsRecord(request).pipe(
+                Effect.mapError((cause) => new ManagedEndpointDnsClientError({ cause })),
+                Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+              ),
+            updateCnameRecord: (dnsRecordId, request) =>
+              dnsClient.updateDnsRecord(dnsRecordId, request).pipe(
+                Effect.mapError((cause) => new ManagedEndpointDnsClientError({ cause })),
+                Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+              ),
+          }),
+        ),
       ),
     ),
   );

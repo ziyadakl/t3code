@@ -136,8 +136,8 @@ export default class Api extends Cloudflare.Worker<Api>()(
     const db = yield* Drizzle.postgres(hyperdrive.connectionString);
 
     const managedEndpointTunnelBinding = yield* Cloudflare.TunnelReadWrite.bind();
-    const managedEndpointZoneId = yield* managedEndpointZone.zoneId;
-    const managedEndpointDNSToken = yield* managedEndpointZone.dnsToken;
+    const managedEndpointDnsBinding = yield* Cloudflare.DnsReadWrite.bind(managedEndpointZone);
+    const managedEndpointZoneName = yield* managedEndpointZone.name;
 
     //
     // 3. Runtime layers and app construction
@@ -158,9 +158,7 @@ export default class Api extends Cloudflare.Worker<Api>()(
         clerkSecretKey,
         cloudMintPrivateKey: yield* cloudMintPrivateKey,
         cloudMintPublicKey: yield* cloudMintPublicKey,
-        managedEndpointBaseDomain: yield* managedEndpointZoneId,
-        cloudflareZoneId: yield* managedEndpointZoneId,
-        cloudflareApiToken: yield* managedEndpointDNSToken,
+        managedEndpointBaseDomain: yield* managedEndpointZoneName,
       });
     });
 
@@ -179,8 +177,9 @@ export default class Api extends Cloudflare.Worker<Api>()(
       Layer.provideMerge(EnvironmentLinker.layer),
       Layer.provideMerge(EnvironmentPublishSignatures.layer),
       Layer.provideMerge(
-        ManagedEndpointProvider.layerCloudflareTunnels(
+        ManagedEndpointProvider.layerCloudflareBindings(
           managedEndpointTunnelBinding,
+          managedEndpointDnsBinding,
           alchemyRuntimeContext,
         ),
       ),
@@ -258,6 +257,7 @@ export default class Api extends Cloudflare.Worker<Api>()(
         Layer.provideMerge(Cloudflare.QueueBindingLive),
         Layer.provideMerge(Cloudflare.QueueEventSourceLive),
         Layer.provideMerge(Cloudflare.TunnelReadWriteLive),
+        Layer.provideMerge(Cloudflare.DnsReadWriteLive),
       ),
     ),
   ),
