@@ -111,4 +111,51 @@ describe("ManagedRelayClient", () => {
       });
     }).pipe(Effect.provide(Layer.merge(TestClock.layer(), managedRelayTestLayer(fetchFn))));
   });
+
+  it.effect("lists account devices through the Clerk bearer client endpoint", () => {
+    const fetchFn = ((input, init) => {
+      expect(String(input)).toBe("https://relay.example.test/v1/client/devices");
+      expect(init?.headers).toMatchObject({
+        authorization: "Bearer clerk-token",
+      });
+      return Promise.resolve(
+        Response.json({
+          devices: [
+            {
+              deviceId: "device-1",
+              label: "Julius's iPhone",
+              platform: "ios",
+              iosMajorVersion: 18,
+              appVersion: "1.0.0",
+              notifications: {
+                enabled: false,
+                notifyOnApproval: true,
+                notifyOnInput: true,
+                notifyOnCompletion: true,
+                notifyOnFailure: true,
+              },
+              liveActivities: {
+                enabled: true,
+              },
+              updatedAt: "2026-06-01T00:00:00.000Z",
+            },
+          ],
+        }),
+      );
+    }) satisfies typeof globalThis.fetch;
+
+    return Effect.gen(function* () {
+      const relayClient = yield* ManagedRelayClient;
+      const devices = yield* relayClient.listDevices({ clerkToken: "clerk-token" });
+      expect(devices).toMatchObject([
+        {
+          deviceId: "device-1",
+          label: "Julius's iPhone",
+          notifications: {
+            enabled: false,
+          },
+        },
+      ]);
+    }).pipe(Effect.provide(managedRelayTestLayer(fetchFn)));
+  });
 });

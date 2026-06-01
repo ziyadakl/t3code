@@ -24,6 +24,7 @@ import * as MobileRegistrations from "./MobileRegistrations.ts";
 
 const device: RelayDeviceRegistrationRequest = {
   deviceId: "device-1" as RelayDeviceRegistrationRequest["deviceId"],
+  label: "Julius's iPhone",
   platform: "ios",
   iosMajorVersion: 18,
   appVersion: "1.0.0" as RelayDeviceRegistrationRequest["appVersion"],
@@ -41,6 +42,7 @@ function makeDevices(overrides: Partial<Devices.DevicesShape> = {}): Devices.Dev
   return {
     register: () => Effect.void,
     unregister: () => Effect.void,
+    listForUser: () => Effect.succeed([]),
     ...overrides,
   };
 }

@@ -164,6 +164,7 @@ describe("makeRelayDeviceRegistrationRequest", () => {
     expect(
       makeRelayDeviceRegistrationRequest({
         deviceId: "device-1",
+        label: "Julius's iPhone",
         iosMajorVersion: 18,
         appVersion: "1.0.0",
         pushToken: "apns-token",
@@ -175,6 +176,7 @@ describe("makeRelayDeviceRegistrationRequest", () => {
       }),
     ).toEqual({
       deviceId: "device-1",
+      label: "Julius's iPhone",
       platform: "ios",
       iosMajorVersion: 18,
       appVersion: "1.0.0",
@@ -195,6 +197,7 @@ describe("makeRelayDeviceRegistrationRequest", () => {
     expect(
       makeRelayDeviceRegistrationRequest({
         deviceId: "device-1",
+        label: "Julius's iPhone",
         iosMajorVersion: 18,
         appVersion: "1.0.0",
         pushToStartToken: "push-to-start-token",
@@ -205,6 +208,7 @@ describe("makeRelayDeviceRegistrationRequest", () => {
       }),
     ).toEqual({
       deviceId: "device-1",
+      label: "Julius's iPhone",
       platform: "ios",
       iosMajorVersion: 18,
       appVersion: "1.0.0",

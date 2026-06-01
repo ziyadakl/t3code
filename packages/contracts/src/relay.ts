@@ -37,6 +37,7 @@ export type RelayAgentAwarenessPreferences = typeof RelayAgentAwarenessPreferenc
 
 export const RelayDeviceRegistrationRequest = Schema.Struct({
   deviceId: TrimmedNonEmptyString,
+  label: TrimmedNonEmptyString,
   platform: RelayAgentAwarenessPlatform,
   iosMajorVersion: Schema.Int.check(Schema.isGreaterThanOrEqualTo(18)),
   appVersion: Schema.optional(TrimmedNonEmptyString),
@@ -45,6 +46,31 @@ export const RelayDeviceRegistrationRequest = Schema.Struct({
   preferences: RelayAgentAwarenessPreferences,
 });
 export type RelayDeviceRegistrationRequest = typeof RelayDeviceRegistrationRequest.Type;
+
+export const RelayClientDeviceRecord = Schema.Struct({
+  deviceId: TrimmedNonEmptyString,
+  label: TrimmedNonEmptyString,
+  platform: RelayAgentAwarenessPlatform,
+  iosMajorVersion: Schema.Int.check(Schema.isGreaterThanOrEqualTo(18)),
+  appVersion: Schema.NullOr(TrimmedNonEmptyString),
+  notifications: Schema.Struct({
+    enabled: Schema.Boolean,
+    notifyOnApproval: Schema.Boolean,
+    notifyOnInput: Schema.Boolean,
+    notifyOnCompletion: Schema.Boolean,
+    notifyOnFailure: Schema.Boolean,
+  }),
+  liveActivities: Schema.Struct({
+    enabled: Schema.Boolean,
+  }),
+  updatedAt: TrimmedNonEmptyString,
+});
+export type RelayClientDeviceRecord = typeof RelayClientDeviceRecord.Type;
+
+export const RelayListDevicesResponse = Schema.Struct({
+  devices: Schema.Array(RelayClientDeviceRecord),
+});
+export type RelayListDevicesResponse = typeof RelayListDevicesResponse.Type;
 
 export const RelayLiveActivityRegistrationRequest = Schema.Struct({
   deviceId: TrimmedNonEmptyString,
@@ -767,6 +793,11 @@ export const RelayClientGroup = HttpApiGroup.make("client")
     HttpApiEndpoint.get("listEnvironments", "/v1/environments", {
       headers: RelayBearerRequestHeaders,
       success: RelayListEnvironmentsResponse,
+      error: RelayAuthAndInternalErrors,
+    }),
+    HttpApiEndpoint.get("listDevices", "/v1/client/devices", {
+      headers: RelayBearerRequestHeaders,
+      success: RelayListDevicesResponse,
       error: RelayAuthAndInternalErrors,
     }),
     HttpApiEndpoint.post("linkEnvironment", "/v1/client/environment-links", {

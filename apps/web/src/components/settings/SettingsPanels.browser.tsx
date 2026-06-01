@@ -148,6 +148,14 @@ const authAccessHarness = vi.hoisted(() => {
 });
 
 const mockConnectDesktopSshEnvironment = vi.hoisted(() => vi.fn());
+const mockGetClerkToken = vi.hoisted(() => vi.fn(async () => null));
+
+vi.mock("@clerk/react", () => ({
+  useAuth: () => ({
+    getToken: mockGetClerkToken,
+    isSignedIn: false,
+  }),
+}));
 
 vi.mock("../../environments/runtime", () => {
   const primaryConnection = {
@@ -185,6 +193,7 @@ vi.mock("../../environments/runtime", () => {
     resolveEnvironmentHttpUrl: (_environmentId: unknown, path: string) =>
       new URL(path, "http://localhost:3000").toString(),
     waitForSavedEnvironmentRegistryHydration: async () => undefined,
+    addManagedRelayEnvironment: vi.fn(),
     addSavedEnvironment: vi.fn(),
     connectDesktopSshEnvironment: mockConnectDesktopSshEnvironment,
     disconnectSavedEnvironment: vi.fn(),

@@ -2,6 +2,7 @@ import {
   RelayAccessTokenType,
   RelayApi,
   type RelayClientEnvironmentRecord,
+  type RelayClientDeviceRecord,
   RelayConnectEnvironmentEndpoint,
   type RelayDeviceRegistrationRequest,
   type RelayDpopAccessTokenScope,
@@ -89,6 +90,9 @@ export interface ManagedRelayClientShape {
   readonly listEnvironments: (input: {
     readonly clerkToken: string;
   }) => Effect.Effect<ReadonlyArray<RelayClientEnvironmentRecord>, ManagedRelayClientError>;
+  readonly listDevices: (input: {
+    readonly clerkToken: string;
+  }) => Effect.Effect<ReadonlyArray<RelayClientDeviceRecord>, ManagedRelayClientError>;
   readonly createEnvironmentLinkChallenge: (input: {
     readonly clerkToken: string;
     readonly payload: RelayEnvironmentLinkChallengeRequest;
@@ -330,6 +334,18 @@ export function managedRelayClientLayer(options: ManagedRelayClientLayerOptions)
             ),
             timeoutRelayRequest("Relay environment listing timed out."),
           ),
+        listDevices: (input) =>
+          client.client
+            .listDevices({
+              headers: bearerHeaders(input.clerkToken),
+            })
+            .pipe(
+              Effect.map((response) => response.devices),
+              Effect.mapError((cause) =>
+                relayClientError("Could not list relay client devices.", cause),
+              ),
+              timeoutRelayRequest("Relay client device listing timed out."),
+            ),
         createEnvironmentLinkChallenge: (input) =>
           client.client
             .createEnvironmentLinkChallenge({

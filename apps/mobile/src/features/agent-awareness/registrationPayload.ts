@@ -4,6 +4,7 @@ import type { MobilePreferences } from "../../lib/storage";
 
 export function makeRelayDeviceRegistrationRequest(input: {
   readonly deviceId: string;
+  readonly label: string;
   readonly iosMajorVersion: number;
   readonly appVersion?: string;
   readonly pushToken?: string;
@@ -14,6 +15,7 @@ export function makeRelayDeviceRegistrationRequest(input: {
   const liveActivitiesEnabled = input.preferences.liveActivitiesEnabled !== false;
   return {
     deviceId: input.deviceId,
+    label: input.label,
     platform: "ios",
     iosMajorVersion: input.iosMajorVersion,
     appVersion: input.appVersion,

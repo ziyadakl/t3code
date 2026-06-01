@@ -413,6 +413,7 @@ export const clientApi = HttpApiBuilder.group(
     const linker = yield* EnvironmentLinker.EnvironmentLinker;
     const links = yield* EnvironmentLinks.EnvironmentLinks;
     const credentials = yield* EnvironmentCredentials.EnvironmentCredentials;
+    const devices = yield* Devices.Devices;
     return handlers
       .handle(
         "listEnvironments",
@@ -420,6 +421,13 @@ export const clientApi = HttpApiBuilder.group(
           const { userId } = yield* RelayClientPrincipal;
           const environments = yield* links.listForUser({ userId });
           return { environments };
+        }, mapRelayCommonApiErrors("not_authorized")),
+      )
+      .handle(
+        "listDevices",
+        Effect.fn("relay.api.client.listDevices")(function* () {
+          const { userId } = yield* RelayClientPrincipal;
+          return { devices: yield* devices.listForUser({ userId }) };
         }, mapRelayCommonApiErrors("not_authorized")),
       )
       .handle(
@@ -803,6 +811,7 @@ const currentTraceId = Effect.currentParentSpan.pipe(
 const COMMON_AUTH_INVALID_REASONS = [
   Devices.DeviceRegistrationPersistenceError,
   Devices.DeviceUnregistrationPersistenceError,
+  Devices.DeviceListPersistenceError,
   LiveActivities.LiveActivityRegistrationPersistenceError,
   EnvironmentLinks.EnvironmentLinkUserListPersistenceError,
   EnvironmentLinks.EnvironmentPublicKeyListPersistenceError,

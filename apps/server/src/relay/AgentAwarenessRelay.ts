@@ -33,8 +33,9 @@ import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import { getOrCreateEnvironmentKeyPairFromSecretStore } from "../cloud/http.ts";
+import { getOrCreateEnvironmentKeyPairFromSecretStore } from "../cloud/environmentKeys.ts";
 import {
+  PUBLISH_AGENT_ACTIVITY_SECRET,
   RELAY_ENVIRONMENT_CREDENTIAL_SECRET,
   RELAY_ISSUER_SECRET,
   RELAY_URL_SECRET,
@@ -92,6 +93,10 @@ export function agentAwarenessPublishIdentity(state: RelayAgentActivityState | n
   }
   const { updatedAt: _updatedAt, ...meaningfulState } = state;
   return JSON.stringify(meaningfulState);
+}
+
+export function isAgentActivityPublishingEnabled(value: string | null): boolean {
+  return value === "true";
 }
 
 function relayEnvironmentClient(token: string) {
@@ -254,6 +259,10 @@ const make = Effect.gen(function* () {
       : null;
   });
 
+  const readPublishAgentActivityEnabled = readSecretString(PUBLISH_AGENT_ACTIVITY_SECRET).pipe(
+    Effect.map(isAgentActivityPublishingEnabled),
+  );
+
   const makeRelayClient = (relayConfig: {
     readonly url: string;
     readonly environmentCredential: string;
@@ -264,6 +273,15 @@ const make = Effect.gen(function* () {
     }).pipe(Effect.provide(FetchHttpClient.layer));
 
   const publishThreadUnsafe = Effect.fn("publishThreadUnsafe")(function* (threadId: ThreadId) {
+    const publishAgentActivity = yield* readPublishAgentActivityEnabled.pipe(
+      Effect.orElseSucceed(() => false),
+    );
+    if (!publishAgentActivity) {
+      yield* Effect.logDebug("agent awareness relay publish skipped; publication disabled", {
+        threadId,
+      });
+      return;
+    }
     const relayConfig = yield* readRelayConfig.pipe(Effect.orElseSucceed(() => null));
     if (!relayConfig) {
       yield* Effect.logDebug("agent awareness relay publish skipped; relay config missing", {
@@ -375,6 +393,13 @@ const make = Effect.gen(function* () {
     );
 
   const publishActiveThreadsUnsafe = Effect.gen(function* () {
+    const publishAgentActivity = yield* readPublishAgentActivityEnabled.pipe(
+      Effect.orElseSucceed(() => false),
+    );
+    if (!publishAgentActivity) {
+      yield* Effect.logDebug("agent awareness relay active snapshot skipped; publication disabled");
+      return false;
+    }
     const relayConfig = yield* readRelayConfig.pipe(Effect.orElseSucceed(() => null));
     if (!relayConfig) {
       yield* Effect.logDebug("agent awareness relay active snapshot skipped; relay config missing");

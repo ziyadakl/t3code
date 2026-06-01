@@ -788,6 +788,19 @@
       "table": "relay_mobile_devices"
     },
     {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "'iOS device'",
+      "generated": null,
+      "identity": null,
+      "name": "label",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "relay_mobile_devices"
+    },
+    {
       "type": "varchar(16)",
       "typeSchema": null,
       "notNull": true,

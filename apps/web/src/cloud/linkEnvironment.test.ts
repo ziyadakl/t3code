@@ -497,6 +497,7 @@ describe("web cloud link environment client", () => {
           cloudUserId: "user_123",
           relayUrl: "https://relay.example.test",
           relayIssuer: "https://issuer.example.test",
+          publishAgentActivity: false,
         }),
       );
       vi.stubGlobal("fetch", fetchMock);
@@ -507,6 +508,7 @@ describe("web cloud link environment client", () => {
         cloudUserId: "user_123",
         relayUrl: "https://relay.example.test",
         relayIssuer: "https://issuer.example.test",
+        publishAgentActivity: false,
       });
       expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
         "http://127.0.0.1:3000/api/cloud/link-state",

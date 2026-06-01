@@ -1,4 +1,7 @@
-import type { RelayDeviceRegistrationRequest } from "@t3tools/contracts/relay";
+import type {
+  RelayClientDeviceRecord,
+  RelayDeviceRegistrationRequest,
+} from "@t3tools/contracts/relay";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
@@ -22,6 +25,10 @@ export class DeviceUnregistrationPersistenceError extends Data.TaggedError(
   readonly cause: unknown;
 }> {}
 
+export class DeviceListPersistenceError extends Data.TaggedError("DeviceListPersistenceError")<{
+  readonly cause: unknown;
+}> {}
+
 export interface DevicesShape {
   readonly register: (input: {
     readonly userId: string;
@@ -31,6 +38,9 @@ export interface DevicesShape {
     readonly userId: string;
     readonly deviceId: string;
   }) => Effect.Effect<void, DeviceUnregistrationPersistenceError>;
+  readonly listForUser: (input: {
+    readonly userId: string;
+  }) => Effect.Effect<ReadonlyArray<RelayClientDeviceRecord>, DeviceListPersistenceError>;
 }
 
 export class Devices extends Context.Service<Devices, DevicesShape>()(
@@ -72,6 +82,7 @@ const make = Effect.gen(function* () {
           .values({
             userId: input.userId,
             deviceId: registration.deviceId,
+            label: registration.label,
             platform: registration.platform,
             iosMajorVersion: registration.iosMajorVersion,
             appVersion: registration.appVersion ?? null,
@@ -85,6 +96,7 @@ const make = Effect.gen(function* () {
             target: [relayMobileDevices.userId, relayMobileDevices.deviceId],
             set: {
               platform: registration.platform,
+              label: registration.label,
               iosMajorVersion: registration.iosMajorVersion,
               appVersion: registration.appVersion ?? null,
               pushToken: sql`coalesce(excluded.push_token, ${relayMobileDevices.pushToken})`,
@@ -127,6 +139,41 @@ const make = Effect.gen(function* () {
         );
       },
       Effect.mapError((cause) => new DeviceUnregistrationPersistenceError({ cause })),
+    ),
+    listForUser: Effect.fn("relay.devices.listForUser")(
+      function* (input) {
+        const rows = yield* db
+          .select({
+            deviceId: relayMobileDevices.deviceId,
+            label: relayMobileDevices.label,
+            platform: relayMobileDevices.platform,
+            iosMajorVersion: relayMobileDevices.iosMajorVersion,
+            appVersion: relayMobileDevices.appVersion,
+            preferences: relayMobileDevices.preferencesJson,
+            updatedAt: relayMobileDevices.updatedAt,
+          })
+          .from(relayMobileDevices)
+          .where(eq(relayMobileDevices.userId, input.userId));
+        return rows.map((row) => ({
+          deviceId: row.deviceId,
+          label: row.label,
+          platform: row.platform,
+          iosMajorVersion: row.iosMajorVersion,
+          appVersion: row.appVersion,
+          notifications: {
+            enabled: row.preferences.notificationsEnabled,
+            notifyOnApproval: row.preferences.notifyOnApproval,
+            notifyOnInput: row.preferences.notifyOnInput,
+            notifyOnCompletion: row.preferences.notifyOnCompletion,
+            notifyOnFailure: row.preferences.notifyOnFailure,
+          },
+          liveActivities: {
+            enabled: row.preferences.liveActivitiesEnabled,
+          },
+          updatedAt: row.updatedAt,
+        }));
+      },
+      Effect.mapError((cause) => new DeviceListPersistenceError({ cause })),
     ),
   });
 });

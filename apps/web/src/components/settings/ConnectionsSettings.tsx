@@ -7,6 +7,7 @@ import {
   TerminalIcon,
   TriangleAlertIcon,
 } from "lucide-react";
+import { useAuth } from "@clerk/react";
 import { type ReactNode, memo, useCallback, useEffect, useMemo, useState } from "react";
 import {
   AuthAccessReadScope,
@@ -29,6 +30,8 @@ import {
   type EnvironmentId,
 } from "@t3tools/contracts";
 import { WsRpcClient } from "@t3tools/client-runtime";
+import { RELAY_CLERK_TOKEN_OPTIONS } from "@t3tools/shared/relayAuth";
+import type { RelayClientEnvironmentRecord } from "@t3tools/contracts/relay";
 import * as DateTime from "effect/DateTime";
 
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
@@ -101,6 +104,7 @@ import {
   useSavedEnvironmentRegistryStore,
   useSavedEnvironmentRuntimeStore,
   addSavedEnvironment,
+  addManagedRelayEnvironment,
   connectDesktopSshEnvironment,
   disconnectSavedEnvironment,
   getPrimaryEnvironmentConnection,
@@ -110,8 +114,20 @@ import {
 import { useUiStateStore } from "~/uiStateStore";
 import { resolveServerConfigVersionMismatch } from "~/versionSkew";
 import { useServerConfig } from "~/rpc/serverState";
+import {
+  connectManagedCloudEnvironment,
+  linkPrimaryEnvironmentToCloud,
+  listManagedCloudEnvironments,
+  readPrimaryCloudLinkState,
+  unlinkPrimaryEnvironmentFromCloud,
+} from "~/cloud/linkEnvironment";
+import { webRuntime } from "~/lib/runtime";
 
 const DEFAULT_TAILSCALE_SERVE_PORT = 443;
+
+function hasCloudConfig(): boolean {
+  return Boolean(import.meta.env.VITE_CLERK_PUBLISHABLE_KEY);
+}
 
 const accessTimestampFormatter = new Intl.DateTimeFormat(undefined, {
   dateStyle: "medium",
@@ -1582,6 +1598,197 @@ const DesktopSshHostRow = memo(function DesktopSshHostRow({
   );
 });
 
+function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: boolean }) {
+  const { getToken, isSignedIn } = useAuth();
+  const [linked, setLinked] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    setIsLoading(true);
+    void webRuntime.runPromise(readPrimaryCloudLinkState()).then(
+      (state) => {
+        setLinked(state?.linked ?? false);
+        setError(null);
+        setIsLoading(false);
+      },
+      (cause: unknown) => {
+        setError(cause instanceof Error ? cause.message : "Could not read T3 Cloud link state.");
+        setIsLoading(false);
+      },
+    );
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const updateLink = async (enabled: boolean) => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const clerkToken = await getToken(RELAY_CLERK_TOKEN_OPTIONS);
+      if (enabled) {
+        if (!clerkToken) {
+          throw new Error("Sign in from T3 Cloud settings before linking this environment.");
+        }
+        await webRuntime.runPromise(linkPrimaryEnvironmentToCloud({ clerkToken }));
+      } else {
+        await webRuntime.runPromise(
+          unlinkPrimaryEnvironmentFromCloud({ clerkToken: clerkToken ?? null }),
+        );
+      }
+      setLinked(enabled);
+      toastManager.add({
+        type: "success",
+        title: enabled ? "T3 Cloud linked" : "T3 Cloud unlinked",
+        description: enabled
+          ? "This environment is available through T3 Cloud."
+          : "This environment is no longer available through T3 Cloud.",
+      });
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : "Could not update T3 Cloud access.";
+      setError(message);
+      toastManager.add({
+        type: "error",
+        title: "Could not update T3 Cloud",
+        description: message,
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <SettingsRow
+      title="T3 Cloud"
+      description="Make this environment available through your T3 Cloud account."
+      status={error ?? (linked ? "Linked" : "Not linked")}
+      control={
+        <Switch
+          aria-label="Enable T3 Cloud"
+          checked={linked}
+          disabled={!canManageRelay || !isSignedIn || isLoading}
+          onCheckedChange={(enabled) => void updateLink(enabled)}
+        />
+      }
+    />
+  );
+}
+
+function CloudLinkRow({ canManageRelay }: { readonly canManageRelay: boolean }) {
+  return hasCloudConfig() ? (
+    <ConfiguredCloudLinkRow canManageRelay={canManageRelay} />
+  ) : (
+    <SettingsRow
+      title="T3 Cloud"
+      description="Make this environment available through your T3 Cloud account."
+      status="Cloud is not configured in this build."
+      control={<Switch aria-label="Enable T3 Cloud" checked={false} disabled />}
+    />
+  );
+}
+
+function ConfiguredCloudRemoteEnvironmentRows({
+  savedEnvironmentIds,
+}: {
+  readonly savedEnvironmentIds: ReadonlyArray<EnvironmentId>;
+}) {
+  const { getToken, isSignedIn } = useAuth();
+  const [environments, setEnvironments] = useState<ReadonlyArray<RelayClientEnvironmentRecord>>([]);
+  const [connectingEnvironmentId, setConnectingEnvironmentId] = useState<EnvironmentId | null>(
+    null,
+  );
+  const savedIds = useMemo(() => new Set(savedEnvironmentIds), [savedEnvironmentIds]);
+
+  useEffect(() => {
+    if (!isSignedIn) {
+      setEnvironments([]);
+      return;
+    }
+    let cancelled = false;
+    void getToken(RELAY_CLERK_TOKEN_OPTIONS)
+      .then((clerkToken) =>
+        clerkToken
+          ? webRuntime.runPromise(listManagedCloudEnvironments({ clerkToken }))
+          : Promise.resolve([]),
+      )
+      .then((next) => {
+        if (!cancelled) setEnvironments(next);
+      })
+      .catch(() => {
+        if (!cancelled) setEnvironments([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [getToken, isSignedIn]);
+
+  const connectEnvironment = async (environment: RelayClientEnvironmentRecord) => {
+    setConnectingEnvironmentId(environment.environmentId);
+    try {
+      const clerkToken = await getToken(RELAY_CLERK_TOKEN_OPTIONS);
+      if (!clerkToken) {
+        throw new Error("Sign in from T3 Cloud settings before connecting this environment.");
+      }
+      const connection = await webRuntime.runPromise(
+        connectManagedCloudEnvironment({ clerkToken, environment }),
+      );
+      await addManagedRelayEnvironment(connection);
+      toastManager.add({
+        type: "success",
+        title: "Environment connected",
+        description: `${connection.label} is available through T3 Cloud.`,
+      });
+    } catch (cause) {
+      toastManager.add({
+        type: "error",
+        title: "Could not connect environment",
+        description:
+          cause instanceof Error ? cause.message : "Could not connect the T3 Cloud environment.",
+      });
+    } finally {
+      setConnectingEnvironmentId(null);
+    }
+  };
+
+  return environments
+    .filter((environment) => !savedIds.has(environment.environmentId))
+    .map((environment) => (
+      <div key={environment.environmentId} className={ITEM_ROW_CLASSNAME}>
+        <div className={ITEM_ROW_INNER_CLASSNAME}>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <ConnectionStatusDot
+                dotClassName="bg-muted-foreground/35"
+                tooltipText="Available through T3 Cloud"
+              />
+              <p className="truncate text-sm font-medium">{environment.label}</p>
+            </div>
+            <p className="mt-1 truncate text-xs text-muted-foreground">T3 Cloud</p>
+          </div>
+          <Button
+            size="sm"
+            disabled={connectingEnvironmentId !== null}
+            onClick={() => void connectEnvironment(environment)}
+          >
+            {connectingEnvironmentId === environment.environmentId ? "Connecting…" : "Connect"}
+          </Button>
+        </div>
+      </div>
+    ));
+}
+
+function CloudRemoteEnvironmentRows({
+  savedEnvironmentIds,
+}: {
+  readonly savedEnvironmentIds: ReadonlyArray<EnvironmentId>;
+}) {
+  return hasCloudConfig() ? (
+    <ConfiguredCloudRemoteEnvironmentRows savedEnvironmentIds={savedEnvironmentIds} />
+  ) : null;
+}
+
 export function ConnectionsSettings() {
   const desktopBridge = window.desktopBridge;
   const primarySessionState = usePrimarySessionState();
@@ -1701,6 +1908,7 @@ export function ConnectionsSettings() {
     (state) => state.setDefaultAdvertisedEndpointKey,
   );
   const canManageLocalBackend = currentSessionScopes?.includes(AuthAccessWriteScope) ?? false;
+  const canManageRelay = currentSessionScopes?.includes(AuthRelayWriteScope) ?? false;
   const isLocalBackendNetworkAccessible = desktopBridge
     ? desktopServerExposureState?.mode === "network-accessible"
     : currentAuthPolicy === "remote-reachable";
@@ -2626,9 +2834,13 @@ export function ConnectionsSettings() {
                 {renderNetworkAccessRow()}
                 {renderEndpointRows("endpoint-rail")}
                 {renderTailscaleRow()}
+                <CloudLinkRow canManageRelay={canManageRelay} />
               </>
             ) : (
-              renderDisabledNetworkAccessRow()
+              <>
+                {renderDisabledNetworkAccessRow()}
+                <CloudLinkRow canManageRelay={canManageRelay} />
+              </>
             )}
           </SettingsSection>
 
@@ -2810,6 +3022,7 @@ export function ConnectionsSettings() {
             title="Administrative access"
             description="Pairing links and client-session management require the access:write scope for this backend."
           />
+          <CloudLinkRow canManageRelay={canManageRelay} />
         </SettingsSection>
       )}
 
@@ -2889,11 +3102,12 @@ export function ConnectionsSettings() {
             onRemove={handleRemoveSavedBackend}
           />
         ))}
+        <CloudRemoteEnvironmentRows savedEnvironmentIds={savedEnvironmentIds} />
 
         {savedEnvironmentIds.length === 0 ? (
           <div className={ITEM_ROW_CLASSNAME}>
             <p className="text-xs text-muted-foreground">
-              No remote environments yet. Click &ldquo;Add environment&rdquo; to pair another
+              No saved remote environments yet. Click &ldquo;Add environment&rdquo; to pair another
               environment.
             </p>
           </div>

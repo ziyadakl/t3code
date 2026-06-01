@@ -11,6 +11,7 @@ import * as Devices from "./Devices.ts";
 
 const registration: RelayDeviceRegistrationRequest = {
   deviceId: "device-1" as RelayDeviceRegistrationRequest["deviceId"],
+  label: "Julius's iPhone",
   platform: "ios",
   iosMajorVersion: 18,
   appVersion: "1.0.0" as RelayDeviceRegistrationRequest["appVersion"],
@@ -153,6 +154,65 @@ describe("Devices", () => {
             '(("relay_mobile_devices"."user_id" = $1) and ' +
             '("relay_mobile_devices"."device_id" = $2))',
           params: ["user-2", "device-1"],
+        },
+      ]);
+    }).pipe(Effect.provide(Devices.layer.pipe(Layer.provide(Layer.succeed(RelayDb, fakeDb)))));
+  });
+
+  it.effect("lists safe notification state without exposing APNs tokens", () => {
+    const dialect = new PgDialect();
+    let condition: SQL | null = null;
+    const fakeDb = {
+      select: () => ({
+        from: (table: unknown) => {
+          expect(table).toBe(relayMobileDevices);
+          return {
+            where: (nextCondition: SQL) => {
+              condition = nextCondition;
+              return Effect.succeed([
+                {
+                  deviceId: "device-1",
+                  label: "Julius's iPhone",
+                  platform: "ios" as const,
+                  iosMajorVersion: 18,
+                  appVersion: "1.0.0",
+                  preferences: registration.preferences,
+                  updatedAt: "2026-06-01T00:00:00.000Z",
+                },
+              ]);
+            },
+          };
+        },
+      }),
+    } as unknown as RelayDatabase;
+
+    return Effect.gen(function* () {
+      const devices = yield* Devices.Devices;
+      const listed = yield* devices.listForUser({ userId: "user-2" });
+
+      expect(condition).not.toBeNull();
+      expect(dialect.sqlToQuery(condition!)).toEqual({
+        sql: '"relay_mobile_devices"."user_id" = $1',
+        params: ["user-2"],
+      });
+      expect(listed).toEqual([
+        {
+          deviceId: "device-1",
+          label: "Julius's iPhone",
+          platform: "ios",
+          iosMajorVersion: 18,
+          appVersion: "1.0.0",
+          notifications: {
+            enabled: true,
+            notifyOnApproval: true,
+            notifyOnInput: true,
+            notifyOnCompletion: true,
+            notifyOnFailure: true,
+          },
+          liveActivities: {
+            enabled: true,
+          },
+          updatedAt: "2026-06-01T00:00:00.000Z",
         },
       ]);
     }).pipe(Effect.provide(Devices.layer.pipe(Layer.provide(Layer.succeed(RelayDb, fakeDb)))));

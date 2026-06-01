@@ -40,6 +40,7 @@ import {
   RELAY_ENVIRONMENT_CREDENTIAL_SECRET,
   RELAY_ISSUER_SECRET,
   RELAY_URL_SECRET,
+  PUBLISH_AGENT_ACTIVITY_SECRET,
 } from "../cloud/config.ts";
 import * as AgentAwarenessRelay from "./AgentAwarenessRelay.ts";
 
@@ -183,6 +184,12 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
         headline: "Agent finished",
       }),
     );
+  });
+
+  it("requires an explicit opt-in before publishing agent activity", () => {
+    expect(AgentAwarenessRelay.isAgentActivityPublishingEnabled(null)).toBe(false);
+    expect(AgentAwarenessRelay.isAgentActivityPublishingEnabled("false")).toBe(false);
+    expect(AgentAwarenessRelay.isAgentActivityPublishingEnabled("true")).toBe(true);
   });
 
   it("resolves a null publish state when a thread or project snapshot disappeared", () => {
@@ -457,6 +464,7 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
           yield* relay.start();
           yield* secrets.setString(RELAY_URL_SECRET, "http://127.0.0.1:1");
           yield* secrets.setString(RELAY_ENVIRONMENT_CREDENTIAL_SECRET, "relay-credential");
+          yield* secrets.setString(PUBLISH_AGENT_ACTIVITY_SECRET, "true");
           yield* Queue.offer(events, {
             type: "thread.activity-appended",
             sequence: 1,
@@ -600,6 +608,7 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
           yield* secrets.setString(RELAY_URL_SECRET, "https://transport.example.test");
           yield* secrets.setString(RELAY_ISSUER_SECRET, "https://issuer.example.test");
           yield* secrets.setString(RELAY_ENVIRONMENT_CREDENTIAL_SECRET, "relay-credential");
+          yield* secrets.setString(PUBLISH_AGENT_ACTIVITY_SECRET, "true");
           yield* relay.start();
           yield* Queue.offer(events, {
             type: "thread.activity-appended",

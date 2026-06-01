@@ -1,8 +1,8 @@
 import { UserButton, Waitlist, useAuth, useClerk } from "@clerk/react";
 import { useSignIn, useSignUp } from "@clerk/react/legacy";
+import { AuthRelayWriteScope } from "@t3tools/contracts";
 import { RELAY_CLERK_TOKEN_OPTIONS } from "@t3tools/shared/relayAuth";
-import type { RelayClientEnvironmentRecord } from "@t3tools/contracts/relay";
-import * as Effect from "effect/Effect";
+import type { RelayClientDeviceRecord } from "@t3tools/contracts/relay";
 import { CloudIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -11,25 +11,16 @@ import {
   resolveDesktopCloudAuthOAuthOptions,
 } from "../../cloud/desktopAuth";
 import {
-  collectCloudLinkTargets,
-  connectManagedCloudEnvironment,
-  linkEnvironmentToCloud,
-  linkPrimaryEnvironmentToCloud,
-  listManagedCloudEnvironments,
+  listCloudDevices,
   readPrimaryCloudLinkState,
-  readPrimaryCloudLinkTarget,
   type CloudLinkState,
-  unlinkPrimaryEnvironmentFromCloud,
+  updatePrimaryCloudPreferences,
 } from "../../cloud/linkEnvironment";
 import { isElectron } from "../../env";
-import { usePrimaryEnvironmentId } from "../../environments/primary";
-import {
-  addManagedRelayEnvironment,
-  listSavedEnvironmentRecords,
-  useSavedEnvironmentRegistryStore,
-} from "../../environments/runtime";
+import { fetchSessionState, usePrimaryEnvironmentId } from "../../environments/primary";
 import { webRuntime } from "../../lib/runtime";
 import { Button } from "../ui/button";
+import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 
@@ -108,190 +99,84 @@ function CloudWaitlistPanel() {
 }
 
 function CloudSettingsPanelInner() {
-  const { getToken, userId } = useAuth();
+  const { getToken } = useAuth();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const savedEnvironmentCount = useSavedEnvironmentRegistryStore(
-    (state) => Object.keys(state.byId).length,
-  );
-  const [isLinking, setIsLinking] = useState(false);
-  const [isUnlinking, setIsUnlinking] = useState(false);
   const [primaryLinkState, setPrimaryLinkState] = useState<CloudLinkState | null>(null);
-  const [linkStateError, setLinkStateError] = useState<string | null>(null);
-  const [managedEnvironments, setManagedEnvironments] = useState<
-    ReadonlyArray<RelayClientEnvironmentRecord>
-  >([]);
-  const [isLoadingManaged, setIsLoadingManaged] = useState(false);
-  const [connectingEnvironmentId, setConnectingEnvironmentId] = useState<string | null>(null);
-  const linkableEnvironmentCount = collectCloudLinkTargets({
-    primary: primaryEnvironmentId ? readPrimaryCloudLinkTarget() : null,
-    saved: listSavedEnvironmentRecords().filter((environment) => !environment.relayManaged),
-  }).length;
-  const linkedCloudUserId = primaryLinkState?.cloudUserId ?? null;
-  const hasCloudAccountMismatch = Boolean(
-    userId && linkedCloudUserId && linkedCloudUserId !== userId,
-  );
+  const [devices, setDevices] = useState<ReadonlyArray<RelayClientDeviceRecord>>([]);
+  const [isLoadingDevices, setIsLoadingDevices] = useState(false);
+  const [isUpdatingPreference, setIsUpdatingPreference] = useState(false);
+  const [canManageRelay, setCanManageRelay] = useState(false);
 
   const refreshPrimaryLinkState = useCallback(() => {
     if (!primaryEnvironmentId) {
       setPrimaryLinkState(null);
-      setLinkStateError(null);
       return;
     }
-    void webRuntime.runPromise(readPrimaryCloudLinkState()).then(
-      (state) => {
-        setPrimaryLinkState(state);
-        setLinkStateError(null);
-      },
-      (error: unknown) => {
-        setPrimaryLinkState(null);
-        setLinkStateError(cloudErrorMessage(error, "Could not read local cloud link state."));
-      },
-    );
+    void webRuntime
+      .runPromise(readPrimaryCloudLinkState())
+      .then(setPrimaryLinkState, () => setPrimaryLinkState(null));
   }, [primaryEnvironmentId]);
 
   useEffect(() => {
     refreshPrimaryLinkState();
   }, [refreshPrimaryLinkState]);
 
-  const refreshManagedEnvironments = useCallback(async () => {
-    setIsLoadingManaged(true);
+  useEffect(() => {
+    void fetchSessionState()
+      .then((session) =>
+        setCanManageRelay(
+          session.authenticated && Boolean(session.scopes?.includes(AuthRelayWriteScope)),
+        ),
+      )
+      .catch(() => setCanManageRelay(false));
+  }, []);
+
+  const refreshDevices = useCallback(async () => {
+    setIsLoadingDevices(true);
     try {
       const token = await getToken(RELAY_CLERK_TOKEN_OPTIONS);
       if (!token) {
-        setManagedEnvironments([]);
+        setDevices([]);
         return;
       }
-      setManagedEnvironments(
-        await webRuntime.runPromise(listManagedCloudEnvironments({ clerkToken: token })),
-      );
+      setDevices(await webRuntime.runPromise(listCloudDevices({ clerkToken: token })));
     } catch (error) {
       toastManager.add({
         type: "error",
-        title: "Cloud environments unavailable",
-        description: cloudErrorMessage(error, "Could not load linked environments."),
+        title: "Cloud devices unavailable",
+        description: cloudErrorMessage(error, "Could not load notification devices."),
       });
     } finally {
-      setIsLoadingManaged(false);
+      setIsLoadingDevices(false);
     }
   }, [getToken]);
 
   useEffect(() => {
-    void refreshManagedEnvironments();
-  }, [refreshManagedEnvironments]);
+    void refreshDevices();
+  }, [refreshDevices]);
 
-  const linkEnvironments = async () => {
-    if (hasCloudAccountMismatch) {
-      toastManager.add({
-        type: "error",
-        title: "Cloud account mismatch",
-        description: "This environment is linked to a different cloud account.",
-      });
-      return;
-    }
-    setIsLinking(true);
+  const updatePublishAgentActivity = async (enabled: boolean) => {
+    setIsUpdatingPreference(true);
     try {
-      const token = await runCloudOperation(
-        () => getToken(RELAY_CLERK_TOKEN_OPTIONS),
-        "Could not get the current cloud session.",
+      const state = await webRuntime.runPromise(
+        updatePrimaryCloudPreferences({ publishAgentActivity: enabled }),
       );
-      if (!token) {
-        return;
-      }
-      const primaryTarget = readPrimaryCloudLinkTarget();
-      const savedEnvironments = listSavedEnvironmentRecords().filter(
-        (environment) => !environment.relayManaged,
-      );
-      const savedEnvironmentIds = new Set(primaryTarget ? [primaryTarget.environmentId] : []);
-      if (primaryTarget) {
-        await runCloudOperation(
-          () => webRuntime.runPromise(linkPrimaryEnvironmentToCloud({ clerkToken: token })),
-          "Could not link the local environment.",
-        );
-      }
-      await runCloudOperation(
-        () =>
-          webRuntime.runPromise(
-            Effect.all(
-              savedEnvironments
-                .filter((environment) => {
-                  if (savedEnvironmentIds.has(environment.environmentId)) {
-                    return false;
-                  }
-                  savedEnvironmentIds.add(environment.environmentId);
-                  return true;
-                })
-                .map((environment) => linkEnvironmentToCloud({ environment, clerkToken: token })),
-              { concurrency: "unbounded" },
-            ),
-          ),
-        "Could not link environments.",
-      );
+      setPrimaryLinkState(state);
       toastManager.add({
         type: "success",
-        title: "Environments linked",
-        description: "Relay notifications are enabled for linked environments.",
-      });
-      refreshPrimaryLinkState();
-    } catch (error) {
-      toastManager.add({
-        type: "error",
-        title: "Cloud link failed",
-        description: cloudErrorMessage(error, "Could not link environments."),
-      });
-    } finally {
-      setIsLinking(false);
-    }
-  };
-
-  const unlinkPrimaryEnvironment = async () => {
-    setIsUnlinking(true);
-    try {
-      const token = await getToken(RELAY_CLERK_TOKEN_OPTIONS).catch(() => null);
-      await runCloudOperation(
-        () => webRuntime.runPromise(unlinkPrimaryEnvironmentFromCloud({ clerkToken: token })),
-        "Could not unlink the local environment.",
-      );
-      refreshPrimaryLinkState();
-      toastManager.add({
-        type: "success",
-        title: "Environment unlinked",
-        description: "Local relay credentials and managed endpoint runtime config were removed.",
+        title: enabled ? "Agent activity enabled" : "Agent activity disabled",
+        description: enabled
+          ? "This environment can publish agent activity to your notification devices."
+          : "This environment will stop publishing agent activity.",
       });
     } catch (error) {
       toastManager.add({
         type: "error",
-        title: "Cloud unlink failed",
-        description: cloudErrorMessage(error, "Could not unlink the local environment."),
+        title: "Cloud preference update failed",
+        description: cloudErrorMessage(error, "Could not update cloud preferences."),
       });
     } finally {
-      setIsUnlinking(false);
-    }
-  };
-
-  const connectManagedEnvironment = async (environment: RelayClientEnvironmentRecord) => {
-    setConnectingEnvironmentId(environment.environmentId);
-    try {
-      const token = await getToken(RELAY_CLERK_TOKEN_OPTIONS);
-      if (!token) {
-        throw new CloudSettingsOperationError("Could not get the current cloud session.");
-      }
-      const connection = await webRuntime.runPromise(
-        connectManagedCloudEnvironment({ clerkToken: token, environment }),
-      );
-      await addManagedRelayEnvironment(connection);
-      toastManager.add({
-        type: "success",
-        title: "Environment connected",
-        description: `${connection.label} is available through its managed tunnel.`,
-      });
-    } catch (error) {
-      toastManager.add({
-        type: "error",
-        title: "Managed connection failed",
-        description: cloudErrorMessage(error, "Could not connect to the cloud environment."),
-      });
-    } finally {
-      setConnectingEnvironmentId(null);
+      setIsUpdatingPreference(false);
     }
   };
 
@@ -300,86 +185,60 @@ function CloudSettingsPanelInner() {
       <SettingsSection title="T3 Cloud" icon={<CloudIcon className="size-3.5" />}>
         <SettingsRow
           title="Cloud account"
-          description="Approved users can sign in for relay notifications and managed tunnel connections."
+          description="Manage your private-beta T3 Cloud session."
           control={<UserButton />}
         />
+      </SettingsSection>
+      <SettingsSection title="Preferences">
         <SettingsRow
-          title="Linked environments"
-          description={
-            hasCloudAccountMismatch
-              ? `Linked as ${linkedCloudUserId}; signed in as ${userId}.`
-              : "Grant linked environments a relay credential for APNs agent activity updates."
-          }
+          title="Publish agent activity"
+          description="Allow this environment to send agent activity to your notification devices."
           status={
-            linkStateError ??
-            (linkedCloudUserId
-              ? `Linked as ${linkedCloudUserId}`
-              : `${linkableEnvironmentCount} linkable environment${linkableEnvironmentCount === 1 ? "" : "s"} (${savedEnvironmentCount} saved)`)
+            !primaryLinkState?.linked ? "Link this environment from Connections first." : null
           }
           control={
-            <div className="flex items-center gap-2">
-              {linkedCloudUserId ? (
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  disabled={isUnlinking}
-                  onClick={() => void unlinkPrimaryEnvironment()}
-                >
-                  {isUnlinking ? "Unlinking..." : "Unlink"}
-                </Button>
-              ) : null}
-              <Button
-                size="sm"
-                disabled={
-                  isLinking ||
-                  isUnlinking ||
-                  linkableEnvironmentCount === 0 ||
-                  hasCloudAccountMismatch
-                }
-                onClick={() => void linkEnvironments()}
-              >
-                {isLinking ? "Linking..." : "Link"}
-              </Button>
-            </div>
+            <Switch
+              aria-label="Publish agent activity"
+              checked={primaryLinkState?.publishAgentActivity ?? false}
+              disabled={!primaryLinkState?.linked || !canManageRelay || isUpdatingPreference}
+              onCheckedChange={(enabled) => void updatePublishAgentActivity(enabled)}
+            />
           }
         />
-        <SettingsRow
-          title="Managed tunnel environments"
-          description="Connect to linked environments through T3 Cloud from this frontend."
-          status={
-            isLoadingManaged
-              ? "Loading..."
-              : `${managedEnvironments.length} available environment${managedEnvironments.length === 1 ? "" : "s"}`
-          }
-          control={
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={isLoadingManaged}
-              onClick={() => void refreshManagedEnvironments()}
-            >
-              Refresh
-            </Button>
-          }
-        />
-        {managedEnvironments.map((environment) => (
+      </SettingsSection>
+      <SettingsSection
+        title="Notification devices"
+        headerAction={
+          <Button
+            size="xs"
+            variant="ghost"
+            disabled={isLoadingDevices}
+            onClick={() => void refreshDevices()}
+          >
+            {isLoadingDevices ? "Refreshing..." : "Refresh"}
+          </Button>
+        }
+      >
+        {devices.map((device) => (
           <SettingsRow
-            key={environment.environmentId}
-            title={environment.label}
-            description={environment.endpoint.httpBaseUrl}
-            control={
-              <Button
-                size="sm"
-                disabled={connectingEnvironmentId !== null}
-                onClick={() => void connectManagedEnvironment(environment)}
-              >
-                {connectingEnvironmentId === environment.environmentId
-                  ? "Connecting..."
-                  : "Connect"}
-              </Button>
+            key={device.deviceId}
+            title={device.label}
+            description={`iOS ${device.iosMajorVersion}${device.appVersion ? ` · T3 Code ${device.appVersion}` : ""}`}
+            status={
+              device.notifications.enabled
+                ? device.liveActivities.enabled
+                  ? "Notifications and Live Activities enabled"
+                  : "Notifications enabled · Live Activities disabled"
+                : "Notifications disabled on device"
             }
           />
         ))}
+        {!isLoadingDevices && devices.length === 0 ? (
+          <SettingsRow
+            title="No notification devices"
+            description="Sign in on the mobile app to register a device for account-level notifications."
+          />
+        ) : null}
       </SettingsSection>
     </SettingsPageContainer>
   );

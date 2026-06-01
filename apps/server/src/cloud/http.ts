@@ -1,6 +1,7 @@
 import * as NodeCrypto from "node:crypto";
 import {
-  AuthRelayManageScope,
+  AuthRelayReadScope,
+  AuthRelayWriteScope,
   AuthStandardClientScopes,
   EnvironmentCloudEndpointUnavailableError,
   EnvironmentCloudLinkStateResult,
@@ -62,13 +63,13 @@ import {
   CLOUD_LINKED_USER_ID,
   CLOUD_MINT_PUBLIC_KEY,
   encodeEndpointRuntimeConfigJson,
+  PUBLISH_AGENT_ACTIVITY_SECRET,
   RELAY_ENVIRONMENT_CREDENTIAL_SECRET,
   RELAY_ISSUER_SECRET,
   RELAY_URL_SECRET,
 } from "./config.ts";
+import { getOrCreateEnvironmentKeyPairFromSecretStore } from "./environmentKeys.ts";
 
-const CLOUD_LINK_PRIVATE_KEY = "cloud-link-ed25519-private-key";
-const CLOUD_LINK_PUBLIC_KEY = "cloud-link-ed25519-public-key";
 const CLOUD_MINT_NONCE_PREFIX = "cloud-mint-nonce-";
 const CLOUD_MINT_JTI_PREFIX = "cloud-mint-jti-";
 const CLOUD_HEALTH_NONCE_PREFIX = "cloud-health-nonce-";
@@ -329,30 +330,6 @@ function hasBoundedCloudProofLifetime(input: {
 const decodeCloudHealthProof = Schema.decodeUnknownEffect(RelayCloudEnvironmentHealthProofPayload);
 const decodeCloudMintProof = Schema.decodeUnknownEffect(RelayCloudMintCredentialProofPayload);
 
-export const getOrCreateEnvironmentKeyPairFromSecretStore = Effect.fn(function* (
-  secrets: ServerSecretStore.ServerSecretStoreShape,
-) {
-  const existingPrivate = yield* secrets.get(CLOUD_LINK_PRIVATE_KEY);
-  const existingPublic = yield* secrets.get(CLOUD_LINK_PUBLIC_KEY);
-  if (existingPrivate && existingPublic) {
-    return {
-      privateKey: bytesToString(existingPrivate),
-      publicKey: bytesToString(existingPublic),
-    };
-  }
-
-  const keyPair = NodeCrypto.generateKeyPairSync("ed25519", {
-    privateKeyEncoding: { format: "pem", type: "pkcs8" },
-    publicKeyEncoding: { format: "pem", type: "spki" },
-  });
-  yield* secrets.set(CLOUD_LINK_PRIVATE_KEY, stringToBytes(keyPair.privateKey));
-  yield* secrets.set(CLOUD_LINK_PUBLIC_KEY, stringToBytes(keyPair.publicKey));
-  return {
-    privateKey: keyPair.privateKey,
-    publicKey: keyPair.publicKey,
-  };
-});
-
 interface CloudHttpDependencies {
   readonly secrets: ServerSecretStore.ServerSecretStoreShape;
   readonly environment: ServerEnvironmentShape;
@@ -362,7 +339,7 @@ interface CloudHttpDependencies {
 
 const cloudLinkProofHandler = Effect.fn("environment.cloud.linkProof")(
   function* (dependencies: CloudHttpDependencies, request: RelayLinkProofRequest) {
-    yield* requireEnvironmentScope(AuthRelayManageScope);
+    yield* requireEnvironmentScope(AuthRelayWriteScope);
     const httpRequest = yield* HttpServerRequest.HttpServerRequest;
     const keyPair = yield* getOrCreateEnvironmentKeyPairFromSecretStore(dependencies.secrets);
     const requestUrl = requestAbsoluteUrl(httpRequest);
@@ -427,7 +404,7 @@ const cloudLinkProofHandler = Effect.fn("environment.cloud.linkProof")(
 
 const cloudRelayConfigHandler = Effect.fn("environment.cloud.relayConfig")(
   function* (dependencies: CloudHttpDependencies, payload: RelayEnvironmentConfigRequest) {
-    yield* requireEnvironmentScope(AuthRelayManageScope);
+    yield* requireEnvironmentScope(AuthRelayWriteScope);
     yield* validateRelayConfigPayload(payload);
     yield* validateLinkedCloudUser({
       secrets: dependencies.secrets,
@@ -484,24 +461,33 @@ const cloudRelayConfigHandler = Effect.fn("environment.cloud.relayConfig")(
   }),
 );
 
+const readCloudLinkState = Effect.fn("environment.cloud.readLinkState")(function* (
+  dependencies: CloudHttpDependencies,
+) {
+  const [cloudUserId, relayUrl, relayIssuer, publishAgentActivity] = yield* Effect.all(
+    [
+      dependencies.secrets.get(CLOUD_LINKED_USER_ID),
+      dependencies.secrets.get(RELAY_URL_SECRET),
+      dependencies.secrets.get(RELAY_ISSUER_SECRET),
+      dependencies.secrets.get(PUBLISH_AGENT_ACTIVITY_SECRET),
+    ],
+    { concurrency: 4 },
+  );
+  return {
+    linked: cloudUserId !== null,
+    cloudUserId: cloudUserId ? bytesToString(cloudUserId) : null,
+    relayUrl: relayUrl ? bytesToString(relayUrl) : null,
+    relayIssuer: relayIssuer ? bytesToString(relayIssuer) : null,
+    publishAgentActivity: publishAgentActivity
+      ? bytesToString(publishAgentActivity) === "true"
+      : false,
+  } satisfies EnvironmentCloudLinkStateResult;
+});
+
 const cloudLinkStateHandler = Effect.fn("environment.cloud.linkState")(
   function* (dependencies: CloudHttpDependencies) {
-    yield* requireEnvironmentScope(AuthRelayManageScope);
-    const [cloudUserId, relayUrl, relayIssuer] = yield* Effect.all(
-      [
-        dependencies.secrets.get(CLOUD_LINKED_USER_ID),
-        dependencies.secrets.get(RELAY_URL_SECRET),
-        dependencies.secrets.get(RELAY_ISSUER_SECRET),
-      ],
-      { concurrency: 3 },
-    );
-    const response = {
-      linked: cloudUserId !== null,
-      cloudUserId: cloudUserId ? bytesToString(cloudUserId) : null,
-      relayUrl: relayUrl ? bytesToString(relayUrl) : null,
-      relayIssuer: relayIssuer ? bytesToString(relayIssuer) : null,
-    } satisfies EnvironmentCloudLinkStateResult;
-    return response;
+    yield* requireEnvironmentScope(AuthRelayReadScope);
+    return yield* readCloudLinkState(dependencies);
   },
   Effect.catchTag(
     "SecretStoreError",
@@ -511,7 +497,7 @@ const cloudLinkStateHandler = Effect.fn("environment.cloud.linkState")(
 
 const cloudUnlinkHandler = Effect.fn("environment.cloud.unlink")(
   function* (dependencies: CloudHttpDependencies) {
-    yield* requireEnvironmentScope(AuthRelayManageScope);
+    yield* requireEnvironmentScope(AuthRelayWriteScope);
     const endpointRuntimeStatus = yield* dependencies.endpointRuntime.applyConfig(null);
     yield* Effect.all(
       [
@@ -521,14 +507,33 @@ const cloudUnlinkHandler = Effect.fn("environment.cloud.unlink")(
         dependencies.secrets.remove(RELAY_ENVIRONMENT_CREDENTIAL_SECRET),
         dependencies.secrets.remove(CLOUD_MINT_PUBLIC_KEY),
         dependencies.secrets.remove(CLOUD_ENDPOINT_RUNTIME_CONFIG),
+        dependencies.secrets.remove(PUBLISH_AGENT_ACTIVITY_SECRET),
       ],
-      { concurrency: 6 },
+      { concurrency: 7 },
     );
     return { ok: true, endpointRuntimeStatus } satisfies EnvironmentCloudRelayConfigResult;
   },
   Effect.catchTag(
     "SecretStoreError",
     failEnvironmentCloudInternalError("Could not remove environment relay configuration."),
+  ),
+);
+
+const cloudPreferencesHandler = Effect.fn("environment.cloud.preferences")(
+  function* (
+    dependencies: CloudHttpDependencies,
+    payload: { readonly publishAgentActivity: boolean },
+  ) {
+    yield* requireEnvironmentScope(AuthRelayWriteScope);
+    yield* dependencies.secrets.set(
+      PUBLISH_AGENT_ACTIVITY_SECRET,
+      stringToBytes(String(payload.publishAgentActivity)),
+    );
+    return yield* readCloudLinkState(dependencies);
+  },
+  Effect.catchTag(
+    "SecretStoreError",
+    failEnvironmentCloudInternalError("Could not persist environment cloud preferences."),
   ),
 );
 
@@ -788,6 +793,7 @@ export const cloudHttpApiLayer = HttpApiBuilder.group(
       .handle("relayConfig", ({ payload }) => cloudRelayConfigHandler(dependencies, payload))
       .handle("linkState", () => cloudLinkStateHandler(dependencies))
       .handle("unlink", () => cloudUnlinkHandler(dependencies))
+      .handle("preferences", ({ payload }) => cloudPreferencesHandler(dependencies, payload))
       .handle("health", ({ payload }) => cloudEnvironmentHealthHandler(dependencies, payload))
       .handle("mintCredential", ({ payload }) => cloudMintCredentialHandler(dependencies, payload))
       .handle("t3MintCredential", ({ payload }) =>

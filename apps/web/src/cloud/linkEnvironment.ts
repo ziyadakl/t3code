@@ -14,6 +14,7 @@ import {
 } from "@t3tools/contracts";
 import {
   RelayEnvironmentConnectScope,
+  type RelayClientDeviceRecord,
   type RelayEnvironmentLinkResponse,
   RelayProtectedError,
   type RelayClientEnvironmentRecord,
@@ -252,6 +253,32 @@ export function listManagedCloudEnvironments(input: {
   });
 }
 
+export function listCloudDevices(input: {
+  readonly clerkToken: string;
+}): Effect.Effect<
+  ReadonlyArray<RelayClientDeviceRecord>,
+  CloudEnvironmentLinkError,
+  ManagedRelayClient
+> {
+  return Effect.gen(function* () {
+    if (!relayUrl()) {
+      return yield* new CloudEnvironmentLinkError({
+        message: "VITE_T3_RELAY_URL is not configured.",
+      });
+    }
+    const relayClient = yield* ManagedRelayClient;
+    return yield* relayClient.listDevices({ clerkToken: input.clerkToken }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new CloudEnvironmentLinkError({
+            message: "Could not list cloud devices.",
+            cause,
+          }),
+      ),
+    );
+  });
+}
+
 export function connectManagedCloudEnvironment(input: {
   readonly clerkToken: string;
   readonly environment: RelayClientEnvironmentRecord;
@@ -374,6 +401,23 @@ export function readPrimaryCloudLinkState(): Effect.Effect<
       .pipe(
         withPrimaryEnvironmentCookies,
         Effect.mapError(environmentApiError("Could not read environment cloud link state.")),
+      );
+  });
+}
+
+export function updatePrimaryCloudPreferences(input: {
+  readonly publishAgentActivity: boolean;
+}): Effect.Effect<CloudLinkState, CloudEnvironmentLinkError, HttpClient.HttpClient> {
+  return Effect.gen(function* () {
+    const client = yield* makeEnvironmentHttpApiClient(resolvePrimaryEnvironmentHttpUrl("/"));
+    return yield* client.cloud
+      .preferences({
+        headers: {},
+        payload: input,
+      })
+      .pipe(
+        withPrimaryEnvironmentCookies,
+        Effect.mapError(environmentApiError("Could not update environment cloud preferences.")),
       );
   });
 }
