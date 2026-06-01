@@ -17,11 +17,9 @@ export const ManagedEndpointZone = Effect.gen(function* () {
       {
         effect: "allow",
         permissionGroups: ["DNS Read", "DNS Write"],
-        resources: zone.zoneId.pipe(
-          Output.map((id) => ({
-            [`com.cloudflare.api.account.zone.${id}`]: "*",
-          })),
-        ),
+        resources: Output.map(zone.zoneId, (id) => ({
+          [`com.cloudflare.api.account.zone.${id}`]: "*",
+        })),
       },
     ],
   });
