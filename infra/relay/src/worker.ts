@@ -30,7 +30,6 @@ import {
   withoutCapturedParentSpan,
 } from "./http/Api.ts";
 import {
-  ManagedEndpointDNSToken,
   ManagedEndpointZone,
   RELAY_PUBLIC_DOMAIN,
   RELAY_PUBLIC_ORIGIN,
@@ -111,10 +110,6 @@ export default class Api extends Cloudflare.Worker<Api>()(
     const cloudMintKeyPair = yield* CloudMintKeyPair;
     const hyperdrive = yield* Cloudflare.Hyperdrive.bind(yield* RelayHyperdrive);
     const managedEndpointZone = yield* ManagedEndpointZone;
-    const managedEndpointZoneId = yield* managedEndpointZone.zoneId;
-    const managedEndpointZoneName = yield* managedEndpointZone.name;
-    const managedEndpointProvisionerToken = yield* ManagedEndpointDNSToken;
-    const managedEndpointCloudflareApiToken = yield* managedEndpointProvisionerToken.value;
     const managedEndpointTunnelBinding = yield* Cloudflare.TunnelReadWrite.bind();
     const randomApnsDeliveryJobSigningSecret = yield* ApnsDeliveryJobSigningSecret;
     const observability = yield* RelayObservability;
@@ -142,6 +137,9 @@ export default class Api extends Cloudflare.Worker<Api>()(
     const cloudMintPublicKey = yield* cloudMintKeyPair.publicKey;
     const db = yield* Drizzle.postgres(hyperdrive.connectionString);
 
+    const managedEndpointZoneId = yield* managedEndpointZone.zoneId;
+    const managedEndpointDNSToken = yield* managedEndpointZone.dnsToken;
+
     //
     // 3. Runtime layers and app construction
     //
@@ -161,9 +159,9 @@ export default class Api extends Cloudflare.Worker<Api>()(
         clerkSecretKey,
         cloudMintPrivateKey: yield* cloudMintPrivateKey,
         cloudMintPublicKey: yield* cloudMintPublicKey,
-        managedEndpointBaseDomain: yield* managedEndpointZoneName,
+        managedEndpointBaseDomain: yield* managedEndpointZoneId,
         cloudflareZoneId: yield* managedEndpointZoneId,
-        cloudflareApiToken: yield* managedEndpointCloudflareApiToken,
+        cloudflareApiToken: yield* managedEndpointDNSToken,
       });
     });
 
@@ -175,59 +173,41 @@ export default class Api extends Cloudflare.Worker<Api>()(
       }).pipe(Effect.map(makeRelayTraceLayer)),
     );
 
-    const runtimeLayer = Layer.unwrap(
-      Effect.gen(function* () {
-        const settings = yield* loadSettings;
-
-        return Layer.mergeAll(
-          MobileRegistrations.layer.pipe(Layer.provideMerge(AgentActivityPublisher.layer)),
-          EnvironmentConnector.layer,
-          EnvironmentLinker.layer.pipe(
-            Layer.provideMerge(
-              ManagedEndpointProvider.layerCloudflareTunnels(
-                managedEndpointTunnelBinding,
-                alchemyRuntimeContext,
-              ),
-            ),
-            Layer.provideMerge(DpopProofs.layer),
-          ),
-          EnvironmentPublishSignatures.layer.pipe(Layer.provideMerge(DpopProofs.layer)),
-          DpopProofs.layer,
-        ).pipe(
-          Layer.provide(ApnsDeliveries.layer.pipe(Layer.provide(ApnsClient.layer))),
-          Layer.provide(
-            ApnsDeliveryQueue.layerCloudflareQueues(apnsDeliveryQueueSender, alchemyRuntimeContext),
-          ),
-          Layer.provide(AgentActivityRows.layer),
-          Layer.provide(Devices.layer),
-          Layer.provide(EnvironmentCredentials.layer),
-          Layer.provide(EnvironmentLinks.layer),
-          Layer.provide(LiveActivities.layer),
-          Layer.provide(DeliveryAttempts.layer),
-          Layer.provide(RelayTokens.layer),
-          Layer.provide(Layer.succeed(RelayDb, db)),
-          Layer.provide(Layer.succeed(RelayConfiguration.RelayConfiguration, settings)),
-          Layer.provide(webcryptoLayer),
-        );
-      }),
+    const runtimeLayer = Layer.empty.pipe(
+      Layer.provideMerge(MobileRegistrations.layer),
+      Layer.provideMerge(AgentActivityPublisher.layer),
+      Layer.provideMerge(EnvironmentConnector.layer),
+      Layer.provideMerge(EnvironmentLinker.layer),
+      Layer.provideMerge(EnvironmentPublishSignatures.layer),
+      Layer.provideMerge(
+        ManagedEndpointProvider.layerCloudflareTunnels(
+          managedEndpointTunnelBinding,
+          alchemyRuntimeContext,
+        ),
+      ),
+      Layer.provideMerge(DpopProofs.layer),
+      Layer.provideMerge(ApnsDeliveries.layer),
+      Layer.provideMerge(ApnsClient.layer),
+      Layer.provideMerge(
+        ApnsDeliveryQueue.layerCloudflareQueues(apnsDeliveryQueueSender, alchemyRuntimeContext),
+      ),
+      Layer.provideMerge(AgentActivityRows.layer),
+      Layer.provideMerge(Devices.layer),
+      Layer.provideMerge(EnvironmentCredentials.layer),
+      Layer.provideMerge(EnvironmentLinks.layer),
+      Layer.provideMerge(LiveActivities.layer),
+      Layer.provideMerge(DeliveryAttempts.layer),
+      Layer.provideMerge(RelayTokens.layer),
+      Layer.provideMerge(Layer.succeed(RelayDb, db)),
+      Layer.provideMerge(Layer.effect(RelayConfiguration.RelayConfiguration, loadSettings)),
+      Layer.provideMerge(webcryptoLayer),
     );
 
-    const appLayer = Layer.unwrap(
-      Effect.gen(function* () {
-        const settings = yield* loadSettings;
-        return relayApiLayer.pipe(
-          Layer.provide(runtimeLayer),
-          Layer.provide(relayClientAuthLayer),
-          Layer.provide(relayDpopClientAuthLayer),
-          Layer.provide(relayEnvironmentAuthLayer),
-          Layer.provide(EnvironmentCredentials.layer),
-          Layer.provide(EnvironmentLinks.layer),
-          Layer.provide(RelayTokens.layer),
-          Layer.provide(Layer.succeed(RelayDb, db)),
-          Layer.provideMerge(Layer.succeed(RelayConfiguration.RelayConfiguration, settings)),
-          Layer.provide(webcryptoLayer),
-        );
-      }),
+    const appLayer = relayApiLayer.pipe(
+      Layer.provideMerge(relayClientAuthLayer),
+      Layer.provideMerge(relayDpopClientAuthLayer),
+      Layer.provideMerge(relayEnvironmentAuthLayer),
+      Layer.provide(runtimeLayer),
     );
 
     yield* Cloudflare.messages<unknown>(apnsDeliveryQueue, {
