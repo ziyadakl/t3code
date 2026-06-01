@@ -29,11 +29,7 @@ import {
   tokenApi,
   withoutCapturedParentSpan,
 } from "./http/Api.ts";
-import {
-  ManagedEndpointZone,
-  RELAY_PUBLIC_DOMAIN,
-  RELAY_PUBLIC_ORIGIN,
-} from "./managedEndpointStack.ts";
+import { ManagedEndpointZone, RELAY_PUBLIC_DOMAIN, RELAY_PUBLIC_ORIGIN } from "./zone.ts";
 import { makeRelayTraceLayer, RelayObservability } from "./observability.ts";
 import * as DeliveryAttempts from "./agentActivity/DeliveryAttempts.ts";
 import * as AgentActivityRows from "./agentActivity/AgentActivityRows.ts";

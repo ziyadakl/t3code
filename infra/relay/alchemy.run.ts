@@ -9,7 +9,7 @@ import * as Planetscale from "alchemy/Planetscale";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 
 import { PlanetscaleDatabase, RelayHyperdrive } from "./src/db.ts";
-import { ManagedEndpointZone } from "./src/managedEndpointStack.ts";
+import { ManagedEndpointZone } from "./src/zone.ts";
 import Api from "./src/worker.ts";
 
 export default Alchemy.Stack(
