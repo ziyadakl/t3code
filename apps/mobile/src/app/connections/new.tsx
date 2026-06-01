@@ -130,7 +130,9 @@ export default function ConnectionsNewRouteScreen() {
           title: showScanner ? "Scan QR Code" : "Add Environment",
           headerRight: () => (
             <Pressable
-              className="h-10 w-10 items-center justify-center rounded-full border border-border bg-secondary"
+              accessibilityLabel={showScanner ? "Close QR scanner" : "Scan pairing QR code"}
+              accessibilityRole="button"
+              className="h-10 w-10 items-center justify-center active:opacity-70"
               onPress={() => {
                 if (showScanner) {
                   closeScanner();

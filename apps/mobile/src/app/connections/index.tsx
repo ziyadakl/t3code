@@ -22,8 +22,8 @@ export default function ConnectionsRouteScreen() {
   const hasEnvironments = connectedEnvironments.length > 0;
   const [expandedId, setExpandedId] = useState<EnvironmentId | null>(null);
 
-  const primaryFg = useThemeColor("--color-primary-foreground");
   const accentColor = useThemeColor("--color-icon-muted");
+  const iconColor = useThemeColor("--color-icon");
 
   const handleToggle = useCallback((environmentId: EnvironmentId) => {
     setExpandedId((prev) => (prev === environmentId ? null : environmentId));
@@ -36,11 +36,15 @@ export default function ConnectionsRouteScreen() {
           title: "Environments",
           headerRight: () => (
             <Link href="/connections/new" asChild>
-              <Pressable className="h-10 w-10 items-center justify-center rounded-full bg-primary active:opacity-70">
+              <Pressable
+                accessibilityLabel="Add environment"
+                accessibilityRole="button"
+                className="h-10 w-10 items-center justify-center active:opacity-70"
+              >
                 <SymbolView
                   name="plus"
                   size={18}
-                  tintColor={primaryFg}
+                  tintColor={iconColor}
                   type="monochrome"
                   weight="semibold"
                 />
