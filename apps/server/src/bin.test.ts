@@ -198,6 +198,15 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
     }),
   );
 
+  it.effect("disables headless cloud exposure without a running server", () =>
+    Effect.gen(function* () {
+      const baseDir = mkdtempSync(join(tmpdir(), "t3-cli-cloud-unlink-test-"));
+      const { output } = yield* captureStdout(runCli(["cloud", "unlink", "--base-dir", baseDir]));
+
+      assert.equal(output, "T3 Cloud exposure is disabled locally.");
+    }),
+  );
+
   it.effect("executes auth pairing subcommands and redacts secrets from list output", () =>
     Effect.gen(function* () {
       const baseDir = mkdtempSync(join(tmpdir(), "t3-cli-auth-pairing-test-"));

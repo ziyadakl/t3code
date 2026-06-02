@@ -148,7 +148,7 @@ const runCloudCommand = <A, E>(
       ServerEnvironmentLive,
     ).pipe(
       Layer.provideMerge(FetchHttpClient.layer),
-      Layer.provide(Layer.succeed(ServerConfig, config)),
+      Layer.provideMerge(Layer.succeed(ServerConfig, config)),
       Layer.provide(Layer.succeed(References.MinimumLogLevel, config.logLevel)),
     );
     return yield* run.pipe(Effect.provide(runtimeLayer));
