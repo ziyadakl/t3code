@@ -71,12 +71,13 @@ describe("loadRepoEnv", () => {
       resolvePublicConfig({
         VITE_CLERK_PUBLISHABLE_KEY: "pk_legacy",
         VITE_CLERK_JWT_TEMPLATE: "template_legacy",
+        T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: "oauth_canonical",
         VITE_T3CODE_RELAY_URL: "https://legacy.example.test",
       }),
     ).toEqual({
       clerkPublishableKey: "pk_legacy",
       clerkJwtTemplate: "template_legacy",
-      clerkCliOAuthClientId: undefined,
+      clerkCliOAuthClientId: "oauth_canonical",
       relayUrl: "https://legacy.example.test",
     });
   });
