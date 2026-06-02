@@ -19,7 +19,7 @@ import * as CliError from "effect/unstable/cli/CliError";
 import * as TestConsole from "effect/testing/TestConsole";
 import { Command } from "effect/unstable/cli";
 
-import { cli } from "./bin.ts";
+import { cli, makeCli } from "./bin.ts";
 import { deriveServerPaths, ServerConfig, type ServerConfigShape } from "./config.ts";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
@@ -38,7 +38,10 @@ import { environmentAuthenticatedAuthLayer } from "./auth/http.ts";
 const CliRuntimeLayer = Layer.mergeAll(NodeServices.layer, NetService.layer);
 class ProjectCliHttpApi extends HttpApi.make("environment").add(EnvironmentOrchestrationHttpApi) {}
 
-const runCli = (args: ReadonlyArray<string>) => Command.runWith(cli, { version: "0.0.0" })(args);
+const cloudCli = makeCli({ cloudEnabled: true });
+const runCli = (args: ReadonlyArray<string>, command = cli) =>
+  Command.runWith(command, { version: "0.0.0" })(args);
+const runCloudCli = (args: ReadonlyArray<string>) => runCli(args, cloudCli);
 const runCliWithRuntime = (args: ReadonlyArray<string>) =>
   runCli(args).pipe(Effect.provide(CliRuntimeLayer));
 
@@ -179,7 +182,7 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
     Effect.gen(function* () {
       const baseDir = mkdtempSync(join(tmpdir(), "t3-cli-cloud-status-test-"));
       const { output } = yield* captureStdout(
-        runCli(["cloud", "status", "--base-dir", baseDir, "--json"]),
+        runCloudCli(["cloud", "status", "--base-dir", baseDir, "--json"]),
       );
       // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON output is decoded as a presentation DTO.
       const status = JSON.parse(output) as {
@@ -201,7 +204,9 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
   it.effect("reports actionable human-readable headless cloud state", () =>
     Effect.gen(function* () {
       const baseDir = mkdtempSync(join(tmpdir(), "t3-cli-cloud-status-human-test-"));
-      const { output } = yield* captureStdout(runCli(["cloud", "status", "--base-dir", baseDir]));
+      const { output } = yield* captureStdout(
+        runCloudCli(["cloud", "status", "--base-dir", baseDir]),
+      );
 
       assert.include(output, "T3 Cloud\n  Exposure: disabled");
       assert.include(output, "  Authorization: missing");
@@ -225,9 +230,9 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
         }),
       );
 
-      const login = yield* captureStdout(runCli(["cloud", "login", "--base-dir", baseDir]));
+      const login = yield* captureStdout(runCloudCli(["cloud", "login", "--base-dir", baseDir]));
       const status = yield* captureStdout(
-        runCli(["cloud", "status", "--base-dir", baseDir, "--json"]),
+        runCloudCli(["cloud", "status", "--base-dir", baseDir, "--json"]),
       );
       // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON output is decoded as a presentation DTO.
       const decoded = JSON.parse(status.output) as {
@@ -244,7 +249,9 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
   it.effect("disables headless cloud exposure without a running server", () =>
     Effect.gen(function* () {
       const baseDir = mkdtempSync(join(tmpdir(), "t3-cli-cloud-unlink-test-"));
-      const { output } = yield* captureStdout(runCli(["cloud", "unlink", "--base-dir", baseDir]));
+      const { output } = yield* captureStdout(
+        runCloudCli(["cloud", "unlink", "--base-dir", baseDir]),
+      );
 
       assert.equal(output, "T3 Cloud exposure is disabled locally.");
     }),
@@ -258,7 +265,9 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
       mkdirSync(secretsDir, { recursive: true });
       writeFileSync(tokenPath, "invalid persisted token");
 
-      const { output } = yield* captureStdout(runCli(["cloud", "logout", "--base-dir", baseDir]));
+      const { output } = yield* captureStdout(
+        runCloudCli(["cloud", "logout", "--base-dir", baseDir]),
+      );
 
       assert.equal(output, "Signed out of T3 Cloud locally.");
       assert.isFalse(existsSync(tokenPath));

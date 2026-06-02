@@ -26,13 +26,16 @@ Configuration precedence is:
 3. Repository-root `.env`.
 
 The Clerk publishable key, JWT template name, and relay URL are public identifiers, not secrets.
-Web, desktop, and mobile builds statically inject them during their build step. A built artifact
-does not need an environment file at runtime. CI release builds should set
-`T3CODE_CLERK_PUBLISHABLE_KEY`, `T3CODE_CLERK_JWT_TEMPLATE`, and `T3CODE_RELAY_URL` before building.
-EAS preview and production builds should define the same client-facing values in their EAS
-environment.
+Web, desktop, mobile, and bundled server builds statically inject their public values during the
+build step. A built artifact does not need an environment file at runtime. CI release builds should
+set `T3CODE_CLERK_PUBLISHABLE_KEY`, `T3CODE_CLERK_JWT_TEMPLATE`, and `T3CODE_RELAY_URL` before
+building. EAS preview and production builds should define the same client-facing values in their
+EAS environment.
 
-When any client-facing public value is absent, cloud UI is omitted.
+When any client-facing public value is absent, cloud UI is omitted. When the CLI public values are
+absent, the `t3 cloud` CLI command group is omitted. The
+bundled server still accepts a runtime `T3CODE_RELAY_URL` override for self-hosted or operator-managed
+deployments.
 
 For a hosted relay deployment, copy `infra/relay/.env.example` to `infra/relay/.env`. The relay
 deployment reads `RELAY_DOMAIN`, `RELAY_ZONE_NAME`, `CLERK_PUBLISHABLE_KEY`, and

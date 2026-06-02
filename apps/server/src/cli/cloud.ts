@@ -1,8 +1,6 @@
 import { AuthRelayWriteScope, EnvironmentHttpApi } from "@t3tools/contracts";
 import { RelayOkResponse } from "@t3tools/contracts/relay";
 import * as Cloudflared from "@t3tools/shared/cloudflared";
-import { DEFAULT_T3_RELAY_URL } from "@t3tools/shared/relayAuth";
-import * as Config from "effect/Config";
 import * as Console from "effect/Console";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -25,6 +23,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as CliState from "../cloud/CliState.ts";
 import * as CliTokenManager from "../cloud/CliTokenManager.ts";
 import { CLOUD_LINKED_USER_ID, RELAY_URL_SECRET } from "../cloud/config.ts";
+import { relayUrlConfig } from "../cloud/publicConfig.ts";
 import { ServerConfig } from "../config.ts";
 import { ServerEnvironmentLive } from "../environment/Layers/ServerEnvironment.ts";
 import { ServerEnvironment } from "../environment/Services/ServerEnvironment.ts";
@@ -169,10 +168,7 @@ const unlinkRelayEnvironment = Effect.fn("cloud.cli.unlink_relay_environment")(f
 
   const environment = yield* ServerEnvironment;
   const environmentId = yield* environment.getEnvironmentId;
-  const relayUrl = (yield* Config.string("T3_RELAY_URL").pipe(
-    Config.withDefault(DEFAULT_T3_RELAY_URL),
-    Effect.orDie,
-  )).replace(/\/+$/u, "");
+  const relayUrl = yield* relayUrlConfig;
   const httpClient = yield* HttpClient.HttpClient;
   const response = yield* HttpClientRequest.delete(
     `${relayUrl}/v1/client/environment-links/${encodeURIComponent(environmentId)}`,

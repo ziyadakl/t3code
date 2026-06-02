@@ -2,10 +2,8 @@
 import { createServer } from "node:http";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
-import { DEFAULT_T3_RELAY_URL } from "@t3tools/shared/relayAuth";
 import { RelayCliOAuthMetadata } from "@t3tools/contracts/relay";
 import * as Clock from "effect/Clock";
-import * as Config from "effect/Config";
 import * as Console from "effect/Console";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -24,6 +22,7 @@ import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import { relayUrlConfig } from "./publicConfig.ts";
 
 const CLOUD_CLI_OAUTH_TOKEN_SECRET = "cloud-cli-oauth-token";
 const CLOUD_CLI_OAUTH_CALLBACK_TIMEOUT = Duration.minutes(10);
@@ -90,12 +89,6 @@ const make = Effect.gen(function* () {
   const httpClient = (yield* HttpClient.HttpClient).pipe(HttpClient.filterStatusOk);
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   const semaphore = yield* Semaphore.make(1);
-  const relayUrl = yield* Config.string("T3_RELAY_URL").pipe(
-    Config.withDefault(DEFAULT_T3_RELAY_URL),
-    Effect.map((value) => value.replace(/\/+$/u, "")),
-    Effect.orDie,
-  );
-
   const persist = Effect.fn("cloud.cli_token.persist")(function* (token: PersistedToken) {
     const encoded = yield* encodePersistedToken(token);
     yield* secrets.set(CLOUD_CLI_OAUTH_TOKEN_SECRET, stringToBytes(encoded));
@@ -112,9 +105,13 @@ const make = Effect.gen(function* () {
     return Option.some(yield* decodePersistedToken(bytesToString(encoded)));
   });
 
-  const readMetadata = HttpClientRequest.get(`${relayUrl}/.well-known/t3-cloud-cli`).pipe(
-    httpClient.execute,
-    Effect.flatMap(HttpClientResponse.schemaBodyJson(RelayCliOAuthMetadata)),
+  const readMetadata = relayUrlConfig.pipe(
+    Effect.flatMap((relayUrl) =>
+      HttpClientRequest.get(`${relayUrl}/.well-known/t3-cloud-cli`).pipe(
+        httpClient.execute,
+        Effect.flatMap(HttpClientResponse.schemaBodyJson(RelayCliOAuthMetadata)),
+      ),
+    ),
   );
 
   const exchangeToken = Effect.fn("cloud.cli_token.exchange")(function* (
