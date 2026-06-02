@@ -2280,26 +2280,16 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("rejects cloud reconciliation before the headless CLI is authorized", () =>
+  it.effect("does not expose internal cloud reconciliation over HTTP", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();
 
-      const ownerCookie = yield* getAuthenticatedSessionCookieHeader();
       const reconcileUrl = yield* getHttpServerUrl("/api/cloud/reconcile");
       const response = yield* fetchEffect(reconcileUrl, {
         method: "POST",
-        headers: {
-          cookie: ownerCookie,
-        },
       });
-      const body = yield* responseJsonEffect<{
-        readonly _tag?: string;
-        readonly message?: string;
-      }>(response);
 
-      assert.equal(response.status, 401);
-      assert.equal(body._tag, "EnvironmentHttpUnauthorizedError");
-      assert.equal(body.message, "Run `t3 cloud link` to authorize this environment.");
+      assert.equal(response.status, 404);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

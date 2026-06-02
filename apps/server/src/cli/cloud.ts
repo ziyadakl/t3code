@@ -125,9 +125,7 @@ type LiveCloudActionResult =
   | { readonly status: "succeeded" }
   | { readonly status: "failed"; readonly cause: unknown };
 
-const runLiveCloudAction = Effect.fn("cloud.cli.run_live_action")(function* (
-  action: "reconcile" | "unlink",
-) {
+const runLiveCloudUnlink = Effect.fn("cloud.cli.run_live_unlink")(function* () {
   const config = yield* ServerConfig;
   const runtimeState = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
   if (Option.isNone(runtimeState)) {
@@ -143,9 +141,7 @@ const runLiveCloudAction = Effect.fn("cloud.cli.run_live_action")(function* (
           baseUrl: runtimeState.value.origin,
           httpClient,
         });
-        return yield* action === "reconcile"
-          ? client.cloud.reconcile({ headers: { authorization: `Bearer ${token}` } })
-          : client.cloud.unlink({ headers: { authorization: `Bearer ${token}` } });
+        return yield* client.cloud.unlink({ headers: { authorization: `Bearer ${token}` } });
       }).pipe(Effect.timeout(CLOUD_CLI_LIVE_SERVER_TIMEOUT)),
     ),
   );
@@ -187,7 +183,7 @@ const disconnectCloud = Effect.fn("cloud.cli.disconnect")(function* (options: {
   readonly clearAuthorization: boolean;
 }) {
   yield* CliState.setCliDesiredCloudLink(false);
-  const liveResult = yield* runLiveCloudAction("unlink");
+  const liveResult = yield* runLiveCloudUnlink();
   const relayResult = yield* Effect.exit(unlinkRelayEnvironment());
   yield* CliState.clearPersistedCloudLink;
 
@@ -290,19 +286,9 @@ const cloudLinkCommand = Command.make("link", {
         const tokens = yield* CliTokenManager.CloudCliTokenManager;
         yield* tokens.get;
         yield* CliState.setCliDesiredCloudLink(true);
-
-        const liveResult = yield* runLiveCloudAction("reconcile");
-        if (liveResult.status === "succeeded") {
-          yield* Console.log("T3 Cloud is linked and the running server is exposing its tunnel.");
-        } else if (liveResult.status === "failed") {
-          yield* Console.warn(
-            `T3 Cloud is linked, but the running server could not expose its tunnel yet: ${String(liveResult.cause)}\nThe server will retry the next time it starts.`,
-          );
-        } else {
-          yield* Console.log(
-            "T3 Cloud is linked. The next time T3 starts, it will expose a managed tunnel.",
-          );
-        }
+        yield* Console.log(
+          "This T3 environment will be available over T3 Cloud the next time T3 starts.",
+        );
       }),
     ),
   ),

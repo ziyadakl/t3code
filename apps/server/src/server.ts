@@ -1,14 +1,7 @@
-import { AuthRelayWriteScope, EnvironmentHttpApi } from "@t3tools/contracts";
+import { EnvironmentHttpApi } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import {
-  FetchHttpClient,
-  HttpClient,
-  HttpClientRequest,
-  HttpClientResponse,
-  HttpRouter,
-  HttpServer,
-} from "effect/unstable/http";
+import { FetchHttpClient, HttpRouter, HttpServer } from "effect/unstable/http";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 import { ServerConfig } from "./config.ts";
@@ -76,7 +69,7 @@ import { ServerEnvironmentLive } from "./environment/Layers/ServerEnvironment.ts
 import { authHttpApiLayer, environmentAuthenticatedAuthLayer } from "./auth/http.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
-import { cloudHttpApiLayer } from "./cloud/http.ts";
+import { cloudHttpApiLayer, reconcileDesiredCloudLink } from "./cloud/http.ts";
 import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
 import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as CloudCliState from "./cloud/CliState.ts";
@@ -432,22 +425,9 @@ export const makeServerLayer = Layer.unwrap(
         const server = yield* HttpServer.HttpServer;
         const address = server.address;
         if (typeof address === "string" || !("port" in address)) return;
-        const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
-        const issued = yield* environmentAuth.issueSession({
-          scopes: [AuthRelayWriteScope],
-          subject: "cloud-cli-startup-reconcile",
-          label: "T3 Cloud startup reconcile",
-        });
-        const httpClient = yield* HttpClient.HttpClient;
         yield* Effect.forkScoped(
           Effect.sleep("250 millis").pipe(
-            Effect.andThen(
-              HttpClientRequest.post(`http://127.0.0.1:${address.port}/api/cloud/reconcile`).pipe(
-                HttpClientRequest.bearerToken(issued.token),
-                httpClient.execute,
-                Effect.flatMap(HttpClientResponse.filterStatusOk),
-              ),
-            ),
+            Effect.andThen(reconcileDesiredCloudLink(`http://127.0.0.1:${address.port}`)),
             Effect.retry({ times: 4 }),
             Effect.tap(() => Effect.logInfo("T3 Cloud desired link reconciled on startup")),
             Effect.catch((cause) =>
@@ -455,7 +435,6 @@ export const makeServerLayer = Layer.unwrap(
                 cause,
               }),
             ),
-            Effect.ensuring(environmentAuth.revokeSession(issued.sessionId).pipe(Effect.ignore)),
           ),
         );
       }),
