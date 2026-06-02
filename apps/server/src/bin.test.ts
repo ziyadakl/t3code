@@ -175,6 +175,29 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
     }),
   );
 
+  it.effect("reports fresh headless cloud state without requiring local configuration", () =>
+    Effect.gen(function* () {
+      const baseDir = mkdtempSync(join(tmpdir(), "t3-cli-cloud-status-test-"));
+      const { output } = yield* captureStdout(
+        runCli(["cloud", "status", "--base-dir", baseDir, "--json"]),
+      );
+      // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON output is decoded as a presentation DTO.
+      const status = JSON.parse(output) as {
+        readonly desired: boolean;
+        readonly authenticated: boolean;
+        readonly linked: boolean;
+        readonly cloudUserId: string | null;
+        readonly relayUrl: string | null;
+      };
+
+      assert.equal(status.desired, false);
+      assert.equal(status.authenticated, false);
+      assert.equal(status.linked, false);
+      assert.equal(status.cloudUserId, null);
+      assert.equal(status.relayUrl, null);
+    }),
+  );
+
   it.effect("executes auth pairing subcommands and redacts secrets from list output", () =>
     Effect.gen(function* () {
       const baseDir = mkdtempSync(join(tmpdir(), "t3-cli-auth-pairing-test-"));

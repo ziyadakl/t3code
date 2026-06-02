@@ -132,6 +132,7 @@ import {
   CloudManagedEndpointRuntime,
   type CloudManagedEndpointRuntimeShape,
 } from "./cloud/ManagedEndpointRuntime.ts";
+import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
@@ -361,6 +362,7 @@ const buildAppUnderTest = (options?: {
     repositoryIdentityResolver?: Partial<RepositoryIdentityResolverShape>;
     cloudManagedEndpointRuntime?: Partial<CloudManagedEndpointRuntimeShape>;
     relayClient?: Partial<RelayClient.RelayClientShape>;
+    cloudCliTokenManager?: Partial<CloudCliTokenManager.CloudCliTokenManagerShape>;
   };
 }) =>
   Effect.gen(function* () {
@@ -777,6 +779,15 @@ const buildAppUnderTest = (options?: {
             ...options?.layers?.relayClient,
           }),
         ),
+      ),
+      Layer.provide(
+        Layer.mock(CloudCliTokenManager.CloudCliTokenManager)({
+          get: Effect.die(new Error("Unexpected T3 Cloud CLI authorization request.")),
+          getExisting: Effect.succeed(Option.none()),
+          hasCredential: Effect.succeed(false),
+          clear: Effect.void,
+          ...options?.layers?.cloudCliTokenManager,
+        }),
       ),
       Layer.provideMerge(makeAuthTestLayer()),
       Layer.provideMerge(ServerSecretStore.layer),
@@ -2266,6 +2277,29 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(linkedBody.cloudUserId, "user_123");
       assert.equal(linkedBody.relayUrl, "https://transport.example.test");
       assert.equal(linkedBody.relayIssuer, "https://relay.example.test");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects cloud reconciliation before the headless CLI is authorized", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const ownerCookie = yield* getAuthenticatedSessionCookieHeader();
+      const reconcileUrl = yield* getHttpServerUrl("/api/cloud/reconcile");
+      const response = yield* fetchEffect(reconcileUrl, {
+        method: "POST",
+        headers: {
+          cookie: ownerCookie,
+        },
+      });
+      const body = yield* responseJsonEffect<{
+        readonly _tag?: string;
+        readonly message?: string;
+      }>(response);
+
+      assert.equal(response.status, 401);
+      assert.equal(body._tag, "EnvironmentHttpUnauthorizedError");
+      assert.equal(body.message, "Run `t3 cloud link` to authorize this environment.");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

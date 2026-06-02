@@ -47,6 +47,44 @@ The `prod` Alchemy stage owns the retained PlanetScale database. Non-production 
 that database and provision isolated PlanetScale branches, so deploy `prod` before creating a
 preview or developer stage.
 
+## Headless CLI OAuth Application
+
+The `t3 cloud` commands authorize a headless environment with a separate Clerk OAuth application.
+This uses an OAuth public client with PKCE, so the CLI stores no client secret.
+
+In **Clerk Dashboard > OAuth applications**:
+
+1. Create an OAuth application for the T3 CLI.
+2. Enable the **Public** option so authorization-code exchange uses PKCE.
+3. Add `http://127.0.0.1:34338/callback` as an allowed redirect URI.
+4. Enable the `openid`, `profile`, and `email` scopes.
+5. Set the relay deployment's `CLERK_CLI_OAUTH_CLIENT_ID` to the generated public client ID.
+
+The CLI supports these headless operations:
+
+```sh
+t3 cloud link
+t3 cloud status
+t3 cloud unlink
+t3 serve
+```
+
+`t3 cloud link` installs the pinned managed `cloudflared` binary when needed, opens the Clerk
+authorization flow, and records durable intent to expose the environment. It works without a
+running T3 server. If no server is running, the next `t3 serve` or `t3 start` reconciles the relay
+link and launches the managed tunnel. `t3 cloud unlink` records disabled intent immediately,
+stops a reachable running connector, and attempts to revoke the relay-side environment record.
+
+The current OAuth callback listener binds to loopback port `34338`. When running the CLI over SSH,
+forward that port before running `t3 cloud link`:
+
+```sh
+ssh -L 34338:127.0.0.1:34338 <host>
+```
+
+A relay-hosted callback broker can remove this port-forward requirement later without changing the
+stored PKCE token model.
+
 ## JWT Template
 
 In **Clerk Dashboard > JWT templates**, create a template with:

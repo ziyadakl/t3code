@@ -1,7 +1,14 @@
-import { EnvironmentHttpApi } from "@t3tools/contracts";
+import { AuthRelayWriteScope, EnvironmentHttpApi } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { FetchHttpClient, HttpRouter, HttpServer } from "effect/unstable/http";
+import {
+  FetchHttpClient,
+  HttpClient,
+  HttpClientRequest,
+  HttpClientResponse,
+  HttpRouter,
+  HttpServer,
+} from "effect/unstable/http";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 import { ServerConfig } from "./config.ts";
@@ -70,6 +77,8 @@ import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { cloudHttpApiLayer } from "./cloud/http.ts";
 import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
+import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
+import * as CloudCliState from "./cloud/CliState.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
@@ -292,7 +301,12 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(ServerEnvironmentLive),
   Layer.provideMerge(AuthLayerLive),
   Layer.provideMerge(ServerSecretStore.layer),
-  Layer.provideMerge(CloudManagedEndpointRuntimeLive),
+  Layer.provideMerge(
+    Layer.mergeAll(
+      CloudCliTokenManager.layer.pipe(Layer.provide(ServerSecretStore.layer)),
+      CloudManagedEndpointRuntimeLive,
+    ),
+  ),
 );
 
 const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
@@ -410,6 +424,40 @@ export const makeServerLayer = Layer.unwrap(
           ),
         )
       : Layer.empty;
+    const cloudDesiredLinkReconcileLayer = Layer.effectDiscard(
+      Effect.gen(function* () {
+        if (!(yield* CloudCliState.readCliDesiredCloudLink)) return;
+        const server = yield* HttpServer.HttpServer;
+        const address = server.address;
+        if (typeof address === "string" || !("port" in address)) return;
+        const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
+        const issued = yield* environmentAuth.issueSession({
+          scopes: [AuthRelayWriteScope],
+          subject: "cloud-cli-startup-reconcile",
+          label: "T3 Cloud startup reconcile",
+        });
+        const httpClient = yield* HttpClient.HttpClient;
+        yield* Effect.forkScoped(
+          Effect.sleep("250 millis").pipe(
+            Effect.andThen(
+              HttpClientRequest.post(`http://127.0.0.1:${address.port}/api/cloud/reconcile`).pipe(
+                HttpClientRequest.bearerToken(issued.token),
+                httpClient.execute,
+                Effect.flatMap(HttpClientResponse.filterStatusOk),
+              ),
+            ),
+            Effect.retry({ times: 4 }),
+            Effect.tap(() => Effect.logInfo("T3 Cloud desired link reconciled on startup")),
+            Effect.catch((cause) =>
+              Effect.logWarning("Failed to reconcile T3 Cloud desired link on startup", {
+                cause,
+              }),
+            ),
+            Effect.ensuring(environmentAuth.revokeSession(issued.sessionId).pipe(Effect.ignore)),
+          ),
+        );
+      }),
+    );
 
     const serverApplicationLayer = Layer.mergeAll(
       HttpRouter.serve(makeRoutesLayer, {
@@ -418,6 +466,7 @@ export const makeServerLayer = Layer.unwrap(
       httpListeningLayer,
       runtimeStateLayer,
       tailscaleServeLayer,
+      cloudDesiredLinkReconcileLayer,
     );
 
     return serverApplicationLayer.pipe(
