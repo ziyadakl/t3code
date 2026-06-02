@@ -105,7 +105,7 @@ const requireRelayUrl = relayUrlConfig.pipe(
   Effect.mapError(
     () =>
       new EnvironmentHttpInternalServerError({
-        message: "T3_RELAY_URL is not configured.",
+        message: "T3CODE_RELAY_URL is not configured.",
       }),
   ),
 );

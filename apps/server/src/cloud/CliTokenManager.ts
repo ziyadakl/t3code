@@ -2,7 +2,6 @@
 import { createServer } from "node:http";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
-import { RelayCliOAuthMetadata } from "@t3tools/contracts/relay";
 import * as Clock from "effect/Clock";
 import * as Console from "effect/Console";
 import * as Context from "effect/Context";
@@ -22,7 +21,7 @@ import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import { relayUrlConfig } from "./publicConfig.ts";
+import { cloudCliOAuthConfig, type CloudCliOAuthConfig } from "./publicConfig.ts";
 
 const CLOUD_CLI_OAUTH_TOKEN_SECRET = "cloud-cli-oauth-token";
 const CLOUD_CLI_OAUTH_CALLBACK_TIMEOUT = Duration.minutes(10);
@@ -105,17 +104,8 @@ const make = Effect.gen(function* () {
     return Option.some(yield* decodePersistedToken(bytesToString(encoded)));
   });
 
-  const readMetadata = relayUrlConfig.pipe(
-    Effect.flatMap((relayUrl) =>
-      HttpClientRequest.get(`${relayUrl}/.well-known/t3-cloud-cli`).pipe(
-        httpClient.execute,
-        Effect.flatMap(HttpClientResponse.schemaBodyJson(RelayCliOAuthMetadata)),
-      ),
-    ),
-  );
-
   const exchangeToken = Effect.fn("cloud.cli_token.exchange")(function* (
-    metadata: RelayCliOAuthMetadata,
+    metadata: CloudCliOAuthConfig,
     params: Record<string, string>,
   ) {
     const response = yield* HttpClientRequest.post(metadata.tokenEndpoint).pipe(
@@ -132,7 +122,7 @@ const make = Effect.gen(function* () {
   });
 
   const refresh = Effect.fn("cloud.cli_token.refresh")(function* (token: PersistedToken) {
-    const metadata = yield* readMetadata;
+    const metadata = yield* cloudCliOAuthConfig;
     return yield* exchangeToken(metadata, {
       grant_type: "refresh_token",
       refresh_token: token.refreshToken,
@@ -141,7 +131,7 @@ const make = Effect.gen(function* () {
   });
 
   const login = Effect.fn("cloud.cli_token.login")(function* () {
-    const metadata = yield* readMetadata;
+    const metadata = yield* cloudCliOAuthConfig;
     const verifier = Encoding.encodeBase64Url(yield* crypto.randomBytes(32));
     const challenge = Encoding.encodeBase64Url(
       yield* crypto.digest("SHA-256", new TextEncoder().encode(verifier)),

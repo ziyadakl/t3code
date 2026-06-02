@@ -7,6 +7,7 @@ import * as NodeUtil from "node:util";
 export interface T3CodePublicConfig {
   readonly clerkPublishableKey: string | undefined;
   readonly clerkJwtTemplate: string | undefined;
+  readonly clerkCliOAuthClientId: string | undefined;
   readonly relayUrl: string | undefined;
 }
 
@@ -45,6 +46,11 @@ export function loadRepoEnv({
           EXPO_PUBLIC_CLERK_JWT_TEMPLATE: config.clerkJwtTemplate,
         }
       : {}),
+    ...(config.clerkCliOAuthClientId
+      ? {
+          T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: config.clerkCliOAuthClientId,
+        }
+      : {}),
     ...(config.relayUrl
       ? {
           T3CODE_RELAY_URL: config.relayUrl,
@@ -68,6 +74,7 @@ export function resolvePublicConfig(...sources: readonly Environment[]): T3CodeP
       "VITE_CLERK_JWT_TEMPLATE",
       "EXPO_PUBLIC_CLERK_JWT_TEMPLATE",
     ),
+    clerkCliOAuthClientId: firstNonEmpty(sources, "T3CODE_CLERK_CLI_OAUTH_CLIENT_ID"),
     relayUrl: firstNonEmpty(sources, "T3CODE_RELAY_URL", "VITE_T3CODE_RELAY_URL"),
   };
 }

@@ -12,6 +12,7 @@ or `.env.local` file:
 ```dotenv
 T3CODE_CLERK_PUBLISHABLE_KEY=<publishable key>
 T3CODE_CLERK_JWT_TEMPLATE=<JWT template name>
+T3CODE_CLERK_CLI_OAUTH_CLIENT_ID=<public OAuth application client ID>
 T3CODE_RELAY_URL=https://relay.example.com
 ```
 
@@ -25,16 +26,18 @@ Configuration precedence is:
 2. Repository-root `.env.local`.
 3. Repository-root `.env`.
 
-The Clerk publishable key, JWT template name, and relay URL are public identifiers, not secrets.
-Web, desktop, mobile, and bundled server builds statically inject their public values during the
-build step. A built artifact does not need an environment file at runtime. CI release builds should
-set `T3CODE_CLERK_PUBLISHABLE_KEY`, `T3CODE_CLERK_JWT_TEMPLATE`, and `T3CODE_RELAY_URL` before
-building. EAS preview and production builds should define the same client-facing values in their
-EAS environment.
+The Clerk publishable key, JWT template name, CLI OAuth client ID, and relay URL are public
+identifiers, not secrets.
+Web, desktop, mobile, and bundled server builds statically inject the values they consume during
+their build step. A built artifact does not need an environment file at runtime. CI release builds
+should set `T3CODE_CLERK_PUBLISHABLE_KEY`, `T3CODE_CLERK_JWT_TEMPLATE`,
+`T3CODE_CLERK_CLI_OAUTH_CLIENT_ID`, and `T3CODE_RELAY_URL` before building. EAS preview and
+production builds only need the Clerk publishable key, JWT template name, and relay URL in their EAS
+environment.
 
 When any client-facing public value is absent, cloud UI is omitted. When the CLI public values are
-absent, the `t3 cloud` CLI command group is omitted. The
-bundled server still accepts a runtime `T3CODE_RELAY_URL` override for self-hosted or operator-managed
+absent, the `t3 cloud` CLI command group is omitted. The bundled server still accepts runtime
+overrides for self-hosted or operator-managed
 deployments.
 
 For a hosted relay deployment, copy `infra/relay/.env.example` to `infra/relay/.env`. The relay
@@ -61,7 +64,12 @@ In **Clerk Dashboard > OAuth applications**:
 2. Enable the **Public** option so authorization-code exchange uses PKCE.
 3. Add `http://127.0.0.1:34338/callback` as an allowed redirect URI.
 4. Enable the `openid`, `profile`, and `email` scopes.
-5. Set the relay deployment's `CLERK_CLI_OAUTH_CLIENT_ID` to the generated public client ID.
+5. Set `T3CODE_CLERK_CLI_OAUTH_CLIENT_ID` in the repository-root `.env` file and release build
+   environment to the generated public client ID.
+
+The CLI derives Clerk's frontend API URL from the publishable key and calls Clerk's
+`/oauth/authorize` and `/oauth/token` endpoints directly. The relay is not involved in the OAuth
+handshake; it only validates the issued Clerk bearer token when the CLI manages an environment link.
 
 The CLI supports these headless operations:
 
