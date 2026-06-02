@@ -66,6 +66,7 @@ The CLI supports these headless operations:
 t3 cloud link
 t3 cloud status
 t3 cloud unlink
+t3 cloud logout
 t3 serve
 ```
 
@@ -73,7 +74,9 @@ t3 serve
 authorization flow, and records durable intent to expose the environment. It works without a
 running T3 server. If no server is running, the next `t3 serve` or `t3 start` reconciles the relay
 link and launches the managed tunnel. `t3 cloud unlink` records disabled intent immediately,
-stops a reachable running connector, and attempts to revoke the relay-side environment record.
+stops a reachable running connector, and attempts to revoke the relay-side environment record. It
+retains the stored CLI authorization so `t3 cloud link` can re-enable exposure without another
+browser flow. `t3 cloud logout` performs the same cleanup and removes the stored CLI authorization.
 
 The current OAuth callback listener binds to loopback port `34338`. When running the CLI over SSH,
 forward that port before running `t3 cloud link`:

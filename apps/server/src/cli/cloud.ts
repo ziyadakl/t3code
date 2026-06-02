@@ -40,6 +40,71 @@ function bytesToString(value: Uint8Array): string {
   return new TextDecoder().decode(value);
 }
 
+interface CloudCliStatus {
+  readonly desired: boolean;
+  readonly authenticated: boolean;
+  readonly linked: boolean;
+  readonly cloudUserId: string | null;
+  readonly relayUrl: string | null;
+  readonly cloudflared: Cloudflared.CloudflaredExecutableStatus;
+}
+
+function formatCloudflaredStatus(
+  executable: Cloudflared.CloudflaredExecutableStatus,
+): ReadonlyArray<string> {
+  switch (executable.status) {
+    case "available": {
+      const source =
+        executable.source === "path"
+          ? "PATH"
+          : executable.source === "managed"
+            ? "managed install"
+            : "configured override";
+      return [
+        `  cloudflared: available via ${source}`,
+        `    Path: ${executable.executablePath}`,
+        `    Version: ${executable.version}`,
+      ];
+    }
+    case "missing":
+      return [`  cloudflared: not installed (managed version ${executable.version})`];
+    case "unsupported":
+      return [
+        `  cloudflared: unsupported on ${executable.platform}-${executable.arch}`,
+        `    Managed version: ${executable.version}`,
+      ];
+  }
+}
+
+function formatCloudStatus(status: CloudCliStatus, options?: { readonly json?: boolean }): string {
+  if (options?.json) {
+    return JSON.stringify(status, null, 2);
+  }
+
+  const provisioned = status.linked
+    ? "provisioned"
+    : status.desired && status.authenticated
+      ? "pending server startup"
+      : "not provisioned";
+  const nextStep = !status.authenticated
+    ? "Run `t3 cloud link` to authorize and enable cloud exposure."
+    : !status.desired
+      ? "Run `t3 cloud link` to enable cloud exposure."
+      : !status.linked
+        ? "Start T3 to provision the environment link and launch its managed tunnel."
+        : undefined;
+
+  return [
+    "T3 Cloud",
+    `  Exposure: ${status.desired ? "enabled" : "disabled"}`,
+    `  Authorization: ${status.authenticated ? "stored credential" : "missing"}`,
+    `  Environment link: ${provisioned}`,
+    `  Relay: ${status.relayUrl ?? "not provisioned"}`,
+    ...formatCloudflaredStatus(status.cloudflared),
+    ...(nextStep ? ["", `Next: ${nextStep}`] : []),
+  ].join("\n");
+}
+
 const CLOUD_CLI_LIVE_SERVER_TIMEOUT = Duration.seconds(5);
 
 const withCloudCliSessionToken = <A, E, R>(
@@ -122,6 +187,42 @@ const unlinkRelayEnvironment = Effect.fn("cloud.cli.unlink_relay_environment")(f
     : ({ status: "not-linked" } satisfies RelayUnlinkResult);
 });
 
+const disconnectCloud = Effect.fn("cloud.cli.disconnect")(function* (options: {
+  readonly clearAuthorization: boolean;
+}) {
+  yield* CliState.setCliDesiredCloudLink(false);
+  const liveResult = yield* runLiveCloudAction("unlink");
+  const relayResult = yield* Effect.exit(unlinkRelayEnvironment());
+  yield* CliState.clearPersistedCloudLink;
+
+  if (options.clearAuthorization) {
+    const tokens = yield* CliTokenManager.CloudCliTokenManager;
+    yield* tokens.clear;
+  }
+
+  if (liveResult.status === "failed") {
+    yield* Console.warn(
+      `T3 Cloud exposure is disabled, but the running server could not stop its tunnel: ${String(liveResult.cause)}\nRestart that server to stop the connector.`,
+    );
+  } else {
+    yield* Console.log("T3 Cloud exposure is disabled locally.");
+  }
+
+  if (Exit.isFailure(relayResult)) {
+    yield* Console.warn(
+      options.clearAuthorization
+        ? `Could not revoke the relay-side environment record before signing out: ${String(relayResult.cause)}\nThe stored CLI authorization was still removed locally.`
+        : `Could not revoke the relay-side environment record yet: ${String(relayResult.cause)}\nRun \`t3 cloud unlink\` again when the relay is reachable.`,
+    );
+  } else if (relayResult.value.status === "revoked") {
+    yield* Console.log("Revoked the relay-side environment record.");
+  }
+
+  if (options.clearAuthorization) {
+    yield* Console.log("Signed out of T3 Cloud locally.");
+  }
+});
+
 const runCloudCommand = <A, E>(
   flags: { readonly baseDir: Option.Option<string> },
   run: Effect.Effect<
@@ -136,10 +237,14 @@ const runCloudCommand = <A, E>(
     | ServerConfig
     | ServerEnvironment
   >,
+  options?: {
+    readonly quietLogs?: boolean;
+  },
 ) =>
   Effect.gen(function* () {
     const logLevel = yield* GlobalFlag.LogLevel;
     const config = yield* resolveCliAuthConfig(flags, logLevel);
+    const minimumLogLevel = options?.quietLogs ? "Error" : config.logLevel;
     const runtimeLayer = Layer.mergeAll(
       ServerSecretStore.layer,
       CliTokenManager.layer.pipe(Layer.provide(ServerSecretStore.layer)),
@@ -149,7 +254,7 @@ const runCloudCommand = <A, E>(
     ).pipe(
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provideMerge(Layer.succeed(ServerConfig, config)),
-      Layer.provide(Layer.succeed(References.MinimumLogLevel, config.logLevel)),
+      Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
     );
     return yield* run.pipe(Effect.provide(runtimeLayer));
   });
@@ -213,7 +318,7 @@ const cloudStatusCommand = Command.make("status", {
           ],
           { concurrency: "unbounded" },
         );
-        const status = {
+        const status: CloudCliStatus = {
           desired,
           authenticated,
           linked: cloudUserId !== null,
@@ -221,23 +326,11 @@ const cloudStatusCommand = Command.make("status", {
           relayUrl: relayUrl ? bytesToString(relayUrl) : null,
           cloudflared: executable,
         };
-        yield* Console.log(
-          flags.json
-            ? // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON output intentionally encodes a presentation DTO.
-              JSON.stringify(status)
-            : [
-                `Desired cloud exposure: ${status.desired ? "enabled" : "disabled"}`,
-                `T3 Cloud CLI authorization: ${status.authenticated ? "stored" : "missing"}`,
-                `Provisioned cloud link: ${status.linked ? "yes" : "no"}`,
-                `Relay URL: ${status.relayUrl ?? "not provisioned"}`,
-                `cloudflared: ${
-                  executable.status === "available"
-                    ? `${executable.source} (${executable.executablePath})`
-                    : executable.status
-                }`,
-              ].join("\n"),
-        );
+        yield* Console.log(formatCloudStatus(status, { json: flags.json }));
       }),
+      {
+        quietLogs: flags.json,
+      },
     ),
   ),
 );
@@ -245,37 +338,27 @@ const cloudStatusCommand = Command.make("status", {
 const cloudUnlinkCommand = Command.make("unlink", {
   ...projectLocationFlags,
 }).pipe(
-  Command.withDescription("Disable T3 Cloud exposure and remove persisted local cloud state."),
+  Command.withDescription("Disable T3 Cloud exposure while retaining the stored authorization."),
   Command.withHandler((flags) =>
-    runCloudCommand(
-      flags,
-      Effect.gen(function* () {
-        yield* CliState.setCliDesiredCloudLink(false);
-        const liveResult = yield* runLiveCloudAction("unlink");
-        const relayResult = yield* Effect.exit(unlinkRelayEnvironment());
-        yield* CliState.clearPersistedCloudLink;
+    runCloudCommand(flags, disconnectCloud({ clearAuthorization: false })),
+  ),
+);
 
-        if (liveResult.status === "failed") {
-          yield* Console.warn(
-            `T3 Cloud exposure is disabled, but the running server could not stop its tunnel: ${String(liveResult.cause)}\nRestart that server to stop the connector.`,
-          );
-        } else {
-          yield* Console.log("T3 Cloud exposure is disabled locally.");
-        }
-
-        if (Exit.isFailure(relayResult)) {
-          yield* Console.warn(
-            `Could not revoke the relay-side environment record yet: ${String(relayResult.cause)}\nRun \`t3 cloud unlink\` again when the relay is reachable.`,
-          );
-        } else if (relayResult.value.status === "revoked") {
-          yield* Console.log("Revoked the relay-side environment record.");
-        }
-      }),
-    ),
+const cloudLogoutCommand = Command.make("logout", {
+  ...projectLocationFlags,
+}).pipe(
+  Command.withDescription("Disable T3 Cloud exposure and clear the stored CLI authorization."),
+  Command.withHandler((flags) =>
+    runCloudCommand(flags, disconnectCloud({ clearAuthorization: true })),
   ),
 );
 
 export const cloudCommand = Command.make("cloud").pipe(
   Command.withDescription("Manage headless T3 Cloud exposure."),
-  Command.withSubcommands([cloudLinkCommand, cloudStatusCommand, cloudUnlinkCommand]),
+  Command.withSubcommands([
+    cloudLinkCommand,
+    cloudStatusCommand,
+    cloudUnlinkCommand,
+    cloudLogoutCommand,
+  ]),
 );

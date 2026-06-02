@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - CLI integration exercises Node HTTP and filesystem boundaries.
 import * as NodeHttp from "node:http";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -198,12 +198,39 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
     }),
   );
 
+  it.effect("reports actionable human-readable headless cloud state", () =>
+    Effect.gen(function* () {
+      const baseDir = mkdtempSync(join(tmpdir(), "t3-cli-cloud-status-human-test-"));
+      const { output } = yield* captureStdout(runCli(["cloud", "status", "--base-dir", baseDir]));
+
+      assert.include(output, "T3 Cloud\n  Exposure: disabled");
+      assert.include(output, "  Authorization: missing");
+      assert.include(output, "  Environment link: not provisioned");
+      assert.include(output, "Next: Run `t3 cloud link` to authorize and enable cloud exposure.");
+    }),
+  );
+
   it.effect("disables headless cloud exposure without a running server", () =>
     Effect.gen(function* () {
       const baseDir = mkdtempSync(join(tmpdir(), "t3-cli-cloud-unlink-test-"));
       const { output } = yield* captureStdout(runCli(["cloud", "unlink", "--base-dir", baseDir]));
 
       assert.equal(output, "T3 Cloud exposure is disabled locally.");
+    }),
+  );
+
+  it.effect("logs out of headless cloud and removes the stored CLI authorization", () =>
+    Effect.gen(function* () {
+      const baseDir = mkdtempSync(join(tmpdir(), "t3-cli-cloud-logout-test-"));
+      const { secretsDir } = yield* deriveServerPaths(baseDir, undefined);
+      const tokenPath = join(secretsDir, "cloud-cli-oauth-token.bin");
+      mkdirSync(secretsDir, { recursive: true });
+      writeFileSync(tokenPath, "invalid persisted token");
+
+      const { output } = yield* captureStdout(runCli(["cloud", "logout", "--base-dir", baseDir]));
+
+      assert.equal(output, "Signed out of T3 Cloud locally.");
+      assert.isFalse(existsSync(tokenPath));
     }),
   );
 
