@@ -60,7 +60,13 @@ Before local development, prepare the environment and install dependencies:
 # Optional: only needed if you use mise for dev tool management.
 mise install
 bun install .
+bun run dev
 ```
+
+T3 Cloud public client configuration has checked-in development defaults, so a fresh clone works
+without creating app-local `.env` files. To point web, desktop, and mobile at another Clerk/relay
+deployment, copy [`.env.example`](./.env.example) to `.env` at the repository root and set the
+canonical overrides there.
 
 Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening an issue or PR.
 

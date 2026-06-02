@@ -16,6 +16,10 @@ This app has three variants:
 
 Run commands from `apps/mobile`.
 
+Public T3 Cloud development defaults are shared with web and desktop. Optional overrides belong in
+the repository-root `.env` or `.env.local`, not an `apps/mobile/.env` file. See
+[`../../.env.example`](../../.env.example).
+
 ## Development
 
 Start Metro for the dev client:
@@ -60,6 +64,9 @@ node ../../scripts/mobile-native-static-check.ts
 The native lint task runs SwiftLint for Swift plus ktlint and detekt for Kotlin. Missing native tools are reported as warnings and skipped locally. CI installs the default toolset from `apps/mobile/Brewfile` before running the native checks.
 
 ## EAS Builds
+
+For preview or production EAS environments, set `T3CODE_CLERK_PUBLISHABLE_KEY` and `T3_RELAY_URL`
+as EAS environment variables. Expo config maps the canonical values into the mobile build.
 
 Create a cloud dev-client build:
 
