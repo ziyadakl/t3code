@@ -1680,15 +1680,20 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
     : !canManageRelay
       ? "Your session does not have permission to manage T3 Cloud access."
       : null;
+  const linked = primaryCloudLinkState.data?.linked ?? false;
 
   return (
     <SettingsRow
       title="T3 Cloud"
-      description="Make this environment available through your T3 Cloud account."
+      description={
+        linked
+          ? "This environment is available to your other devices through T3 Cloud."
+          : "Make this environment available to your other devices through T3 Cloud."
+      }
       status={operationError ?? primaryCloudLinkState.error}
       control={
         <CloudLinkSwitch
-          checked={primaryCloudLinkState.data?.linked ?? false}
+          checked={linked}
           disabled={!canManageRelay || !isSignedIn || primaryCloudLinkState.isPending || isUpdating}
           disabledReason={disabledReason}
           onCheckedChange={(enabled) => void updateLink(enabled)}
@@ -1704,7 +1709,7 @@ function CloudLinkRow({ canManageRelay }: { readonly canManageRelay: boolean }) 
   ) : (
     <SettingsRow
       title="T3 Cloud"
-      description="Make this environment available through your T3 Cloud account."
+      description="Make this environment available to your other devices through T3 Cloud."
       control={
         <CloudLinkSwitch
           checked={false}

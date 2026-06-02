@@ -21,6 +21,7 @@ import {
   SidebarSeparator,
   useSidebar,
 } from "../ui/sidebar";
+import { Badge } from "../ui/badge";
 
 export type SettingsSectionPath =
   | "/settings/general"
@@ -35,12 +36,13 @@ export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
   label: string;
   to: SettingsSectionPath;
   icon: ComponentType<{ className?: string }>;
+  badgeLabel?: string;
 }> = [
   { label: "General", to: "/settings/general", icon: Settings2Icon },
   { label: "Keybindings", to: "/settings/keybindings", icon: KeyboardIcon },
   { label: "Providers", to: "/settings/providers", icon: BotIcon },
   { label: "Source Control", to: "/settings/source-control", icon: GitBranchIcon },
-  { label: "T3 Cloud", to: "/settings/cloud", icon: CloudIcon },
+  { label: "T3 Cloud", to: "/settings/cloud", icon: CloudIcon, badgeLabel: "Private Beta" },
   { label: "Connections", to: "/settings/connections", icon: Link2Icon },
   { label: "Archive", to: "/settings/archived", icon: ArchiveIcon },
 ];
@@ -97,6 +99,11 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                       }
                     />
                     <span className="truncate">{item.label}</span>
+                    {item.badgeLabel ? (
+                      <Badge variant="warning" size="sm" className="ml-auto">
+                        {item.badgeLabel}
+                      </Badge>
+                    ) : null}
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               );
