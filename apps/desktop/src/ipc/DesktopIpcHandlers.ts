@@ -9,7 +9,7 @@ import {
   setCloudAuthToken,
 } from "./methods/cloudAuth.ts";
 import { getClientSettings, setClientSettings } from "./methods/clientSettings.ts";
-import { getCloudflaredStatus, installCloudflared } from "./methods/cloudflared.ts";
+import { getRelayClientStatus, installRelayClient } from "./methods/relayClient.ts";
 import {
   getSavedEnvironmentRegistry,
   getSavedEnvironmentSecret,
@@ -88,8 +88,8 @@ export const installDesktopIpcHandlers = Effect.gen(function* () {
   yield* ipc.handle(setCloudAuthToken);
   yield* ipc.handle(clearCloudAuthToken);
   yield* ipc.handle(fetchCloudAuth);
-  yield* ipc.handle(getCloudflaredStatus);
-  yield* ipc.handle(installCloudflared);
+  yield* ipc.handle(getRelayClientStatus);
+  yield* ipc.handle(installRelayClient);
 
   yield* ipc.handle(getUpdateState);
   yield* ipc.handle(setUpdateChannel);

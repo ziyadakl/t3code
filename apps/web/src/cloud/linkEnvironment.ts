@@ -56,13 +56,13 @@ export class CloudEnvironmentLinkError extends Data.TaggedError("CloudEnvironmen
   readonly cause?: unknown;
 }> {}
 
-const desktopCloudflaredBridgeError = (cause: unknown) =>
+const desktopRelayClientBridgeError = (cause: unknown) =>
   new CloudEnvironmentLinkError({
-    message: "Could not prepare Cloudflare Tunnel.",
+    message: "Could not prepare the relay client.",
     cause,
   });
 
-export function ensureDesktopCloudflaredAvailable(): Effect.Effect<
+export function ensureDesktopRelayClientAvailable(): Effect.Effect<
   void,
   CloudEnvironmentLinkError
 > {
@@ -71,39 +71,39 @@ export function ensureDesktopCloudflaredAvailable(): Effect.Effect<
 
   return Effect.gen(function* () {
     const status = yield* Effect.tryPromise({
-      try: () => bridge.getCloudflaredStatus(),
-      catch: desktopCloudflaredBridgeError,
+      try: () => bridge.getRelayClientStatus(),
+      catch: desktopRelayClientBridgeError,
     });
     if (status.status === "available") return;
     if (status.status === "unsupported") {
       return yield* new CloudEnvironmentLinkError({
-        message: `T3 Code cannot install cloudflared automatically on ${status.platform}-${status.arch}.`,
+        message: `T3 Code cannot install the relay client automatically on ${status.platform}-${status.arch}.`,
       });
     }
 
     const confirmed = yield* Effect.tryPromise({
       try: () =>
         bridge.confirm(
-          "T3 Code needs Cloudflare Tunnel to make this environment available through T3 Cloud. Download and install cloudflared now?",
+          "T3 Code needs the relay client to make this environment available through T3 Cloud. Download and install it now?",
         ),
-      catch: desktopCloudflaredBridgeError,
+      catch: desktopRelayClientBridgeError,
     });
     if (!confirmed) {
       return yield* new CloudEnvironmentLinkError({
-        message: "Cloudflare Tunnel installation was cancelled.",
+        message: "Relay client installation was cancelled.",
       });
     }
 
     const installed = yield* Effect.tryPromise({
-      try: () => bridge.installCloudflared(),
-      catch: desktopCloudflaredBridgeError,
+      try: () => bridge.installRelayClient(),
+      catch: desktopRelayClientBridgeError,
     });
     if (installed.status !== "available") {
       return yield* new CloudEnvironmentLinkError({
         message:
           installed.status === "unsupported"
-            ? `T3 Code cannot install cloudflared automatically on ${installed.platform}-${installed.arch}.`
-            : "cloudflared is still unavailable after installation.",
+            ? `T3 Code cannot install the relay client automatically on ${installed.platform}-${installed.arch}.`
+            : "The relay client is still unavailable after installation.",
       });
     }
   });
@@ -624,7 +624,7 @@ export function linkPrimaryEnvironmentToCloud(input: {
         message: "Local environment is not ready yet.",
       });
     }
-    yield* ensureDesktopCloudflaredAvailable();
+    yield* ensureDesktopRelayClientAvailable();
 
     const challenge = yield* relayClient
       .createEnvironmentLinkChallenge({

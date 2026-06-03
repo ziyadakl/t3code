@@ -8,18 +8,18 @@ import * as PlatformError from "effect/PlatformError";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-import * as Cloudflared from "@t3tools/shared/cloudflared";
+import * as RelayClient from "@t3tools/shared/relayClient";
 
 import { makeCloudManagedEndpointRuntime } from "./ManagedEndpointRuntime.ts";
 
-const cloudflaredAvailableLayer = Layer.succeed(
-  Cloudflared.CloudflaredExecutable,
-  Cloudflared.CloudflaredExecutable.of({
+const relayClientAvailableLayer = Layer.succeed(
+  RelayClient.RelayClient,
+  RelayClient.RelayClient.of({
     resolve: Effect.succeed({
       status: "available",
       executablePath: "cloudflared",
       source: "path",
-      version: Cloudflared.CLOUDFLARED_VERSION,
+      version: RelayClient.CLOUDFLARED_VERSION,
     }),
     install: Effect.die("unused"),
   }),
@@ -28,7 +28,7 @@ const cloudflaredAvailableLayer = Layer.succeed(
 const runtimeDependencies = (spawner: ReturnType<typeof ChildProcessSpawner.make>) =>
   Layer.mergeAll(
     Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
-    cloudflaredAvailableLayer,
+    relayClientAvailableLayer,
   );
 
 function makeHandle(input: {
@@ -317,7 +317,7 @@ describe("CloudManagedEndpointRuntime", () => {
     }),
   );
 
-  it.effect("reports a missing cloudflared executable without spawning", () =>
+  it.effect("reports a missing relay client executable without spawning", () =>
     Effect.gen(function* () {
       const spawn = vi.fn();
       const spawner = ChildProcessSpawner.make(spawn);
@@ -326,11 +326,11 @@ describe("CloudManagedEndpointRuntime", () => {
           Layer.mergeAll(
             Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
             Layer.succeed(
-              Cloudflared.CloudflaredExecutable,
-              Cloudflared.CloudflaredExecutable.of({
+              RelayClient.RelayClient,
+              RelayClient.RelayClient.of({
                 resolve: Effect.succeed({
                   status: "missing",
-                  version: Cloudflared.CLOUDFLARED_VERSION,
+                  version: RelayClient.CLOUDFLARED_VERSION,
                 }),
                 install: Effect.die("unused"),
               }),
@@ -347,7 +347,7 @@ describe("CloudManagedEndpointRuntime", () => {
       expect(status).toEqual({
         status: "failed",
         providerKind: "cloudflare_tunnel",
-        reason: "cloudflared is not installed.",
+        reason: "The relay client is not installed.",
       });
       expect(spawn).not.toHaveBeenCalled();
     }),

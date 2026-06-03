@@ -81,7 +81,7 @@ import {
 } from "./serverRuntimeState.ts";
 import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
 import * as NetService from "@t3tools/shared/Net";
-import * as Cloudflared from "@t3tools/shared/cloudflared";
+import * as RelayClient from "@t3tools/shared/relayClient";
 import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale";
 
 const PtyAdapterLive = Layer.unwrap(
@@ -96,10 +96,10 @@ const PtyAdapterLive = Layer.unwrap(
   }),
 );
 
-const CloudflaredExecutableLive = Layer.unwrap(
+const RelayClientLive = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig;
-    return Cloudflared.layer({ baseDir: config.baseDir });
+    return RelayClient.layerCloudflared({ baseDir: config.baseDir });
   }),
 );
 
@@ -287,7 +287,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(
     CloudManagedEndpointRuntime.layer.pipe(
       Layer.provide(ServerSecretStore.layer),
-      Layer.provide(CloudflaredExecutableLive),
+      Layer.provide(RelayClientLive),
     ),
   ),
 );

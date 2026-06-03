@@ -1,5 +1,5 @@
 import type { RelayManagedEndpointRuntimeConfig } from "@t3tools/contracts/relay";
-import * as Cloudflared from "@t3tools/shared/cloudflared";
+import * as RelayClient from "@t3tools/shared/relayClient";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -91,7 +91,7 @@ const stopConnector = (connector: ActiveConnector | null) =>
 
 export const makeCloudManagedEndpointRuntime = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const cloudflared = yield* Cloudflared.CloudflaredExecutable;
+  const relayClient = yield* RelayClient.RelayClient;
   const activeRef = yield* Ref.make<ActiveConnector | null>(null);
   const desiredConfigRef = yield* Ref.make<RelayManagedEndpointRuntimeConfig | null>(null);
   const reconcileSemaphore = yield* Semaphore.make(1);
@@ -170,15 +170,15 @@ export const makeCloudManagedEndpointRuntime = Effect.gen(function* () {
 
     yield* stopActive;
 
-    const executable = yield* cloudflared.resolve;
+    const executable = yield* relayClient.resolve;
     if (executable.status !== "available") {
       return {
         status: "failed",
         providerKind: "cloudflare_tunnel",
         reason:
           executable.status === "unsupported"
-            ? `Managed cloudflared is unsupported on ${executable.platform}-${executable.arch}.`
-            : "cloudflared is not installed.",
+            ? `Managed relay client is unsupported on ${executable.platform}-${executable.arch}.`
+            : "The relay client is not installed.",
         ...(config.tunnelId ? { tunnelId: config.tunnelId } : {}),
         ...(config.tunnelName ? { tunnelName: config.tunnelName } : {}),
       } satisfies CloudManagedEndpointRuntimeStatus;

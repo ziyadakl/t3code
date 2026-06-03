@@ -135,9 +135,9 @@
       "types": "./src/terminalLabels.ts",
       "import": "./src/terminalLabels.ts"
     },
-    "./cloudflared": {
-      "types": "./src/cloudflared.ts",
-      "import": "./src/cloudflared.ts"
+    "./relayClient": {
+      "types": "./src/relayClient.ts",
+      "import": "./src/relayClient.ts"
     }
   },
   "scripts": {

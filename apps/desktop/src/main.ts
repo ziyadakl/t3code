@@ -9,7 +9,7 @@ import * as Option from "effect/Option";
 import * as Electron from "electron";
 
 import * as NetService from "@t3tools/shared/Net";
-import * as Cloudflared from "@t3tools/shared/cloudflared";
+import * as RelayClient from "@t3tools/shared/relayClient";
 import { resolveRemoteT3CliPackageSpec } from "@t3tools/ssh/command";
 import type { RemoteT3RunnerOptions } from "@t3tools/ssh/tunnel";
 import serverPackageJson from "../../server/package.json" with { type: "json" };
@@ -95,10 +95,10 @@ const desktopSshEnvironmentLayer = Layer.unwrap(
   }),
 );
 
-const desktopCloudflaredLayer = Layer.unwrap(
+const desktopRelayClientLayer = Layer.unwrap(
   Effect.gen(function* () {
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
-    return Cloudflared.layer({
+    return RelayClient.layerCloudflared({
       baseDir: environment.baseDir,
       platform: environment.platform,
       arch: environment.processArch,
@@ -155,7 +155,7 @@ const desktopApplicationLayer = Layer.mergeAll(
   desktopSshLayer,
 ).pipe(
   Layer.provideMerge(DesktopUpdates.layer),
-  Layer.provideMerge(desktopCloudflaredLayer),
+  Layer.provideMerge(desktopRelayClientLayer),
   Layer.provideMerge(desktopBackendLayer),
 );
 

@@ -394,7 +394,7 @@ export const DesktopCloudAuthFetchResultSchema = Schema.Struct({
 });
 export type DesktopCloudAuthFetchResult = typeof DesktopCloudAuthFetchResultSchema.Type;
 
-export const DesktopCloudflaredStatusSchema = Schema.Union([
+export const DesktopRelayClientStatusSchema = Schema.Union([
   Schema.Struct({
     status: Schema.Literal("available"),
     executablePath: Schema.String,
@@ -412,7 +412,7 @@ export const DesktopCloudflaredStatusSchema = Schema.Union([
     version: Schema.String,
   }),
 ]);
-export type DesktopCloudflaredStatus = typeof DesktopCloudflaredStatusSchema.Type;
+export type DesktopRelayClientStatus = typeof DesktopRelayClientStatusSchema.Type;
 
 export interface DesktopBridge {
   getAppBranding: () => DesktopAppBranding | null;
@@ -464,8 +464,8 @@ export interface DesktopBridge {
   setCloudAuthToken: (token: string) => Promise<boolean>;
   clearCloudAuthToken: () => Promise<void>;
   fetchCloudAuth: (input: DesktopCloudAuthFetchInput) => Promise<DesktopCloudAuthFetchResult>;
-  getCloudflaredStatus: () => Promise<DesktopCloudflaredStatus>;
-  installCloudflared: () => Promise<DesktopCloudflaredStatus>;
+  getRelayClientStatus: () => Promise<DesktopRelayClientStatus>;
+  installRelayClient: () => Promise<DesktopRelayClientStatus>;
   onCloudAuthCallback: (listener: (rawUrl: string) => void) => () => void;
   onMenuAction: (listener: (action: string) => void) => () => void;
   getUpdateState: () => Promise<DesktopUpdateState>;
