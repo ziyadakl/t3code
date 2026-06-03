@@ -1,9 +1,12 @@
+import * as Alchemy from "alchemy";
 import * as Axiom from "alchemy/Axiom";
 import * as Output from "alchemy/Output";
 import * as Layer from "effect/Layer";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import { OtlpSerialization, OtlpTracer } from "effect/unstable/observability";
+
+import { relayResourceNameForStage } from "./deploymentConfig.ts";
 
 const relayRecentSpansQuery = (dataset: string) =>
   [
@@ -17,8 +20,9 @@ const relayRecentSpansQuery = (dataset: string) =>
   ].join("\n");
 
 export const RelayObservability = Effect.gen(function* () {
+  const stage = yield* Alchemy.Stage;
   const traces = yield* Axiom.Dataset("RelayTracesDataset", {
-    name: "t3-code-relay-traces",
+    name: relayResourceNameForStage("t3-code-relay-traces", stage),
     kind: "otel:traces:v1",
     description: "T3 Code relay Worker HTTP request spans.",
     retentionDays: 30,
@@ -26,7 +30,7 @@ export const RelayObservability = Effect.gen(function* () {
   });
 
   const ingestToken = yield* Axiom.ApiToken("RelayAxiomIngestToken", {
-    name: "t3-code-relay-otel-ingest",
+    name: relayResourceNameForStage("t3-code-relay-otel-ingest", stage),
     description: "Owned by Alchemy. Scoped OTLP ingest token for relay HTTP spans.",
     datasetCapabilities: Output.map(traces.name, (dataset) => ({
       [dataset]: { ingest: ["create" as const] },
@@ -34,7 +38,7 @@ export const RelayObservability = Effect.gen(function* () {
   });
 
   yield* Axiom.View("RelayRecentSpansView", {
-    name: "t3-code-relay-recent-spans",
+    name: relayResourceNameForStage("t3-code-relay-recent-spans", stage),
     description: "Recent relay HTTP request spans.",
     datasets: [traces.name],
     aplQuery: Output.map(traces.name, relayRecentSpansQuery),

@@ -5,6 +5,7 @@ import {
   managedEndpointHostname,
   managedEndpointTunnelName,
   relayPublicDomainForStage,
+  relayResourceNameForStage,
   relayStageSlug,
 } from "./deploymentConfig.ts";
 
@@ -22,6 +23,15 @@ describe("relayPublicDomainForStage", () => {
   it("isolates personal stages below the imported zone", () => {
     expect(relayPublicDomainForStage("dev_julius", "example.com")).toBe(
       "relay-dev-julius.example.com",
+    );
+  });
+});
+
+describe("relayResourceNameForStage", () => {
+  it("preserves production names and isolates personal stages", () => {
+    expect(relayResourceNameForStage("t3-code-relay-traces", "prod")).toBe("t3-code-relay-traces");
+    expect(relayResourceNameForStage("t3-code-relay-traces", "dev_julius")).toBe(
+      "t3-code-relay-traces-dev-julius",
     );
   });
 });

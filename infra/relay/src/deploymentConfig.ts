@@ -33,6 +33,10 @@ export function relayStageSlug(stage: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+export function relayResourceNameForStage(name: string, stage: string): string {
+  return stage === "prod" ? name : `${name}-${relayStageSlug(stage)}`;
+}
+
 export function relayPublicDomainForStage(stage: string, zoneName: string): string {
   const stageSlug = relayStageSlug(stage);
   const relayLabel = stage === "prod" ? "relay" : `relay-${stageSlug}`;
