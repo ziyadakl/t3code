@@ -327,15 +327,15 @@ flowchart LR
   Clerk["Clerk<br/>user identity and OAuth"]
 
   subgraph Relay["T3 Code Relay on Cloudflare"]
-    Worker["Relay Worker<br/>HTTP API + Scalar docs"]
+    Worker["Relay Worker<br/>HTTP API"]
     Queue["APNs delivery queue<br/>with dead-letter queue"]
     Hyperdrive["Hyperdrive"]
-    Traces["Axiom OTLP traces"]
   end
 
   DB["PlanetScale Postgres<br/>prod database + stage branches"]
   CF["Cloudflare tunnel + DNS APIs"]
   APNs["Apple Push Notification service"]
+  Traces["Axiom OTLP traces"]
 
   subgraph Local["Linked T3 environment"]
     Env["Environment server<br/>local auth authority"]
@@ -355,7 +355,7 @@ flowchart LR
   Worker --> Traces
   Worker --> CF
   Worker --> Queue --> APNs
-  Worker -->|"signed health + mint requests"| Endpoint
+  Worker --> Endpoint
   Endpoint --> RelayClient -->|"http://127.0.0.1:port"| Env
   Env --> Secrets
   Web -->|"environment token + DPoP<br/>HTTPS / WSS"| Endpoint
@@ -770,8 +770,8 @@ sequenceDiagram
       <section class="panel" aria-label="Relay HTTP API">
         <h2>Relay HTTP API</h2>
         <p>
-          The relay publishes an OpenAPI document at <code>/openapi.json</code>, Scalar docs at
-          <code>/docs</code>, and redirects <code>/</code> to the docs.
+          The relay publishes an OpenAPI document at <code>/openapi.json</code>, interactive API
+          docs at <code>/docs</code>, and redirects <code>/</code> to the docs.
         </p>
         <table>
           <thead>
