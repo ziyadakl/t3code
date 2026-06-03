@@ -357,10 +357,10 @@ flowchart LR
     Worker["Relay Worker<br/>HTTP API"]
     Queue["APNs delivery queue<br/>with dead-letter queue"]
     Hyperdrive["Hyperdrive"]
+    CF["Cloudflare tunnel + DNS APIs"]
   end
 
   DB["PlanetScale Postgres<br/>prod database + stage branches"]
-  CF["Cloudflare tunnel + DNS APIs"]
   APNs["Apple Push Notification service"]
   Traces["Axiom OTLP traces"]
 
