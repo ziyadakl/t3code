@@ -65,7 +65,7 @@ The native lint task runs SwiftLint for Swift plus ktlint and detekt for Kotlin.
 
 ## EAS Builds
 
-For preview or production EAS environments, set `T3CODE_CLERK_PUBLISHABLE_KEY` and `T3_RELAY_URL`
+For preview or production EAS environments, set `T3CODE_CLERK_PUBLISHABLE_KEY` and `T3CODE_RELAY_URL`
 as EAS environment variables. Expo config maps the canonical values into the mobile build.
 
 Create a cloud dev-client build:
