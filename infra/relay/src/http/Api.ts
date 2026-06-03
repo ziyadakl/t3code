@@ -45,6 +45,8 @@ import {
   type RelayEnvironmentConnectRequest,
   type RelayDpopAccessTokenScope,
   RelayInternalError,
+  RelayQuotaExceededError,
+  RelayRateLimitedError,
 } from "@t3tools/contracts/relay";
 import { normalizeRelayIssuer } from "@t3tools/shared/relayJwt";
 
@@ -66,6 +68,8 @@ import * as EnvironmentPublishSignatures from "../environments/EnvironmentPublis
 import * as MobileRegistrations from "../agentActivity/MobileRegistrations.ts";
 import { withSpanAttributes } from "../observability.ts";
 import { RelayDb } from "../db.ts";
+import * as Entitlements from "../entitlements/Entitlements.ts";
+import * as RateLimits from "../rateLimits/RateLimits.ts";
 
 const relayCorsAllowedMethods = ["GET", "POST", "DELETE", "OPTIONS"] as const;
 const relayCorsAllowedHeaders = [
@@ -293,6 +297,7 @@ export const relayDpopClientAuthLayer = Layer.effect(
             token,
             proofKeyThumbprint: verified.cnf.jkt,
             dpopScopes: verified.scope,
+            rateLimitTier: verified.rate_limit_tier,
           }),
         );
       }),
@@ -308,6 +313,33 @@ function readHttpAuthorizationCredential(credential: Redacted.Redacted<string>):
   // Effect beta.73 leaves the scheme separator in decoded HTTP credentials.
   return Redacted.value(credential).trimStart();
 }
+
+const relayClientIpAddress = HttpServerRequest.HttpServerRequest.pipe(
+  Effect.map((request) => request.headers["cf-connecting-ip"] ?? "unknown"),
+);
+
+const checkUserRateLimit = Effect.fnUntraced(function* (
+  entitlements: Entitlements.EntitlementsShape,
+  rateLimits: RateLimits.RateLimitsShape,
+  operation: RateLimits.RelayRateLimitOperation,
+  userId: string,
+) {
+  const effective = yield* entitlements.getEffectiveForUser(userId);
+  yield* rateLimits.check({ operation, key: userId, tier: effective.rateLimitTier });
+});
+
+const checkDpopUserRateLimit = Effect.fnUntraced(function* (
+  rateLimits: RateLimits.RateLimitsShape,
+  operation: RateLimits.RelayRateLimitOperation,
+  key: string,
+) {
+  const principal = yield* RelayClientPrincipal;
+  yield* rateLimits.check({
+    operation,
+    key,
+    ...(principal.rateLimitTier ? { tier: principal.rateLimitTier } : {}),
+  });
+});
 
 export const metadataApi = HttpApiBuilder.group(
   RelayApi,
@@ -372,12 +404,14 @@ export const mobileApi = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const registrations = yield* MobileRegistrations.MobileRegistrations;
     const dpopProofs = yield* DpopProofs.DpopProofReplay;
+    const rateLimits = yield* RateLimits.RateLimits;
     return handlers
       .handle(
         "registerDevice",
         Effect.fn("relay.api.mobile.registerDevice")(function* (args) {
           const { payload } = args;
           const { userId, token } = yield* RelayClientPrincipal;
+          yield* checkDpopUserRateLimit(rateLimits, "mobile_registration", userId);
           const proofKeyThumbprint = yield* requireDpopPrincipalScope("mobile:registration");
           yield* requireDpopThumbprint(proofKeyThumbprint, {
             expectedAccessToken: token,
@@ -390,6 +424,7 @@ export const mobileApi = HttpApiBuilder.group(
         Effect.fn("relay.api.mobile.registerLiveActivity")(function* (args) {
           const { payload } = args;
           const { userId, token } = yield* RelayClientPrincipal;
+          yield* checkDpopUserRateLimit(rateLimits, "mobile_registration", userId);
           const proofKeyThumbprint = yield* requireDpopPrincipalScope("mobile:registration");
           yield* requireDpopThumbprint(proofKeyThumbprint, {
             expectedAccessToken: token,
@@ -402,6 +437,7 @@ export const mobileApi = HttpApiBuilder.group(
         Effect.fn("relay.api.mobile.unregisterDevice")(function* (args) {
           const { params } = args;
           const { userId, token } = yield* RelayClientPrincipal;
+          yield* checkDpopUserRateLimit(rateLimits, "mobile_registration", userId);
           const proofKeyThumbprint = yield* requireDpopPrincipalScope("mobile:registration");
           yield* requireDpopThumbprint(proofKeyThumbprint, {
             expectedAccessToken: token,
@@ -424,6 +460,8 @@ export const clientApi = HttpApiBuilder.group(
     const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
     const credentials = yield* EnvironmentCredentials.EnvironmentCredentials;
     const devices = yield* Devices.Devices;
+    const entitlements = yield* Entitlements.Entitlements;
+    const rateLimits = yield* RateLimits.RateLimits;
     return handlers
       .handle(
         "listEnvironments",
@@ -447,6 +485,14 @@ export const clientApi = HttpApiBuilder.group(
             const { payload } = args;
             yield* appendRelayCredentialResponseHeaders;
             const { userId } = yield* RelayClientPrincipal;
+            if (payload.managedTunnelsEnabled) {
+              yield* checkUserRateLimit(
+                entitlements,
+                rateLimits,
+                "managed_endpoint_provision",
+                userId,
+              );
+            }
             const result = yield* linker.link({ userId, request: payload });
             return {
               ok: true,
@@ -516,6 +562,7 @@ export const clientApi = HttpApiBuilder.group(
         Effect.fn("relay.api.client.createEnvironmentLinkChallenge")(function* (args) {
           yield* appendRelayCredentialResponseHeaders;
           const { userId } = yield* RelayClientPrincipal;
+          yield* checkUserRateLimit(entitlements, rateLimits, "link_challenge", userId);
           const now = yield* DateTime.now;
           const expiresAt = DateTime.add(now, { minutes: 5 });
           const jti = yield* crypto.randomUUIDv4.pipe(
@@ -538,12 +585,6 @@ export const clientApi = HttpApiBuilder.group(
         Effect.fn("relay.api.client.unlinkEnvironment")(function* (args) {
           const { params } = args;
           const { userId } = yield* RelayClientPrincipal;
-          yield* managedEndpointProvider
-            .deprovision({
-              userId,
-              environmentId: params.environmentId,
-            })
-            .pipe(Effect.catch(() => relayInternalErrorResponse("upstream_unavailable")));
           const link = yield* links.getForUser({
             userId,
             environmentId: params.environmentId,
@@ -560,6 +601,21 @@ export const clientApi = HttpApiBuilder.group(
               environmentId: link.environmentId,
               environmentPublicKey: link.environmentPublicKey,
             });
+            yield* managedEndpointProvider
+              .deprovision({
+                userId,
+                environmentId: params.environmentId,
+              })
+              .pipe(
+                Effect.tapError((cause) =>
+                  Effect.logWarning("managed endpoint cleanup after unlink failed", {
+                    cause,
+                    userId,
+                    environmentId: params.environmentId,
+                  }),
+                ),
+                Effect.ignore,
+              );
           }
           return { ok: unlinked };
         }, mapRelayCommonApiErrors("not_authorized")),
@@ -575,10 +631,16 @@ export const tokenApi = HttpApiBuilder.group(
     const crypto = yield* Crypto.Crypto;
     const dpopProofs = yield* DpopProofs.DpopProofReplay;
     const relayTokens = yield* RelayTokens.RelayTokens;
+    const entitlements = yield* Entitlements.Entitlements;
+    const rateLimits = yield* RateLimits.RateLimits;
     return handlers.handle(
       "exchangeDpopAccessToken",
       Effect.fn("relay.api.token.exchangeDpopAccessToken")(function* (args) {
         yield* appendRelayCredentialResponseHeaders;
+        yield* rateLimits.check({
+          operation: "token_exchange",
+          key: `ip:${yield* relayClientIpAddress}`,
+        });
         const issuer = normalizeRelayIssuer(config.relayIssuer);
         const requestedScopes = relayTokens.resolveDpopAccessTokenScopes({
           clientId: args.payload.client_id,
@@ -599,6 +661,12 @@ export const tokenApi = HttpApiBuilder.group(
         if (!verified.sub || !hasExpectedClerkAudience(verified.aud, config.clerkJwtAudience)) {
           return yield* relayAuthInvalidError("invalid_bearer");
         }
+        const effective = yield* entitlements.getEffectiveForUser(verified.sub);
+        yield* rateLimits.check({
+          operation: "token_exchange",
+          key: `user:${verified.sub}`,
+          tier: effective.rateLimitTier,
+        });
         const proofKeyThumbprint = yield* requireDpopProof().pipe(
           Effect.provideService(DpopProofs.DpopProofReplay, dpopProofs),
         );
@@ -617,6 +685,7 @@ export const tokenApi = HttpApiBuilder.group(
               expiresAtEpochSeconds: Math.floor(expiresAt.epochMilliseconds / 1_000),
               clientId: args.payload.client_id,
               scopes: requestedScopes,
+              rateLimitTier: effective.rateLimitTier,
             })
             .pipe(Effect.catch(() => relayInternalErrorResponse("internal_error"))),
           issued_token_type: RelayAccessTokenType,
@@ -635,6 +704,7 @@ export const dpopClientApi = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const connector = yield* EnvironmentConnector.EnvironmentConnector;
     const dpopProofs = yield* DpopProofs.DpopProofReplay;
+    const rateLimits = yield* RateLimits.RateLimits;
     return handlers
       .handle(
         "connectEnvironment",
@@ -643,6 +713,11 @@ export const dpopClientApi = HttpApiBuilder.group(
             const { params, payload } = args;
             yield* appendRelayCredentialResponseHeaders;
             const { userId, token } = yield* RelayClientPrincipal;
+            yield* checkDpopUserRateLimit(
+              rateLimits,
+              "environment_connect",
+              `${userId}:${params.environmentId}`,
+            );
             const proofKeyThumbprint = yield* requireDpopPrincipalScope("environment:connect");
             const requestedThumbprint = resolveConnectClientKeyThumbprint(payload);
             if (!requestedThumbprint || requestedThumbprint !== proofKeyThumbprint) {
@@ -691,6 +766,11 @@ export const dpopClientApi = HttpApiBuilder.group(
           function* (args) {
             const { params } = args;
             const { userId, token } = yield* RelayClientPrincipal;
+            yield* checkDpopUserRateLimit(
+              rateLimits,
+              "environment_status",
+              `${userId}:${params.environmentId}`,
+            );
             const proofKeyThumbprint = yield* requireDpopPrincipalScope("environment:status");
             yield* requireDpopThumbprint(proofKeyThumbprint, {
               expectedAccessToken: token,
@@ -736,6 +816,7 @@ export const serverApi = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const publisher = yield* AgentActivityPublisher.AgentActivityPublisher;
     const publishSignatures = yield* EnvironmentPublishSignatures.EnvironmentPublishSignatures;
+    const rateLimits = yield* RateLimits.RateLimits;
     return handlers.handle(
       "publishAgentActivity",
       Effect.fn("relay.api.server.publishAgentActivity")(
@@ -745,6 +826,10 @@ export const serverApi = HttpApiBuilder.group(
           if (principal.environmentId !== params.environmentId) {
             return yield* new HttpApiError.Unauthorized({});
           }
+          yield* rateLimits.check({
+            operation: "agent_activity_publish",
+            key: `${params.environmentId}:${principal.environmentPublicKey}`,
+          });
           yield* publishSignatures.verify({
             environmentId: params.environmentId,
             environmentPublicKey: principal.environmentPublicKey,
@@ -835,6 +920,7 @@ const COMMON_AUTH_INVALID_REASONS = [
   EnvironmentLinks.EnvironmentLinkLookupPersistenceError,
   EnvironmentLinks.EnvironmentLinkRevokePersistenceError,
   ManagedEndpointAllocations.ManagedEndpointAllocationPersistenceError,
+  Entitlements.UserEntitlementPersistenceError,
   EnvironmentCredentials.EnvironmentCredentialAuthenticatePersistenceError,
   EnvironmentCredentials.EnvironmentCredentialRevokePersistenceError,
   DpopProofs.DpopProofReplayPersistenceError,
@@ -848,9 +934,23 @@ const COMMON_AUTH_INVALID_REASONS = [
 type RelayCommonPersistenceError = InstanceType<(typeof COMMON_AUTH_INVALID_REASONS)[number]>;
 
 type MapRelayCommonApiError<E> =
-  | Exclude<E, HttpApiError.Unauthorized | RelayCommonPersistenceError>
+  | Exclude<
+      E,
+      | HttpApiError.Unauthorized
+      | RelayCommonPersistenceError
+      | Entitlements.UserResourceQuotaExceeded
+      | AgentActivityRows.AgentActivityRowQuotaExceeded
+      | RateLimits.RelayRateLimitExceeded
+    >
   | (Extract<E, HttpApiError.Unauthorized> extends never ? never : RelayAuthInvalidError)
-  | (Extract<E, RelayCommonPersistenceError> extends never ? never : RelayInternalError);
+  | (Extract<E, RelayCommonPersistenceError> extends never ? never : RelayInternalError)
+  | (Extract<E, Entitlements.UserResourceQuotaExceeded> extends never
+      ? never
+      : RelayQuotaExceededError)
+  | (Extract<E, AgentActivityRows.AgentActivityRowQuotaExceeded> extends never
+      ? never
+      : RelayQuotaExceededError)
+  | (Extract<E, RateLimits.RelayRateLimitExceeded> extends never ? never : RelayRateLimitedError);
 
 function isRelayCommonPersistenceError(error: unknown): error is RelayCommonPersistenceError {
   return COMMON_AUTH_INVALID_REASONS.some((ErrorType) => error instanceof ErrorType);
@@ -881,6 +981,29 @@ function mapRelayCommonApiErrors(authReason: RelayAuthInvalidReason) {
         new RelayInternalError({
           code: "internal_error",
           reason: "persistence_failed",
+          traceId,
+        }) as MapRelayCommonApiError<E>,
+      );
+    }
+    if (
+      error instanceof Entitlements.UserResourceQuotaExceeded ||
+      error instanceof AgentActivityRows.AgentActivityRowQuotaExceeded
+    ) {
+      return yield* Effect.fail(
+        new RelayQuotaExceededError({
+          code: "quota_exceeded",
+          resource: error.resource,
+          limit: error.limit,
+          traceId,
+        }) as MapRelayCommonApiError<E>,
+      );
+    }
+    if (error instanceof RateLimits.RelayRateLimitExceeded) {
+      return yield* Effect.fail(
+        new RelayRateLimitedError({
+          code: "rate_limited",
+          operation: error.operation,
+          retryAfterSeconds: error.retryAfterSeconds,
           traceId,
         }) as MapRelayCommonApiError<E>,
       );

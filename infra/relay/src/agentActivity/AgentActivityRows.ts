@@ -8,7 +8,7 @@ import { cast } from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, count, desc, eq, isNull } from "drizzle-orm";
 
 import { RelayDb } from "../db.ts";
 import { relayAgentActivityRows, relayEnvironmentLinks } from "../persistence/schema.ts";
@@ -31,11 +31,20 @@ export class AgentActivityRowListPersistenceError extends Data.TaggedError(
   readonly cause: unknown;
 }> {}
 
+export class AgentActivityRowQuotaExceeded extends Data.TaggedError(
+  "AgentActivityRowQuotaExceeded",
+)<{
+  readonly resource: "active_agent_threads";
+  readonly limit: number;
+}> {}
+
+const MAX_ACTIVE_AGENT_THREADS_PER_ENVIRONMENT = 50;
+
 export interface AgentActivityRowsShape {
   readonly upsert: (input: {
     readonly environmentPublicKey: string;
     readonly state: RelayAgentActivityState;
-  }) => Effect.Effect<void, AgentActivityRowUpsertPersistenceError>;
+  }) => Effect.Effect<void, AgentActivityRowUpsertPersistenceError | AgentActivityRowQuotaExceeded>;
   readonly remove: (input: {
     readonly environmentId: string;
     readonly environmentPublicKey: string;
@@ -76,29 +85,59 @@ const make = Effect.gen(function* () {
           Effect.flatMap(decodeJsonString),
           Effect.map(cast<unknown, RelayAgentActivityState>),
         );
-        yield* db
-          .insert(relayAgentActivityRows)
-          .values({
-            environmentId: input.state.environmentId,
-            environmentPublicKey: input.environmentPublicKey,
-            threadId: input.state.threadId,
-            stateJson,
-            updatedAt: input.state.updatedAt,
-            createdAt: DateTime.formatIso(now),
-          })
-          .onConflictDoUpdate({
-            target: [
-              relayAgentActivityRows.environmentId,
-              relayAgentActivityRows.environmentPublicKey,
-              relayAgentActivityRows.threadId,
-            ],
-            set: {
-              stateJson,
-              updatedAt: input.state.updatedAt,
-            },
-          });
+        yield* db.$client.withTransaction(
+          Effect.gen(function* () {
+            yield* db.$client`SELECT pg_advisory_xact_lock(hashtextextended(${`${input.state.environmentId}:${input.environmentPublicKey}`}, 1))`;
+            const keyCondition = and(
+              eq(relayAgentActivityRows.environmentId, input.state.environmentId),
+              eq(relayAgentActivityRows.environmentPublicKey, input.environmentPublicKey),
+            );
+            const existing = yield* db
+              .select({ threadId: relayAgentActivityRows.threadId })
+              .from(relayAgentActivityRows)
+              .where(and(keyCondition, eq(relayAgentActivityRows.threadId, input.state.threadId)))
+              .limit(1);
+            if (existing.length === 0) {
+              const rows = yield* db
+                .select({ value: count() })
+                .from(relayAgentActivityRows)
+                .where(keyCondition);
+              if ((rows[0]?.value ?? 0) >= MAX_ACTIVE_AGENT_THREADS_PER_ENVIRONMENT) {
+                return yield* new AgentActivityRowQuotaExceeded({
+                  resource: "active_agent_threads",
+                  limit: MAX_ACTIVE_AGENT_THREADS_PER_ENVIRONMENT,
+                });
+              }
+            }
+            yield* db
+              .insert(relayAgentActivityRows)
+              .values({
+                environmentId: input.state.environmentId,
+                environmentPublicKey: input.environmentPublicKey,
+                threadId: input.state.threadId,
+                stateJson,
+                updatedAt: input.state.updatedAt,
+                createdAt: DateTime.formatIso(now),
+              })
+              .onConflictDoUpdate({
+                target: [
+                  relayAgentActivityRows.environmentId,
+                  relayAgentActivityRows.environmentPublicKey,
+                  relayAgentActivityRows.threadId,
+                ],
+                set: {
+                  stateJson,
+                  updatedAt: input.state.updatedAt,
+                },
+              });
+          }),
+        );
       },
-      Effect.mapError((cause) => new AgentActivityRowUpsertPersistenceError({ cause })),
+      Effect.mapError((cause) =>
+        cause instanceof AgentActivityRowQuotaExceeded
+          ? cause
+          : new AgentActivityRowUpsertPersistenceError({ cause }),
+      ),
     ),
 
     remove: Effect.fn("relay.agent_activity_rows.remove")(function* (input) {

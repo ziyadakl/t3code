@@ -54,6 +54,9 @@ import * as EnvironmentLinker from "./environments/EnvironmentLinker.ts";
 import * as EnvironmentPublishSignatures from "./environments/EnvironmentPublishSignatures.ts";
 import * as ManagedEndpointProvider from "./environments/ManagedEndpointProvider.ts";
 import * as MobileRegistrations from "./agentActivity/MobileRegistrations.ts";
+import * as Entitlements from "./entitlements/Entitlements.ts";
+import * as RateLimits from "./rateLimits/RateLimits.ts";
+import * as Maintenance from "./maintenance/Maintenance.ts";
 
 const webcryptoLayer = Layer.succeed(
   Crypto.Crypto,
@@ -87,6 +90,22 @@ const CloudMintKeyPair = Alchemy.KeyPair("CloudMintKeyPair");
 const ApnsDeliveryJobSigningSecret = Alchemy.makeRandom("ApnsDeliveryJobSigningSecret", {
   bytes: 32,
 });
+
+function bindRelayRateLimit(
+  stage: string,
+  operation: RateLimits.RelayRateLimitOperation,
+  tier: "standard" | "trusted",
+) {
+  const config = RateLimits.RELAY_RATE_LIMITS[operation];
+  return Cloudflare.RateLimit({
+    name: `RATE_LIMIT_${operation.toUpperCase()}_${tier.toUpperCase()}`,
+    namespaceId: `${stage}:relay:${operation}:${tier}`,
+    simple: {
+      limit: tier === "trusted" ? config.limit * 4 : config.limit,
+      period: config.period,
+    },
+  }).asEffect();
+}
 
 export default class Api extends Cloudflare.Worker<Api>()(
   "Api",
@@ -143,6 +162,36 @@ export default class Api extends Cloudflare.Worker<Api>()(
     const managedEndpointTunnelBinding = yield* Cloudflare.TunnelReadWrite.bind();
     const managedEndpointDnsBinding = yield* Cloudflare.DnsReadWrite.bind(managedEndpointZone);
     const managedEndpointZoneName = yield* managedEndpointZone.name;
+    const rateLimitClients = yield* Effect.all({
+      token_exchange: Effect.all({
+        standard: bindRelayRateLimit(stage, "token_exchange", "standard"),
+        trusted: bindRelayRateLimit(stage, "token_exchange", "trusted"),
+      }),
+      link_challenge: Effect.all({
+        standard: bindRelayRateLimit(stage, "link_challenge", "standard"),
+        trusted: bindRelayRateLimit(stage, "link_challenge", "trusted"),
+      }),
+      managed_endpoint_provision: Effect.all({
+        standard: bindRelayRateLimit(stage, "managed_endpoint_provision", "standard"),
+        trusted: bindRelayRateLimit(stage, "managed_endpoint_provision", "trusted"),
+      }),
+      environment_connect: Effect.all({
+        standard: bindRelayRateLimit(stage, "environment_connect", "standard"),
+        trusted: bindRelayRateLimit(stage, "environment_connect", "trusted"),
+      }),
+      environment_status: Effect.all({
+        standard: bindRelayRateLimit(stage, "environment_status", "standard"),
+        trusted: bindRelayRateLimit(stage, "environment_status", "trusted"),
+      }),
+      mobile_registration: Effect.all({
+        standard: bindRelayRateLimit(stage, "mobile_registration", "standard"),
+        trusted: bindRelayRateLimit(stage, "mobile_registration", "trusted"),
+      }),
+      agent_activity_publish: Effect.all({
+        standard: bindRelayRateLimit(stage, "agent_activity_publish", "standard"),
+        trusted: bindRelayRateLimit(stage, "agent_activity_publish", "trusted"),
+      }),
+    });
 
     //
     // 3. Runtime layers and app construction
@@ -178,8 +227,10 @@ export default class Api extends Cloudflare.Worker<Api>()(
       }).pipe(Effect.map(makeRelayTraceLayer)),
     );
 
-    const runtimeLayer = Layer.empty.pipe(
+    const relayServiceLayer = Layer.empty.pipe(
       Layer.provideMerge(MobileRegistrations.layer),
+      Layer.provideMerge(Maintenance.layer),
+      Layer.provideMerge(RateLimits.layerCloudflareBindings(rateLimitClients)),
       Layer.provideMerge(AgentActivityPublisher.layer),
       Layer.provideMerge(EnvironmentConnector.layer),
       Layer.provideMerge(EnvironmentLinker.layer),
@@ -206,8 +257,12 @@ export default class Api extends Cloudflare.Worker<Api>()(
           ManagedEndpointAllocations.ManagedEndpointAllocations.layer,
         ),
       ),
+      Layer.provideMerge(Entitlements.layer),
       Layer.provideMerge(LiveActivities.layer),
       Layer.provideMerge(DeliveryAttempts.layer),
+    );
+
+    const runtimeLayer = relayServiceLayer.pipe(
       Layer.provideMerge(RelayTokens.layer),
       Layer.provideMerge(Layer.succeed(RelayDb, db)),
       Layer.provideMerge(Layer.effect(RelayConfiguration.RelayConfiguration, loadSettings)),
@@ -242,8 +297,14 @@ export default class Api extends Cloudflare.Worker<Api>()(
     );
 
     yield* Cloudflare.cron("*/5 * * * *").subscribe(() =>
-      DpopProofs.DpopProofReplay.pipe(
-        Effect.flatMap((dpopProofs) => dpopProofs.pruneExpired),
+      Effect.all([
+        DpopProofs.DpopProofReplay.pipe(Effect.flatMap((dpopProofs) => dpopProofs.pruneExpired)),
+        ManagedEndpointProvider.ManagedEndpointProvider.pipe(
+          Effect.flatMap((provider) => provider.reconcileDeprovisioning),
+        ),
+        Maintenance.Maintenance.pipe(Effect.flatMap((maintenance) => maintenance.pruneExpired)),
+      ]).pipe(
+        Effect.asVoid,
         Effect.withSpan("relay.cron.prune_expired_dpop_proofs"),
         Effect.provide(runtimeLayer),
       ),
@@ -274,6 +335,7 @@ export default class Api extends Cloudflare.Worker<Api>()(
         Layer.provideMerge(Cloudflare.QueueEventSourceLive),
         Layer.provideMerge(Cloudflare.TunnelReadWriteLive),
         Layer.provideMerge(Cloudflare.DnsReadWriteLive),
+        Layer.provideMerge(Cloudflare.RateLimitBindingLive),
       ),
     ),
   ),

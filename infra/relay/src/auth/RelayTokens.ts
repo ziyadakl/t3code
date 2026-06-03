@@ -4,9 +4,11 @@ import {
   RelayEnvironmentStatusScope,
   RelayMobileClientId,
   RelayMobileRegistrationScope,
+  RelayRateLimitTier as RelayRateLimitTierSchema,
   RelayWebClientId,
   type RelayPublicClientId,
   type RelayEnvironmentLinkChallengeRequest,
+  type RelayRateLimitTier,
 } from "@t3tools/contracts/relay";
 import { encodeOAuthScope, parseAllowedOAuthScope } from "@t3tools/shared/oauthScope";
 import {
@@ -51,6 +53,7 @@ const RelayDpopAccessTokenClaims = Schema.Struct({
   client_id: Schema.Literals([RelayMobileClientId, RelayWebClientId]),
   scope: Schema.String,
   cnf: Schema.Struct({ jkt: Schema.String }),
+  rate_limit_tier: RelayRateLimitTierSchema,
 });
 export type RelayDpopAccessTokenClaims = Omit<typeof RelayDpopAccessTokenClaims.Type, "scope"> & {
   readonly scope: ReadonlyArray<RelayDpopAccessTokenScope>;
@@ -104,6 +107,7 @@ export interface RelayTokensShape {
     readonly expiresAtEpochSeconds: number;
     readonly clientId: RelayPublicClientId;
     readonly scopes: ReadonlyArray<RelayDpopAccessTokenScope>;
+    readonly rateLimitTier: RelayRateLimitTier;
   }) => Effect.Effect<string, RelayJwtError>;
   readonly verifyDpopAccessToken: (input: {
     readonly token: string;
@@ -181,6 +185,7 @@ const make = Effect.gen(function* () {
         client_id: input.clientId,
         scope: encodeOAuthScope(input.scopes),
         cnf: { jkt: input.proofKeyThumbprint },
+        rate_limit_tier: input.rateLimitTier,
       },
     });
   });

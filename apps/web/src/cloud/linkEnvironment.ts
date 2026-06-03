@@ -154,6 +154,10 @@ function relayProtectedErrorMessage(error: RelayProtectedErrorType): string {
       return "Relay rejected an expired agent activity publish proof.";
     case "RelayAgentActivityPublishProofInvalidError":
       return `Relay rejected the agent activity publish proof (${error.reason}).`;
+    case "RelayQuotaExceededError":
+      return `Relay quota exceeded for ${error.resource} (limit ${error.limit}).`;
+    case "RelayRateLimitedError":
+      return `Relay rate limit exceeded for ${error.operation}; retry in ${error.retryAfterSeconds} seconds.`;
     case "RelayInternalError":
       return `Relay encountered an internal error (${error.reason}, trace ${error.traceId}).`;
   }

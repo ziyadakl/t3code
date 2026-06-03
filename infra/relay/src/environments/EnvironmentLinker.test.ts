@@ -107,6 +107,7 @@ const makeRequest = Effect.gen(function* () {
 function testLayer(input?: {
   readonly upsert?: EnvironmentLinks.EnvironmentLinksShape["upsert"];
   readonly consume?: DpopProofs.DpopProofReplayShape["consume"];
+  readonly deprovision?: ManagedEndpointProvider.ManagedEndpointProviderShape["deprovision"];
 }) {
   return EnvironmentLinker.layer.pipe(
     Layer.provideMerge(RelayTokens.layer),
@@ -133,7 +134,8 @@ function testLayer(input?: {
           revokeForEnvironmentPublicKey: () => Effect.succeed(false),
         }),
         Layer.succeed(ManagedEndpointProvider.ManagedEndpointProvider, {
-          deprovision: () => Effect.void,
+          deprovision: input?.deprovision ?? (() => Effect.void),
+          reconcileDeprovisioning: Effect.void,
           provision: () =>
             Effect.succeed({
               endpoint: {
@@ -150,6 +152,28 @@ function testLayer(input?: {
 }
 
 describe("EnvironmentLinker", () => {
+  it.effect("cleans up an existing managed allocation after a manual relink", () => {
+    let deprovisioned: { readonly userId: string; readonly environmentId: string } | null = null;
+    return Effect.gen(function* () {
+      const { request } = yield* makeRequest;
+      const linker = yield* EnvironmentLinker.EnvironmentLinker;
+      yield* linker.link({ userId: "user_123", request });
+      expect(deprovisioned).toEqual({
+        userId: "user_123",
+        environmentId: "env-link-test",
+      });
+    }).pipe(
+      Effect.provide(
+        testLayer({
+          deprovision: (input) =>
+            Effect.sync(() => {
+              deprovisioned = input;
+            }),
+        }),
+      ),
+    );
+  });
+
   it.effect("uses verified JWT claims when linking an environment", () => {
     let persistedEnvironmentId: string | null = null;
     return Effect.gen(function* () {

@@ -4,6 +4,7 @@ import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
 import * as Layer from "effect/Layer";
@@ -17,6 +18,7 @@ import type {
 } from "@t3tools/contracts/relay";
 
 import * as RelayConfiguration from "../Config.ts";
+import * as Entitlements from "../entitlements/Entitlements.ts";
 import {
   managedEndpointDigestInput,
   managedEndpointForHostname,
@@ -51,7 +53,8 @@ export class ManagedEndpointOriginNotAllowed extends Data.TaggedError(
 export type ManagedEndpointProviderError =
   | ManagedEndpointProvisioningNotConfigured
   | ManagedEndpointProvisioningFailed
-  | ManagedEndpointOriginNotAllowed;
+  | ManagedEndpointOriginNotAllowed
+  | Entitlements.UserResourceQuotaExceeded;
 
 export interface ManagedEndpointProvisioningResult {
   readonly endpoint: RelayManagedEndpoint;
@@ -68,6 +71,7 @@ export interface ManagedEndpointProviderShape {
     readonly userId: string;
     readonly environmentId: string;
   }) => Effect.Effect<void, ManagedEndpointDeprovisioningFailed>;
+  readonly reconcileDeprovisioning: Effect.Effect<void, ManagedEndpointDeprovisioningFailed>;
 }
 
 export class ManagedEndpointProvider extends Context.Service<
@@ -281,32 +285,68 @@ const make = Effect.gen(function* () {
     );
   });
 
-  return ManagedEndpointProvider.of({
-    deprovision: Effect.fn("relay.managed_endpoint_provider.deprovision")(function* (input) {
-      yield* Effect.annotateCurrentSpan({
-        "relay.user_id": input.userId,
-        "relay.environment_id": input.environmentId,
-      });
-      const allocation = yield* allocations
-        .get(input)
-        .pipe(Effect.mapError((cause) => new ManagedEndpointDeprovisioningFailed({ cause })));
-      if (allocation === null) {
-        return;
-      }
+  const deprovision: ManagedEndpointProviderShape["deprovision"] = Effect.fn(
+    "relay.managed_endpoint_provider.deprovision",
+  )(function* (input) {
+    yield* Effect.annotateCurrentSpan({
+      "relay.user_id": input.userId,
+      "relay.environment_id": input.environmentId,
+    });
+    yield* allocations
+      .requestDeprovision(input)
+      .pipe(Effect.mapError((cause) => new ManagedEndpointDeprovisioningFailed({ cause })));
+    const allocation = yield* allocations
+      .get(input)
+      .pipe(Effect.mapError((cause) => new ManagedEndpointDeprovisioningFailed({ cause })));
+    if (allocation === null) {
+      return;
+    }
+    yield* allocations
+      .markDeprovisionAttempt(input)
+      .pipe(Effect.mapError((cause) => new ManagedEndpointDeprovisioningFailed({ cause })));
+    yield* Effect.gen(function* () {
       if (allocation.dnsRecordId !== null) {
-        yield* ignoreNotFound(dns.deleteRecord(allocation.dnsRecordId)).pipe(
-          Effect.mapError((cause) => new ManagedEndpointDeprovisioningFailed({ cause })),
-        );
+        yield* ignoreNotFound(dns.deleteRecord(allocation.dnsRecordId));
       }
       if (allocation.tunnelId !== null) {
-        yield* ignoreNotFound(tunnels.delete(allocation.tunnelId)).pipe(
-          Effect.mapError((cause) => new ManagedEndpointDeprovisioningFailed({ cause })),
-        );
+        yield* ignoreNotFound(tunnels.delete(allocation.tunnelId));
       }
-      yield* allocations
-        .remove(input)
+      yield* allocations.remove(input);
+    }).pipe(
+      Effect.mapError((cause) => new ManagedEndpointDeprovisioningFailed({ cause })),
+      Effect.tapError((error) =>
+        allocations.recordDeprovisionFailure({ ...input, cause: error.cause }).pipe(Effect.ignore),
+      ),
+    );
+  });
+
+  return ManagedEndpointProvider.of({
+    deprovision,
+    reconcileDeprovisioning: Effect.gen(function* () {
+      const orphanedBefore = DateTime.formatIso(
+        DateTime.subtract(yield* DateTime.now, {
+          minutes: 15,
+        }),
+      );
+      const candidates = yield* allocations
+        .listCleanupCandidates({ orphanedBefore })
         .pipe(Effect.mapError((cause) => new ManagedEndpointDeprovisioningFailed({ cause })));
-    }),
+      yield* Effect.forEach(
+        candidates,
+        (input) =>
+          deprovision(input).pipe(
+            Effect.tapError((cause) =>
+              Effect.logWarning("managed endpoint deprovision reconciliation failed", {
+                cause,
+                userId: input.userId,
+                environmentId: input.environmentId,
+              }),
+            ),
+            Effect.ignore,
+          ),
+        { concurrency: 5, discard: true },
+      );
+    }).pipe(Effect.withSpan("relay.managed_endpoint_provider.reconcile_deprovisioning")),
     provision: Effect.fn("relay.managed_endpoint_provider.provision")(function* (input) {
       yield* Effect.annotateCurrentSpan({
         "relay.user_id": input.userId,
@@ -339,7 +379,13 @@ const make = Effect.gen(function* () {
           hostname: managedEndpointHostname(cf.namespace, cf.baseDomain, environmentHash),
           tunnelName: managedEndpointTunnelName(cf.namespace, environmentHash),
         })
-        .pipe(Effect.mapError((cause) => new ManagedEndpointProvisioningFailed({ cause })));
+        .pipe(
+          Effect.mapError((cause) =>
+            cause instanceof Entitlements.UserResourceQuotaExceeded
+              ? cause
+              : new ManagedEndpointProvisioningFailed({ cause }),
+          ),
+        );
       const { hostname, tunnelName } = allocation;
 
       const tunnel = yield* tunnels.list({ name: tunnelName, isDeleted: false }).pipe(

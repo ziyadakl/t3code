@@ -321,6 +321,27 @@ export const RelayInternalErrorReason = Schema.Literals([
 ]);
 export type RelayInternalErrorReason = typeof RelayInternalErrorReason.Type;
 
+export const RelayQuotaResource = Schema.Literals([
+  "managed_endpoints",
+  "mobile_devices",
+  "active_agent_threads",
+]);
+export type RelayQuotaResource = typeof RelayQuotaResource.Type;
+
+export const RelayRateLimitOperation = Schema.Literals([
+  "token_exchange",
+  "link_challenge",
+  "managed_endpoint_provision",
+  "environment_connect",
+  "environment_status",
+  "mobile_registration",
+  "agent_activity_publish",
+]);
+export type RelayRateLimitOperation = typeof RelayRateLimitOperation.Type;
+
+export const RelayRateLimitTier = Schema.Literals(["standard", "trusted", "blocked"]);
+export type RelayRateLimitTier = typeof RelayRateLimitTier.Type;
+
 export class RelayAuthInvalidError extends Schema.TaggedErrorClass<RelayAuthInvalidError>()(
   "RelayAuthInvalidError",
   {
@@ -427,6 +448,28 @@ export class RelayInternalError extends Schema.TaggedErrorClass<RelayInternalErr
   { httpApiStatus: 500 },
 ) {}
 
+export class RelayQuotaExceededError extends Schema.TaggedErrorClass<RelayQuotaExceededError>()(
+  "RelayQuotaExceededError",
+  {
+    code: Schema.Literal("quota_exceeded"),
+    resource: RelayQuotaResource,
+    limit: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+    traceId: TrimmedNonEmptyString,
+  },
+  { httpApiStatus: 409 },
+) {}
+
+export class RelayRateLimitedError extends Schema.TaggedErrorClass<RelayRateLimitedError>()(
+  "RelayRateLimitedError",
+  {
+    code: Schema.Literal("rate_limited"),
+    operation: RelayRateLimitOperation,
+    retryAfterSeconds: Schema.Int.check(Schema.isGreaterThan(0)),
+    traceId: TrimmedNonEmptyString,
+  },
+  { httpApiStatus: 429 },
+) {}
+
 export const RelayProtectedError = Schema.Union([
   RelayAuthInvalidError,
   RelayEnvironmentLinkProofExpiredError,
@@ -439,10 +482,19 @@ export const RelayProtectedError = Schema.Union([
   RelayAgentActivityPublishProofExpiredError,
   RelayAgentActivityPublishProofInvalidError,
   RelayInternalError,
+  RelayQuotaExceededError,
+  RelayRateLimitedError,
 ]);
 export type RelayProtectedError = typeof RelayProtectedError.Type;
 
 const RelayAuthAndInternalErrors = [RelayAuthInvalidError, RelayInternalError] as const;
+
+const RelayMobileErrors = [
+  RelayAuthInvalidError,
+  RelayQuotaExceededError,
+  RelayRateLimitedError,
+  RelayInternalError,
+] as const;
 
 const RelayEnvironmentLinkErrors = [
   RelayAuthInvalidError,
@@ -450,6 +502,8 @@ const RelayEnvironmentLinkErrors = [
   RelayEnvironmentLinkProofInvalidError,
   RelayEnvironmentLinkUnavailableError,
   RelayEnvironmentLinkFailedError,
+  RelayQuotaExceededError,
+  RelayRateLimitedError,
   RelayInternalError,
 ] as const;
 
@@ -458,6 +512,7 @@ const RelayEnvironmentConnectErrors = [
   RelayEnvironmentConnectNotAuthorizedError,
   RelayEnvironmentEndpointUnavailableError,
   RelayEnvironmentEndpointTimedOutError,
+  RelayRateLimitedError,
   RelayInternalError,
 ] as const;
 
@@ -465,6 +520,8 @@ const RelayAgentActivityPublishErrors = [
   RelayAuthInvalidError,
   RelayAgentActivityPublishProofExpiredError,
   RelayAgentActivityPublishProofInvalidError,
+  RelayQuotaExceededError,
+  RelayRateLimitedError,
   RelayInternalError,
 ] as const;
 
@@ -473,6 +530,7 @@ export interface RelayClientPrincipalShape {
   readonly token: string;
   readonly proofKeyThumbprint?: string;
   readonly dpopScopes?: ReadonlyArray<RelayDpopAccessTokenScope>;
+  readonly rateLimitTier?: RelayRateLimitTier;
 }
 
 export class RelayClientPrincipal extends Context.Service<
@@ -808,7 +866,7 @@ export const RelayRegisterDeviceEndpoint = HttpApiEndpoint.post(
     headers: RelayDpopRequestHeaders,
     payload: RelayDeviceRegistrationRequest,
     success: RelayOkResponse,
-    error: RelayAuthAndInternalErrors,
+    error: RelayMobileErrors,
   },
 ).annotate(OpenApi.Summary, "Register or update a mobile device");
 
@@ -819,7 +877,7 @@ export const RelayRegisterLiveActivityEndpoint = HttpApiEndpoint.post(
     headers: RelayDpopRequestHeaders,
     payload: RelayLiveActivityRegistrationRequest,
     success: RelayOkResponse,
-    error: RelayAuthAndInternalErrors,
+    error: RelayMobileErrors,
   },
 ).annotate(OpenApi.Summary, "Register a Live Activity push token");
 
@@ -830,7 +888,7 @@ export const RelayUnregisterDeviceEndpoint = HttpApiEndpoint.delete(
     headers: RelayDpopRequestHeaders,
     params: RelayDeviceUnregistrationParams,
     success: RelayOkResponse,
-    error: RelayAuthAndInternalErrors,
+    error: RelayMobileErrors,
   },
 ).annotate(OpenApi.Summary, "Unregister a mobile device");
 
@@ -868,7 +926,7 @@ export const RelayClientGroup = HttpApiGroup.make("client")
         headers: RelayBearerRequestHeaders,
         payload: RelayEnvironmentLinkChallengeRequest,
         success: RelayEnvironmentLinkChallengeResponse,
-        error: RelayAuthAndInternalErrors,
+        error: [RelayAuthInvalidError, RelayRateLimitedError, RelayInternalError],
       },
     ).annotate(OpenApi.Summary, "Create an environment-link challenge"),
     HttpApiEndpoint.delete("unlinkEnvironment", "/v1/client/environment-links/:environmentId", {
@@ -888,7 +946,7 @@ export const RelayExchangeDpopAccessTokenEndpoint = HttpApiEndpoint.post(
     headers: RelayDpopProofRequestHeaders,
     payload: RelayDpopAccessTokenRequest,
     success: RelayDpopAccessTokenResponse,
-    error: RelayAuthAndInternalErrors,
+    error: [RelayAuthInvalidError, RelayRateLimitedError, RelayInternalError],
   },
 )
   .annotate(OpenApi.Summary, "Exchange a Clerk token for a DPoP access token")

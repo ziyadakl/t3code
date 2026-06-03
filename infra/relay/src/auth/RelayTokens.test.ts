@@ -91,6 +91,7 @@ describe("RelayTokens", () => {
         expiresAtEpochSeconds: 200,
         clientId: "t3-mobile",
         scopes: ["environment:connect", "environment:status", "mobile:registration"],
+        rateLimitTier: "standard",
       });
 
       expect(
@@ -100,6 +101,7 @@ describe("RelayTokens", () => {
         cnf: { jkt: "proof-key-thumbprint" },
         client_id: "t3-mobile",
         scope: ["environment:connect", "environment:status", "mobile:registration"],
+        rate_limit_tier: "standard",
       });
       expect(yield* relayTokens.verifyDpopAccessToken({ token, nowEpochSeconds: 261 })).toBeNull();
     }).pipe(Effect.provide(layer)),
@@ -116,6 +118,7 @@ describe("RelayTokens", () => {
         expiresAtEpochSeconds: 200,
         clientId: "t3-web",
         scopes: ["environment:connect", "environment:status"],
+        rateLimitTier: "trusted",
       });
 
       expect(
@@ -124,6 +127,7 @@ describe("RelayTokens", () => {
         client_id: "t3-web",
         scope: ["environment:connect", "environment:status"],
         cnf: { jkt: "web-proof-key-thumbprint" },
+        rate_limit_tier: "trusted",
       });
     }).pipe(Effect.provide(layer)),
   );

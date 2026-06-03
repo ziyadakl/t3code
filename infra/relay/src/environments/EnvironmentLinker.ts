@@ -247,6 +247,23 @@ const make = Effect.gen(function* () {
         });
       }
       yield* links.upsert({ ...input, proof: verified, endpoint });
+      if (!input.request.managedTunnelsEnabled) {
+        yield* managedEndpointProvider
+          .deprovision({
+            userId: input.userId,
+            environmentId: verified.environmentId,
+          })
+          .pipe(
+            Effect.tapError((cause) =>
+              Effect.logWarning("managed endpoint cleanup after manual relink failed", {
+                cause,
+                userId: input.userId,
+                environmentId: verified.environmentId,
+              }),
+            ),
+            Effect.ignore,
+          );
+      }
       const environmentCredential = yield* credentials.create({
         environmentId: verified.environmentId,
         environmentPublicKey: verified.environmentPublicKey,

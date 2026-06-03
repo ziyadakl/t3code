@@ -40,7 +40,17 @@ interface DnsCall {
 }
 
 interface AllocationCall {
-  readonly operation: "get" | "reserve" | "recordTunnel" | "recordDns" | "markReady" | "remove";
+  readonly operation:
+    | "get"
+    | "reserve"
+    | "recordTunnel"
+    | "recordDns"
+    | "markReady"
+    | "requestDeprovision"
+    | "markDeprovisionAttempt"
+    | "recordDeprovisionFailure"
+    | "listCleanupCandidates"
+    | "remove";
   readonly input: unknown;
 }
 
@@ -158,6 +168,9 @@ function makeAllocations(calls: AllocationCall[] = []) {
           tunnelId: null,
           dnsRecordId: null,
           readyAt: null,
+          deprovisionRequestedAt: null,
+          lastDeprovisionAttemptAt: null,
+          lastDeprovisionError: null,
         };
         allocations.set(allocationKey(input), allocation);
         return allocation;
@@ -188,6 +201,23 @@ function makeAllocations(calls: AllocationCall[] = []) {
             readyAt: "2026-06-02T00:00:00.000Z",
           });
         }
+      }),
+    requestDeprovision: (input) =>
+      Effect.sync(() => {
+        calls.push({ operation: "requestDeprovision", input });
+      }),
+    markDeprovisionAttempt: (input) =>
+      Effect.sync(() => {
+        calls.push({ operation: "markDeprovisionAttempt", input });
+      }),
+    recordDeprovisionFailure: (input) =>
+      Effect.sync(() => {
+        calls.push({ operation: "recordDeprovisionFailure", input });
+      }),
+    listCleanupCandidates: (input) =>
+      Effect.sync(() => {
+        calls.push({ operation: "listCleanupCandidates", input });
+        return [];
       }),
     remove: (input) =>
       Effect.sync(() => {
@@ -560,7 +590,9 @@ describe("ManagedEndpointProvider", () => {
           "recordTunnel",
           "recordDns",
           "markReady",
+          "requestDeprovision",
           "get",
+          "markDeprovisionAttempt",
           "remove",
         ]);
       }).pipe(Effect.provide(layer));
@@ -584,7 +616,10 @@ describe("ManagedEndpointProvider", () => {
 
       expect(tunnelCalls).toEqual([]);
       expect(dnsCalls).toEqual([]);
-      expect(allocationCalls).toEqual([{ operation: "get", input: key }]);
+      expect(allocationCalls).toEqual([
+        { operation: "requestDeprovision", input: key },
+        { operation: "get", input: key },
+      ]);
     }).pipe(Effect.provide(layer));
   });
 
@@ -625,8 +660,13 @@ describe("ManagedEndpointProvider", () => {
         "recordTunnel",
         "recordDns",
         "markReady",
+        "requestDeprovision",
         "get",
+        "markDeprovisionAttempt",
+        "recordDeprovisionFailure",
+        "requestDeprovision",
         "get",
+        "markDeprovisionAttempt",
         "remove",
       ]);
     }).pipe(Effect.provide(layer));
@@ -660,6 +700,43 @@ describe("ManagedEndpointProvider", () => {
 
       expect(allocationCalls.map((call) => call.operation)).toContain("remove");
     }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("reconciles endpoint allocations selected for cleanup", () => {
+    const allocationCalls: AllocationCall[] = [];
+    const key = { userId: "user_ABC", environmentId: "env_ABC" } as const;
+    const baseAllocations = makeAllocations(allocationCalls);
+    const allocations = ManagedEndpointAllocations.ManagedEndpointAllocations.of({
+      ...baseAllocations,
+      listCleanupCandidates: (input) =>
+        Effect.sync(() => {
+          allocationCalls.push({ operation: "listCleanupCandidates", input });
+          return [key];
+        }),
+    });
+
+    return Effect.gen(function* () {
+      const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+      yield* provider.provision({
+        ...key,
+        origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
+      });
+      yield* provider.reconcileDeprovisioning;
+
+      expect(allocationCalls.map((call) => call.operation)).toEqual([
+        "reserve",
+        "recordTunnel",
+        "recordDns",
+        "markReady",
+        "listCleanupCandidates",
+        "requestDeprovision",
+        "get",
+        "markDeprovisionAttempt",
+        "remove",
+      ]);
+    }).pipe(
+      Effect.provide(providerLayer(makePersistentTunnelClient(), makeDnsClient(), allocations)),
+    );
   });
 
   it.effect("scopes managed endpoint resources by user", () => {

@@ -182,6 +182,9 @@ function makeAllocations(
     tunnelName: "tunnel-name",
     dnsRecordId: "dns-record-id",
     readyAt: "2026-05-25T00:00:00.000Z",
+    deprovisionRequestedAt: null,
+    lastDeprovisionAttemptAt: null,
+    lastDeprovisionError: null,
   },
 ): ManagedEndpointAllocations.ManagedEndpointAllocationsShape {
   return {
@@ -190,6 +193,10 @@ function makeAllocations(
     recordTunnel: () => Effect.die("unused"),
     recordDns: () => Effect.die("unused"),
     markReady: () => Effect.die("unused"),
+    requestDeprovision: () => Effect.die("unused"),
+    markDeprovisionAttempt: () => Effect.die("unused"),
+    recordDeprovisionFailure: () => Effect.die("unused"),
+    listCleanupCandidates: () => Effect.die("unused"),
     remove: () => Effect.die("unused"),
   };
 }
@@ -369,6 +376,9 @@ describe("EnvironmentConnector", () => {
             tunnelName: "tunnel-name",
             dnsRecordId: "dns-record-id",
             readyAt: null,
+            deprovisionRequestedAt: null,
+            lastDeprovisionAttemptAt: null,
+            lastDeprovisionError: null,
           }),
         }),
       ),

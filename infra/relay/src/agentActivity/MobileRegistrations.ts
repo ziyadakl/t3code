@@ -9,10 +9,12 @@ import * as Layer from "effect/Layer";
 import * as Devices from "./Devices.ts";
 import * as LiveActivities from "./LiveActivities.ts";
 import * as AgentActivityPublisher from "./AgentActivityPublisher.ts";
+import * as Entitlements from "../entitlements/Entitlements.ts";
 
 export type MobileRegistrationError =
   | Devices.DeviceRegistrationPersistenceError
   | Devices.DeviceUnregistrationPersistenceError
+  | Entitlements.UserResourceQuotaExceeded
   | LiveActivities.LiveActivityRegistrationPersistenceError;
 
 export interface MobileRegistrationsShape {

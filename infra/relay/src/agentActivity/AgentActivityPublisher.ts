@@ -17,6 +17,7 @@ import * as ApnsDeliveries from "./ApnsDeliveries.ts";
 
 export type AgentActivityPublishError =
   | AgentActivityRows.AgentActivityRowUpsertPersistenceError
+  | AgentActivityRows.AgentActivityRowQuotaExceeded
   | AgentActivityRows.AgentActivityRowDeletePersistenceError
   | AgentActivityRows.AgentActivityRowListPersistenceError
   | EnvironmentLinks.EnvironmentLinkUserListPersistenceError

@@ -8,6 +8,7 @@ import * as Layer from "effect/Layer";
 import { RelayDb, type RelayDatabase } from "../db.ts";
 import { relayLiveActivities, relayMobileDevices } from "../persistence/schema.ts";
 import * as Devices from "./Devices.ts";
+import * as Entitlements from "../entitlements/Entitlements.ts";
 
 const registration: RelayDeviceRegistrationRequest = {
   deviceId: "device-1" as RelayDeviceRegistrationRequest["deviceId"],
@@ -27,7 +28,60 @@ const registration: RelayDeviceRegistrationRequest = {
   },
 };
 
+const entitlements = Entitlements.Entitlements.of({
+  getEffectiveForUser: () =>
+    Effect.succeed({
+      managedEndpointLimit: 3,
+      mobileDeviceLimit: 5,
+      rateLimitTier: "standard",
+    }),
+  withUserLock: (_userId, effect) => effect,
+});
+
+function devicesLayer(fakeDb: RelayDatabase) {
+  return Devices.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.succeed(RelayDb, fakeDb),
+        Layer.succeed(Entitlements.Entitlements, entitlements),
+      ),
+    ),
+  );
+}
+
 describe("Devices", () => {
+  it.effect("rejects a new device when the user is at the configured cap", () => {
+    let selectCount = 0;
+    const fakeDb = {
+      select: () => {
+        selectCount++;
+        return {
+          from: () => ({
+            where: () =>
+              selectCount === 1
+                ? { limit: () => Effect.succeed([]) }
+                : Effect.succeed([{ value: 5 }]),
+          }),
+        };
+      },
+      insert: () => {
+        throw new Error("device insert should not run");
+      },
+    } as unknown as RelayDatabase;
+
+    return Effect.gen(function* () {
+      const devices = yield* Devices.Devices;
+      const error = yield* Effect.flip(devices.register({ userId: "user-2", registration }));
+
+      expect(error).toEqual(
+        new Entitlements.UserResourceQuotaExceeded({
+          resource: "mobile_devices",
+          limit: 5,
+        }),
+      );
+    }).pipe(Effect.provide(devicesLayer(fakeDb)));
+  });
+
   it.effect("claims APNs tokens globally before upserting the current user device", () => {
     const calls: Array<string> = [];
     const updateSets: Array<Record<string, unknown>> = [];
@@ -36,6 +90,13 @@ describe("Devices", () => {
     const dialect = new PgDialect();
 
     const fakeDb = {
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: () => Effect.succeed([{ deviceId: "device-1" }]),
+          }),
+        }),
+      }),
       update: (table: unknown) => {
         expect(table).toBe(relayMobileDevices);
         calls.push("update");
@@ -110,7 +171,7 @@ describe("Devices", () => {
           pushToStartToken: "push-to-start-token",
         }),
       ]);
-    }).pipe(Effect.provide(Devices.layer.pipe(Layer.provide(Layer.succeed(RelayDb, fakeDb)))));
+    }).pipe(Effect.provide(devicesLayer(fakeDb)));
   });
 
   it.effect("unregisters APNs state only for the current user device", () => {
@@ -156,7 +217,7 @@ describe("Devices", () => {
           params: ["user-2", "device-1"],
         },
       ]);
-    }).pipe(Effect.provide(Devices.layer.pipe(Layer.provide(Layer.succeed(RelayDb, fakeDb)))));
+    }).pipe(Effect.provide(devicesLayer(fakeDb)));
   });
 
   it.effect("lists safe notification state without exposing APNs tokens", () => {
@@ -215,6 +276,6 @@ describe("Devices", () => {
           updatedAt: "2026-06-01T00:00:00.000Z",
         },
       ]);
-    }).pipe(Effect.provide(Devices.layer.pipe(Layer.provide(Layer.succeed(RelayDb, fakeDb)))));
+    }).pipe(Effect.provide(devicesLayer(fakeDb)));
   });
 });

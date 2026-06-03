@@ -60,6 +60,8 @@ export class EnvironmentLinkRevokePersistenceError extends Data.TaggedError(
   readonly cause: unknown;
 }> {}
 
+const MAX_AGENT_AWARENESS_DELIVERY_USERS = 10;
+
 export interface EnvironmentLinksShape {
   readonly upsert: (input: {
     readonly userId: string;
@@ -198,7 +200,17 @@ const make = Effect.gen(function* () {
         })
         .from(relayEnvironmentLinks)
         .where(agentAwarenessDeliveryUserKeyCondition(input))
+        .limit(MAX_AGENT_AWARENESS_DELIVERY_USERS + 1)
         .pipe(
+          Effect.flatMap((rows) =>
+            rows.length > MAX_AGENT_AWARENESS_DELIVERY_USERS
+              ? Effect.fail(
+                  new EnvironmentLinkUserListPersistenceError({
+                    cause: new Error("Agent-awareness delivery fanout limit exceeded."),
+                  }),
+                )
+              : Effect.succeed(rows),
+          ),
           Effect.map((rows) =>
             rows.map((row) => ({
               userId: row.userId,

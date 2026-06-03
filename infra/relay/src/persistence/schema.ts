@@ -3,8 +3,10 @@ import type {
   RelayAgentActivityState,
   RelayAgentAwarenessPreferences,
 } from "@t3tools/contracts/relay";
+import { sql } from "drizzle-orm";
 import {
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -93,6 +95,9 @@ export const relayManagedEndpointAllocations = pgTable(
     tunnelName: text("tunnel_name").notNull(),
     dnsRecordId: varchar("dns_record_id", { length: 191 }),
     readyAt: varchar("ready_at", { length: 64 }),
+    deprovisionRequestedAt: varchar("deprovision_requested_at", { length: 64 }),
+    lastDeprovisionAttemptAt: varchar("last_deprovision_attempt_at", { length: 64 }),
+    lastDeprovisionError: text("last_deprovision_error"),
     createdAt: varchar("created_at", { length: 64 }).notNull(),
     updatedAt: varchar("updated_at", { length: 64 }).notNull(),
   },
@@ -100,6 +105,40 @@ export const relayManagedEndpointAllocations = pgTable(
     primaryKey({ columns: [table.userId, table.environmentId] }),
     uniqueIndex("idx_relay_managed_endpoint_allocations_hostname").on(table.hostname),
     uniqueIndex("idx_relay_managed_endpoint_allocations_tunnel_name").on(table.tunnelName),
+    index("idx_relay_managed_endpoint_allocations_cleanup").on(
+      table.deprovisionRequestedAt,
+      table.updatedAt,
+    ),
+  ],
+);
+
+export const relayUserEntitlements = pgTable(
+  "relay_user_entitlements",
+  {
+    userId: varchar("user_id", { length: 255 }).primaryKey(),
+    managedEndpointLimit: integer("managed_endpoint_limit"),
+    mobileDeviceLimit: integer("mobile_device_limit"),
+    rateLimitTier: varchar("rate_limit_tier", { length: 32 }).$type<
+      "standard" | "trusted" | "blocked"
+    >(),
+    expiresAt: varchar("expires_at", { length: 64 }),
+    reason: text("reason"),
+    createdAt: varchar("created_at", { length: 64 }).notNull(),
+    updatedAt: varchar("updated_at", { length: 64 }).notNull(),
+  },
+  (table) => [
+    check(
+      "chk_relay_user_entitlements_managed_endpoint_limit",
+      sql`${table.managedEndpointLimit} IS NULL OR ${table.managedEndpointLimit} >= 0`,
+    ),
+    check(
+      "chk_relay_user_entitlements_mobile_device_limit",
+      sql`${table.mobileDeviceLimit} IS NULL OR ${table.mobileDeviceLimit} >= 0`,
+    ),
+    check(
+      "chk_relay_user_entitlements_rate_limit_tier",
+      sql`${table.rateLimitTier} IS NULL OR ${table.rateLimitTier} IN ('standard', 'trusted', 'blocked')`,
+    ),
   ],
 );
 
