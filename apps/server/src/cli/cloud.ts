@@ -1,6 +1,6 @@
 import { AuthRelayWriteScope, EnvironmentHttpApi } from "@t3tools/contracts";
 import { RelayOkResponse } from "@t3tools/contracts/relay";
-import * as Cloudflared from "@t3tools/shared/cloudflared";
+import * as RelayClient from "@t3tools/shared/relayClient";
 import * as Console from "effect/Console";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -9,7 +9,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as References from "effect/References";
-import { Command, Flag, GlobalFlag } from "effect/unstable/cli";
+import { Command, Flag, GlobalFlag, Prompt } from "effect/unstable/cli";
 import {
   FetchHttpClient,
   HttpClient,
@@ -45,12 +45,10 @@ interface CloudCliStatus {
   readonly linked: boolean;
   readonly cloudUserId: string | null;
   readonly relayUrl: string | null;
-  readonly cloudflared: Cloudflared.CloudflaredExecutableStatus;
+  readonly relayClient: RelayClient.RelayClientStatus;
 }
 
-function formatCloudflaredStatus(
-  executable: Cloudflared.CloudflaredExecutableStatus,
-): ReadonlyArray<string> {
+function formatRelayClientStatus(executable: RelayClient.RelayClientStatus): ReadonlyArray<string> {
   switch (executable.status) {
     case "available": {
       const source =
@@ -60,16 +58,16 @@ function formatCloudflaredStatus(
             ? "managed install"
             : "configured override";
       return [
-        `  cloudflared: available via ${source}`,
+        `  Relay client: available via ${source}`,
         `    Path: ${executable.executablePath}`,
         `    Version: ${executable.version}`,
       ];
     }
     case "missing":
-      return [`  cloudflared: not installed (managed version ${executable.version})`];
+      return ["  Relay client: not installed"];
     case "unsupported":
       return [
-        `  cloudflared: unsupported on ${executable.platform}-${executable.arch}`,
+        `  Relay client: unsupported on ${executable.platform}-${executable.arch}`,
         `    Managed version: ${executable.version}`,
       ];
   }
@@ -99,12 +97,39 @@ function formatCloudStatus(status: CloudCliStatus, options?: { readonly json?: b
     `  Authorization: ${status.authenticated ? "stored credential" : "missing"}`,
     `  Environment link: ${provisioned}`,
     `  Relay: ${status.relayUrl ?? "not provisioned"}`,
-    ...formatCloudflaredStatus(status.cloudflared),
+    ...formatRelayClientStatus(status.relayClient),
     ...(nextStep ? ["", `Next: ${nextStep}`] : []),
   ].join("\n");
 }
 
 const CLOUD_CLI_LIVE_SERVER_TIMEOUT = Duration.seconds(5);
+
+const confirmRelayClientInstall = (version: string) =>
+  Prompt.run(
+    Prompt.confirm({
+      message: `The T3 relay client is required for T3 Cloud exposure. Download and install version ${version}?`,
+      initial: false,
+    }),
+  );
+
+export const acquireRelayClientForLink = Effect.fn("cloud.cli.acquire_relay_client_for_link")(
+  function* <E, R>(
+    relayClient: RelayClient.RelayClientShape,
+    confirmInstall: (version: string) => Effect.Effect<boolean, E, R>,
+  ) {
+    const executable = yield* relayClient.resolve;
+    if (executable.status === "available") {
+      return Option.some(executable);
+    }
+    if (executable.status === "unsupported") {
+      return Option.some(yield* relayClient.install);
+    }
+    if (!(yield* confirmInstall(executable.version))) {
+      return Option.none();
+    }
+    return Option.some(yield* relayClient.install);
+  },
+);
 
 const withCloudCliSessionToken = <A, E, R>(
   environmentAuth: EnvironmentAuth.EnvironmentAuthShape,
@@ -222,10 +247,11 @@ const runCloudCommand = <A, E>(
     E,
     | ServerSecretStore.ServerSecretStore
     | CliTokenManager.CloudCliTokenManager
-    | Cloudflared.CloudflaredExecutable
+    | RelayClient.RelayClient
     | EnvironmentAuth.EnvironmentAuth
     | FileSystem.FileSystem
     | HttpClient.HttpClient
+    | Prompt.Environment
     | ServerConfig
     | ServerEnvironment
   >,
@@ -240,7 +266,7 @@ const runCloudCommand = <A, E>(
     const runtimeLayer = Layer.mergeAll(
       ServerSecretStore.layer,
       CliTokenManager.layer.pipe(Layer.provide(ServerSecretStore.layer)),
-      Cloudflared.layer({ baseDir: config.baseDir }),
+      RelayClient.layerCloudflared({ baseDir: config.baseDir }),
       EnvironmentAuth.runtimeLayer,
       ServerEnvironmentLive,
     ).pipe(
@@ -275,12 +301,14 @@ const cloudLinkCommand = Command.make("link", {
     runCloudCommand(
       flags,
       Effect.gen(function* () {
-        const cloudflared = yield* Cloudflared.CloudflaredExecutable;
-        const executable = yield* cloudflared.resolve;
-        const installed =
-          executable.status === "available" ? executable : yield* cloudflared.install;
+        const relayClient = yield* RelayClient.RelayClient;
+        const installed = yield* acquireRelayClientForLink(relayClient, confirmRelayClientInstall);
+        if (Option.isNone(installed)) {
+          yield* Console.log("T3 Cloud link cancelled. The relay client was not installed.");
+          return;
+        }
         yield* Console.log(
-          `Using cloudflared ${installed.version} from ${installed.executablePath}.`,
+          `Using relay client ${installed.value.version} from ${installed.value.executablePath}.`,
         );
 
         const tokens = yield* CliTokenManager.CloudCliTokenManager;
@@ -298,13 +326,13 @@ const cloudStatusCommand = Command.make("status", {
   ...projectLocationFlags,
   json: jsonFlag,
 }).pipe(
-  Command.withDescription("Show persisted T3 Cloud and cloudflared state."),
+  Command.withDescription("Show persisted T3 Cloud and relay client state."),
   Command.withHandler((flags) =>
     runCloudCommand(
       flags,
       Effect.gen(function* () {
         const secrets = yield* ServerSecretStore.ServerSecretStore;
-        const cloudflared = yield* Cloudflared.CloudflaredExecutable;
+        const relayClient = yield* RelayClient.RelayClient;
         const tokens = yield* CliTokenManager.CloudCliTokenManager;
         const [desired, authenticated, cloudUserId, relayUrl, executable] = yield* Effect.all(
           [
@@ -312,7 +340,7 @@ const cloudStatusCommand = Command.make("status", {
             tokens.hasCredential,
             secrets.get(CLOUD_LINKED_USER_ID),
             secrets.get(RELAY_URL_SECRET),
-            cloudflared.resolve,
+            relayClient.resolve,
           ],
           { concurrency: "unbounded" },
         );
@@ -322,7 +350,7 @@ const cloudStatusCommand = Command.make("status", {
           linked: cloudUserId !== null,
           cloudUserId: cloudUserId ? bytesToString(cloudUserId) : null,
           relayUrl: relayUrl ? bytesToString(relayUrl) : null,
-          cloudflared: executable,
+          relayClient: executable,
         };
         yield* Console.log(formatCloudStatus(status, { json: flags.json }));
       }),
