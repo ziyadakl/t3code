@@ -185,16 +185,16 @@ export const makeCloudManagedEndpointRuntime = Effect.gen(function* () {
     const connectorScope = yield* Scope.make("sequential");
     const child = yield* spawner
       .spawn(
-        ChildProcess.make(
-          executable.executablePath,
-          ["tunnel", "run", "--token", config.connectorToken],
-          {
-            detached: false,
-            shell: process.platform === "win32",
-            stderr: "ignore",
-            stdout: "ignore",
+        ChildProcess.make(executable.executablePath, ["tunnel", "run"], {
+          detached: false,
+          env: {
+            ...process.env,
+            TUNNEL_TOKEN: config.connectorToken,
           },
-        ),
+          shell: false,
+          stderr: "ignore",
+          stdout: "ignore",
+        }),
       )
       .pipe(
         Effect.provideService(Scope.Scope, connectorScope),

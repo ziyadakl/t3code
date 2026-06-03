@@ -292,7 +292,7 @@ export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function
   ) {
     const child = yield* spawner.spawn(
       ChildProcess.make(command, args, {
-        shell: platform === "win32",
+        shell: false,
         stdout: "ignore",
         stderr: "ignore",
       }),

@@ -106,12 +106,17 @@ describe("CloudManagedEndpointRuntime", () => {
 
       expect(spawned.map((command) => command.command)).toEqual(["cloudflared", "cloudflared"]);
       expect(spawned.map((command) => command.args)).toEqual([
-        ["tunnel", "run", "--token", "token-1"],
-        ["tunnel", "run", "--token", "token-2"],
+        ["tunnel", "run"],
+        ["tunnel", "run"],
+      ]);
+      expect(spawned.map((command) => command.options.env?.TUNNEL_TOKEN)).toEqual([
+        "token-1",
+        "token-2",
       ]);
       expect(spawned.map((command) => command.options.stdout)).toEqual(["ignore", "ignore"]);
       expect(spawned.map((command) => command.options.stderr)).toEqual(["ignore", "ignore"]);
       expect(spawned.map((command) => command.options.detached)).toEqual([false, false]);
+      expect(spawned.map((command) => command.options.shell)).toEqual([false, false]);
       expect(killed).toEqual([100, 101]);
       expect(stopped).toEqual({ status: "disabled" });
     }),
