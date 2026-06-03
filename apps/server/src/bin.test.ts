@@ -181,22 +181,21 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
 
   it.effect("rejects cloud commands when public cloud configuration is missing", () =>
     Effect.gen(function* () {
-      const error = yield* runCli(["cloud", "status"], noCloudCli).pipe(
-        Effect.provide(CliRuntimeLayer),
-        Effect.flip,
-      );
+      const error = yield* runCli(["cloud", "status"], noCloudCli).pipe(Effect.flip);
 
       if (!CliError.isCliError(error)) {
         assert.fail(`Expected CliError, got ${String(error)}`);
       }
-      if (error._tag !== "UserError") {
-        assert.fail(`Expected UserError, got ${error._tag}`);
+      if (error._tag !== "ShowHelp") {
+        assert.fail(`Expected ShowHelp, got ${error._tag}`);
       }
-      if (!(error.cause instanceof Error)) {
-        assert.fail(`Expected Error cause, got ${String(error.cause)}`);
-      }
-      assert.include(error.cause.message, "missing T3 Cloud public configuration");
-    }),
+      assert.deepEqual(error.commandPath, ["t3", "cloud"]);
+      assert.include(error.errors[0]?.message ?? "", "missing T3 Cloud public configuration");
+
+      const output = (yield* TestConsole.errorLines).join("\n");
+      assert.include(output, "ERROR");
+      assert.include(output, "missing T3 Cloud public configuration");
+    }).pipe(Effect.provide(Layer.mergeAll(CliRuntimeLayer, TestConsole.layer))),
   );
 
   it.effect("reports fresh headless cloud state without requiring local configuration", () =>

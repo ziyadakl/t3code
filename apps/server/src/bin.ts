@@ -16,15 +16,23 @@ import { runServerCommand, serveCommand, startCommand } from "./cli/server.ts";
 
 const CliRuntimeLayer = Layer.mergeAll(NodeServices.layer, NetService.layer);
 
+const cloudPublicConfigMissingMessage =
+  "T3 Cloud commands are unavailable: this build is missing T3 Cloud public configuration.";
+
+class CloudPublicConfigMissingError extends CliError.UserError {
+  override get message() {
+    return cloudPublicConfigMissingMessage;
+  }
+}
+
 const cloudUnavailableCommand = Command.make("cloud").pipe(
   Command.withDescription("T3 Cloud is unavailable in builds without public cloud configuration."),
   Command.withHidden,
   Command.withHandler(() =>
     Effect.fail(
-      new CliError.UserError({
-        cause: new Error(
-          "T3 Cloud commands are unavailable: this build is missing T3 Cloud public configuration.",
-        ),
+      new CliError.ShowHelp({
+        commandPath: ["t3", "cloud"],
+        errors: [new CloudPublicConfigMissingError({ cause: cloudPublicConfigMissingMessage })],
       }),
     ),
   ),
