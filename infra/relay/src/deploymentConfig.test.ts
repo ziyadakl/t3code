@@ -4,6 +4,7 @@ import {
   managedEndpointDigestInput,
   managedEndpointHostname,
   managedEndpointTunnelName,
+  relayOwnsManagedEndpointZone,
   relayPublicDomainForStage,
   relayResourceNameForStage,
   relayStageSlug,
@@ -24,6 +25,13 @@ describe("relayPublicDomainForStage", () => {
     expect(relayPublicDomainForStage("dev_julius", "example.com")).toBe(
       "relay-dev-julius.example.com",
     );
+  });
+});
+
+describe("relayOwnsManagedEndpointZone", () => {
+  it("keeps the shared Cloudflare zone owned by production", () => {
+    expect(relayOwnsManagedEndpointZone("prod")).toBe(true);
+    expect(relayOwnsManagedEndpointZone("dev_julius")).toBe(false);
   });
 });
 

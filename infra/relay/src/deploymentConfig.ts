@@ -2,6 +2,7 @@ const DNS_LABEL_MAX_LENGTH = 63;
 const MANAGED_ENDPOINT_HASH_LENGTH = 16;
 const MANAGED_ENDPOINT_HOST_PREFIX = "tunnels";
 const MANAGED_ENDPOINT_TUNNEL_PREFIX = "t3coderelay-managedendpoint";
+export const MANAGED_ENDPOINT_ZONE_OWNER_STAGE = "prod";
 
 function normalizeZoneName(zoneName: string): string {
   return zoneName
@@ -35,6 +36,10 @@ export function relayStageSlug(stage: string): string {
 
 export function relayResourceNameForStage(name: string, stage: string): string {
   return `${name}-${relayStageSlug(stage)}`;
+}
+
+export function relayOwnsManagedEndpointZone(stage: string): boolean {
+  return stage === MANAGED_ENDPOINT_ZONE_OWNER_STAGE;
 }
 
 export function relayPublicDomainForStage(stage: string, zoneName: string): string {
