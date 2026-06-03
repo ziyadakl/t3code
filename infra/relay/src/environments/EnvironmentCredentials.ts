@@ -6,10 +6,10 @@ import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import { and, eq, isNull, ne } from "drizzle-orm";
+import { and, eq, isNull, ne, notExists } from "drizzle-orm";
 
 import { RelayDb } from "../db.ts";
-import { relayEnvironmentCredentials } from "../persistence/schema.ts";
+import { relayEnvironmentCredentials, relayEnvironmentLinks } from "../persistence/schema.ts";
 
 export class EnvironmentCredentialCreatePersistenceError extends Data.TaggedError(
   "EnvironmentCredentialCreatePersistenceError",
@@ -161,6 +161,18 @@ const make = Effect.gen(function* () {
               eq(relayEnvironmentCredentials.environmentId, input.environmentId),
               eq(relayEnvironmentCredentials.environmentPublicKey, input.environmentPublicKey),
               isNull(relayEnvironmentCredentials.revokedAt),
+              notExists(
+                db
+                  .select({ userId: relayEnvironmentLinks.userId })
+                  .from(relayEnvironmentLinks)
+                  .where(
+                    and(
+                      eq(relayEnvironmentLinks.environmentId, input.environmentId),
+                      eq(relayEnvironmentLinks.environmentPublicKey, input.environmentPublicKey),
+                      isNull(relayEnvironmentLinks.revokedAt),
+                    ),
+                  ),
+              ),
             ),
           )
           .returning({

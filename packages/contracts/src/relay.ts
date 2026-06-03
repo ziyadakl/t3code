@@ -188,9 +188,13 @@ export type RelayAgentActivityPublishProofPayload =
 export type RelayAgentActivityPublishProof = string;
 
 export const RelayAgentActivityPublishRequest = Schema.Struct({
-  state: Schema.NullOr(RelayAgentActivityState),
-  proof: TrimmedNonEmptyString,
-});
+  state: Schema.NullOr(RelayAgentActivityState).annotate({
+    description: "Current agent-awareness state, or null to remove the published state.",
+  }),
+  proof: TrimmedNonEmptyString.annotate({
+    description: "Environment-signed JWT covering this published activity state.",
+  }),
+}).annotate({ description: "Publishes a signed agent-awareness update from an environment." });
 export type RelayAgentActivityPublishRequest = typeof RelayAgentActivityPublishRequest.Type;
 
 export const RelayEnvironmentLinkScope = Schema.Literals([
@@ -215,10 +219,16 @@ export const RelayEnvironmentLinkProof = TrimmedNonEmptyString;
 export type RelayEnvironmentLinkProof = typeof RelayEnvironmentLinkProof.Type;
 
 export const RelayEnvironmentLinkChallengeRequest = Schema.Struct({
-  notificationsEnabled: Schema.Boolean,
-  liveActivitiesEnabled: Schema.Boolean,
-  managedTunnelsEnabled: Schema.Boolean,
-});
+  notificationsEnabled: Schema.Boolean.annotate({
+    description: "Whether this link may deliver push notifications.",
+  }),
+  liveActivitiesEnabled: Schema.Boolean.annotate({
+    description: "Whether this link may update Live Activities.",
+  }),
+  managedTunnelsEnabled: Schema.Boolean.annotate({
+    description: "Whether the relay should provision a managed tunnel for this environment.",
+  }),
+}).annotate({ description: "Requested capabilities for a new environment-link challenge." });
 export type RelayEnvironmentLinkChallengeRequest = typeof RelayEnvironmentLinkChallengeRequest.Type;
 
 export const RelayEnvironmentLinkChallengeResponse = Schema.Struct({
@@ -229,12 +239,18 @@ export type RelayEnvironmentLinkChallengeResponse =
   typeof RelayEnvironmentLinkChallengeResponse.Type;
 
 export const RelayEnvironmentLinkRequest = Schema.Struct({
-  deviceId: Schema.optional(TrimmedNonEmptyString),
-  proof: RelayEnvironmentLinkProof,
+  deviceId: Schema.optional(
+    TrimmedNonEmptyString.annotate({
+      description: "Optional client device identifier associated with this link.",
+    }),
+  ),
+  proof: RelayEnvironmentLinkProof.annotate({
+    description: "Environment-signed proof bound to a previously issued link challenge.",
+  }),
   notificationsEnabled: Schema.Boolean,
   liveActivitiesEnabled: Schema.Boolean,
   managedTunnelsEnabled: Schema.Boolean,
-});
+}).annotate({ description: "Links an authenticated cloud user to a T3 environment." });
 export type RelayEnvironmentLinkRequest = typeof RelayEnvironmentLinkRequest.Type;
 
 export const RelayEnvironmentLinkResponse = Schema.Struct({
@@ -519,10 +535,22 @@ export const RelayListEnvironmentsResponse = Schema.Struct({
 export type RelayListEnvironmentsResponse = typeof RelayListEnvironmentsResponse.Type;
 
 export const RelayEnvironmentConnectRequest = Schema.Struct({
-  deviceId: Schema.optional(TrimmedNonEmptyString),
-  clientKeyThumbprint: Schema.optional(TrimmedNonEmptyString),
-  clientProofKeyThumbprint: Schema.optional(TrimmedNonEmptyString),
-});
+  deviceId: Schema.optional(
+    TrimmedNonEmptyString.annotate({
+      description: "Optional client device identifier requesting the connection.",
+    }),
+  ),
+  clientKeyThumbprint: Schema.optional(
+    TrimmedNonEmptyString.annotate({
+      description: "Deprecated alias for clientProofKeyThumbprint.",
+    }),
+  ),
+  clientProofKeyThumbprint: Schema.optional(
+    TrimmedNonEmptyString.annotate({
+      description: "JWK thumbprint that the minted environment credential must be bound to.",
+    }),
+  ),
+}).annotate({ description: "Requests a short-lived credential for connecting to an environment." });
 export type RelayEnvironmentConnectRequest = typeof RelayEnvironmentConnectRequest.Type;
 
 export const RelayEnvironmentConnectScope = "environment:connect" as const;
@@ -546,13 +574,21 @@ export const RelayWebClientId = "t3-web" as const;
 
 export const RelayDpopAccessTokenRequest = Schema.Struct({
   grant_type: Schema.Literal(RelayDpopTokenExchangeGrantType),
-  subject_token: TrimmedNonEmptyString,
+  subject_token: TrimmedNonEmptyString.annotate({
+    description: "Clerk bearer token for the signed-in cloud user.",
+  }),
   subject_token_type: Schema.Literal(RelayJwtSubjectTokenType),
   requested_token_type: Schema.Literal(RelayAccessTokenType),
-  resource: TrimmedNonEmptyString,
-  scope: TrimmedNonEmptyString,
+  resource: TrimmedNonEmptyString.annotate({
+    description: "Relay issuer URL that will receive the DPoP-bound access token.",
+  }),
+  scope: TrimmedNonEmptyString.annotate({
+    description: "Space-separated relay scopes requested by the client.",
+  }),
   client_id: RelayPublicClientId,
-}).pipe(HttpApiSchema.asFormUrlEncoded());
+})
+  .annotate({ description: "OAuth token exchange request for a DPoP-bound relay access token." })
+  .pipe(HttpApiSchema.asFormUrlEncoded());
 export type RelayDpopAccessTokenRequest = typeof RelayDpopAccessTokenRequest.Type;
 
 export const RelayDpopAccessTokenResponse = Schema.Struct({
@@ -731,21 +767,25 @@ export const RelayHealthResponse = Schema.Struct({
 });
 export type RelayHealthResponse = typeof RelayHealthResponse.Type;
 
-export const RelayHealthGroup = HttpApiGroup.make("health").add(
-  HttpApiEndpoint.get("health", "/health", {
-    success: RelayHealthResponse,
-    error: RelayInternalError,
-  }),
-);
+export const RelayHealthGroup = HttpApiGroup.make("health")
+  .add(
+    HttpApiEndpoint.get("health", "/health", {
+      success: RelayHealthResponse,
+      error: RelayInternalError,
+    }).annotate(OpenApi.Summary, "Check relay health"),
+  )
+  .annotate(OpenApi.Description, "Service health and readiness.");
 
-export const RelayMetadataGroup = HttpApiGroup.make("metadata").add(
-  HttpApiEndpoint.get("authorizationServer", "/.well-known/oauth-authorization-server", {
-    success: RelayAuthorizationServerMetadata,
-  }),
-  HttpApiEndpoint.get("protectedResource", "/.well-known/oauth-protected-resource", {
-    success: RelayProtectedResourceMetadata,
-  }),
-);
+export const RelayMetadataGroup = HttpApiGroup.make("metadata")
+  .add(
+    HttpApiEndpoint.get("authorizationServer", "/.well-known/oauth-authorization-server", {
+      success: RelayAuthorizationServerMetadata,
+    }).annotate(OpenApi.Summary, "Read OAuth authorization-server metadata"),
+    HttpApiEndpoint.get("protectedResource", "/.well-known/oauth-protected-resource", {
+      success: RelayProtectedResourceMetadata,
+    }).annotate(OpenApi.Summary, "Read OAuth protected-resource metadata"),
+  )
+  .annotate(OpenApi.Description, "OAuth and DPoP discovery metadata.");
 
 export const RelayRegisterDeviceEndpoint = HttpApiEndpoint.post(
   "registerDevice",
@@ -756,7 +796,7 @@ export const RelayRegisterDeviceEndpoint = HttpApiEndpoint.post(
     success: RelayOkResponse,
     error: RelayAuthAndInternalErrors,
   },
-);
+).annotate(OpenApi.Summary, "Register or update a mobile device");
 
 export const RelayRegisterLiveActivityEndpoint = HttpApiEndpoint.post(
   "registerLiveActivity",
@@ -767,7 +807,7 @@ export const RelayRegisterLiveActivityEndpoint = HttpApiEndpoint.post(
     success: RelayOkResponse,
     error: RelayAuthAndInternalErrors,
   },
-);
+).annotate(OpenApi.Summary, "Register a Live Activity push token");
 
 export const RelayUnregisterDeviceEndpoint = HttpApiEndpoint.delete(
   "unregisterDevice",
@@ -778,7 +818,7 @@ export const RelayUnregisterDeviceEndpoint = HttpApiEndpoint.delete(
     success: RelayOkResponse,
     error: RelayAuthAndInternalErrors,
   },
-);
+).annotate(OpenApi.Summary, "Unregister a mobile device");
 
 export const RelayMobileGroup = HttpApiGroup.make("mobile")
   .add(
@@ -786,6 +826,7 @@ export const RelayMobileGroup = HttpApiGroup.make("mobile")
     RelayRegisterLiveActivityEndpoint,
     RelayUnregisterDeviceEndpoint,
   )
+  .annotate(OpenApi.Description, "Mobile push-notification and Live Activity registration.")
   .middleware(RelayDpopClientAuth);
 
 export const RelayClientGroup = HttpApiGroup.make("client")
@@ -794,18 +835,18 @@ export const RelayClientGroup = HttpApiGroup.make("client")
       headers: RelayBearerRequestHeaders,
       success: RelayListEnvironmentsResponse,
       error: RelayAuthAndInternalErrors,
-    }),
+    }).annotate(OpenApi.Summary, "List linked environments"),
     HttpApiEndpoint.get("listDevices", "/v1/client/devices", {
       headers: RelayBearerRequestHeaders,
       success: RelayListDevicesResponse,
       error: RelayAuthAndInternalErrors,
-    }),
+    }).annotate(OpenApi.Summary, "List registered mobile devices"),
     HttpApiEndpoint.post("linkEnvironment", "/v1/client/environment-links", {
       headers: RelayBearerRequestHeaders,
       payload: RelayEnvironmentLinkRequest,
       success: RelayEnvironmentLinkResponse,
       error: RelayEnvironmentLinkErrors,
-    }),
+    }).annotate(OpenApi.Summary, "Link an environment"),
     HttpApiEndpoint.post(
       "createEnvironmentLinkChallenge",
       "/v1/client/environment-link-challenges",
@@ -815,14 +856,15 @@ export const RelayClientGroup = HttpApiGroup.make("client")
         success: RelayEnvironmentLinkChallengeResponse,
         error: RelayAuthAndInternalErrors,
       },
-    ),
+    ).annotate(OpenApi.Summary, "Create an environment-link challenge"),
     HttpApiEndpoint.delete("unlinkEnvironment", "/v1/client/environment-links/:environmentId", {
       headers: RelayBearerRequestHeaders,
       params: RelayEnvironmentUnlinkParams,
       success: RelayOkResponse,
       error: RelayAuthAndInternalErrors,
-    }),
+    }).annotate(OpenApi.Summary, "Unlink an environment"),
   )
+  .annotate(OpenApi.Description, "Cloud-user environment links and registered devices.")
   .middleware(RelayClientAuth);
 
 export const RelayExchangeDpopAccessTokenEndpoint = HttpApiEndpoint.post(
@@ -834,9 +876,11 @@ export const RelayExchangeDpopAccessTokenEndpoint = HttpApiEndpoint.post(
     success: RelayDpopAccessTokenResponse,
     error: RelayAuthAndInternalErrors,
   },
-);
+).annotate(OpenApi.Summary, "Exchange a Clerk token for a DPoP access token");
 
-export const RelayTokenGroup = HttpApiGroup.make("token").add(RelayExchangeDpopAccessTokenEndpoint);
+export const RelayTokenGroup = HttpApiGroup.make("token")
+  .add(RelayExchangeDpopAccessTokenEndpoint)
+  .annotate(OpenApi.Description, "OAuth token exchange for DPoP-bound client access.");
 
 export const RelayConnectEnvironmentEndpoint = HttpApiEndpoint.post(
   "connectEnvironment",
@@ -850,7 +894,7 @@ export const RelayConnectEnvironmentEndpoint = HttpApiEndpoint.post(
     success: RelayEnvironmentConnectResponse,
     error: RelayEnvironmentConnectErrors,
   },
-);
+).annotate(OpenApi.Summary, "Connect to an environment");
 
 export const RelayGetEnvironmentStatusEndpoint = HttpApiEndpoint.post(
   "getEnvironmentStatus",
@@ -863,10 +907,11 @@ export const RelayGetEnvironmentStatusEndpoint = HttpApiEndpoint.post(
     success: RelayEnvironmentStatusResponse,
     error: RelayEnvironmentConnectErrors,
   },
-);
+).annotate(OpenApi.Summary, "Check environment status");
 
 export const RelayDpopClientGroup = HttpApiGroup.make("dpopClient")
   .add(RelayConnectEnvironmentEndpoint, RelayGetEnvironmentStatusEndpoint)
+  .annotate(OpenApi.Description, "DPoP-authenticated client access to linked environments.")
   .middleware(RelayDpopClientAuth);
 
 export const RelayServerGroup = HttpApiGroup.make("server")
@@ -883,17 +928,25 @@ export const RelayServerGroup = HttpApiGroup.make("server")
         success: RelayPublishResponse,
         error: RelayAgentActivityPublishErrors,
       },
-    ),
+    ).annotate(OpenApi.Summary, "Publish agent activity"),
   )
+  .annotate(OpenApi.Description, "Environment-authenticated activity publication.")
   .middleware(RelayEnvironmentAuth);
 
-export const RelayApi = HttpApi.make("RelayApi").add(
-  RelayHealthGroup,
-  RelayMetadataGroup,
-  RelayMobileGroup,
-  RelayClientGroup,
-  RelayTokenGroup,
-  RelayDpopClientGroup,
-  RelayServerGroup,
-);
+export const RelayApi = HttpApi.make("RelayApi")
+  .add(
+    RelayHealthGroup,
+    RelayMetadataGroup,
+    RelayMobileGroup,
+    RelayClientGroup,
+    RelayTokenGroup,
+    RelayDpopClientGroup,
+    RelayServerGroup,
+  )
+  .annotate(OpenApi.Title, "T3 Code Relay API")
+  .annotate(OpenApi.Version, "1.0.0")
+  .annotate(
+    OpenApi.Description,
+    "Control-plane API for linking T3 environments, connecting authorized clients, and publishing agent activity.",
+  );
 export type RelayApi = typeof RelayApi;

@@ -192,6 +192,25 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
     expect(AgentAwarenessRelay.isAgentActivityPublishingEnabled("true")).toBe(true);
   });
 
+  it("redacts failed activity details and caps other relay detail", () => {
+    expect(
+      AgentAwarenessRelay.sanitizeRelayAgentActivityState({
+        ...state,
+        phase: "failed",
+        detail: "Provider process exited with secret token.",
+      }),
+    ).toMatchObject({
+      phase: "failed",
+      detail: "The agent run failed.",
+    });
+    expect(
+      AgentAwarenessRelay.sanitizeRelayAgentActivityState({
+        ...state,
+        detail: "x".repeat(200),
+      })?.detail,
+    ).toHaveLength(160);
+  });
+
   it("resolves a null publish state when a thread or project snapshot disappeared", () => {
     const environmentId = "env-1" as EnvironmentId;
     const threadId = "thread-1" as ThreadId;

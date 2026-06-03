@@ -99,6 +99,23 @@ export function isAgentActivityPublishingEnabled(value: string | null): boolean 
   return value === "true";
 }
 
+const RELAY_AGENT_ACTIVITY_DETAIL_MAX_LENGTH = 160;
+const REDACTED_RELAY_AGENT_FAILURE_DETAIL = "The agent run failed.";
+
+export function sanitizeRelayAgentActivityState(
+  state: RelayAgentActivityState | null,
+): RelayAgentActivityState | null {
+  if (state === null) {
+    return null;
+  }
+  const { detail: _detail, ...rest } = state;
+  const detail = (state.phase === "failed" ? REDACTED_RELAY_AGENT_FAILURE_DETAIL : state.detail)
+    ?.trim()
+    .slice(0, RELAY_AGENT_ACTIVITY_DETAIL_MAX_LENGTH)
+    .trim();
+  return detail ? { ...rest, detail } : rest;
+}
+
 function relayEnvironmentClient(token: string) {
   return HttpClient.mapRequest(HttpClientRequest.setHeader("authorization", `Bearer ${token}`));
 }
@@ -203,11 +220,13 @@ export function resolveAgentAwarenessRelayPublishSnapshot(input: {
   }
   return {
     projectId: input.thread.value.projectId,
-    state: projectThreadAwareness({
-      environmentId: input.environmentId,
-      project: input.project.value,
-      thread: input.thread.value,
-    }),
+    state: sanitizeRelayAgentActivityState(
+      projectThreadAwareness({
+        environmentId: input.environmentId,
+        project: input.project.value,
+        thread: input.thread.value,
+      }),
+    ),
     reason: "snapshot",
   };
 }

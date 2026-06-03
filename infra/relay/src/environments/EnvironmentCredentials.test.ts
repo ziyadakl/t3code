@@ -1,6 +1,6 @@
 import * as NodeCryptoLayer from "@effect/platform-node/NodeCrypto";
 import { describe, expect, it } from "@effect/vitest";
-import { PgDialect } from "drizzle-orm/pg-core";
+import { PgDialect, QueryBuilder } from "drizzle-orm/pg-core";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -98,6 +98,7 @@ describe("EnvironmentCredentials", () => {
     const updateValues: Array<Record<string, unknown>> = [];
     const whereConditions: Array<unknown> = [];
     const fakeDb = {
+      select: (fields: Parameters<QueryBuilder["select"]>[0]) => new QueryBuilder().select(fields),
       update: (table: unknown) => {
         expect(table).toBe(relayEnvironmentCredentials);
         return {
@@ -135,7 +136,16 @@ describe("EnvironmentCredentials", () => {
       expect(query.sql).toContain('"relay_environment_credentials"."environment_id" = $1');
       expect(query.sql).toContain('"relay_environment_credentials"."environment_public_key" = $2');
       expect(query.sql).toContain('"relay_environment_credentials"."revoked_at" is null');
-      expect(query.params).toEqual(["env_test", "environment-public-key"]);
+      expect(query.sql).toContain("not exists");
+      expect(query.sql).toContain('"relay_environment_links"."environment_id" = $3');
+      expect(query.sql).toContain('"relay_environment_links"."environment_public_key" = $4');
+      expect(query.sql).toContain('"relay_environment_links"."revoked_at" is null');
+      expect(query.params).toEqual([
+        "env_test",
+        "environment-public-key",
+        "env_test",
+        "environment-public-key",
+      ]);
     }).pipe(
       Effect.provide(
         EnvironmentCredentials.layer.pipe(

@@ -526,7 +526,6 @@ const cloudPreferencesHandler = Effect.fn("environment.cloud.preferences")(
 
 const cloudEnvironmentHealthHandler = Effect.fn("environment.cloud.health")(
   function* (dependencies: CloudHttpDependencies, request: RelayCloudEnvironmentHealthRequest) {
-    const keyPair = yield* getOrCreateEnvironmentKeyPairFromSecretStore(dependencies.secrets);
     const cloudMintPublicKey = yield* dependencies.secrets.get(CLOUD_MINT_PUBLIC_KEY).pipe(
       Effect.flatMap((bytes) =>
         bytes
@@ -593,6 +592,7 @@ const cloudEnvironmentHealthHandler = Effect.fn("environment.cloud.health")(
       });
     }
 
+    const keyPair = yield* getOrCreateEnvironmentKeyPairFromSecretStore(dependencies.secrets);
     const descriptor = yield* dependencies.environment.getDescriptor;
     const responseExpiresAt = DateTime.add(now, { minutes: 5 });
     const responsePayload = {
@@ -643,7 +643,6 @@ const cloudEnvironmentHealthHandler = Effect.fn("environment.cloud.health")(
 
 const cloudMintCredentialHandler = Effect.fn("environment.cloud.mintCredential")(
   function* (dependencies: CloudHttpDependencies, request: RelayCloudMintCredentialRequest) {
-    const keyPair = yield* getOrCreateEnvironmentKeyPairFromSecretStore(dependencies.secrets);
     const cloudMintPublicKey = yield* dependencies.secrets.get(CLOUD_MINT_PUBLIC_KEY).pipe(
       Effect.flatMap((bytes) =>
         bytes
@@ -711,6 +710,7 @@ const cloudMintCredentialHandler = Effect.fn("environment.cloud.mintCredential")
       });
     }
 
+    const keyPair = yield* getOrCreateEnvironmentKeyPairFromSecretStore(dependencies.secrets);
     const issued = yield* dependencies.environmentAuth.createPairingLink({
       scopes: AuthStandardClientScopes,
       subject: "cloud-connect",
