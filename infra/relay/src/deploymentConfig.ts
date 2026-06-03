@@ -51,8 +51,12 @@ export function relayPublicDomainForStage(stage: string, zoneName: string): stri
   return `${relayLabel}.${normalizeZoneName(zoneName)}`;
 }
 
-export function managedEndpointDigestInput(stage: string, environmentId: string): string {
-  return `${stage}:${environmentId}`;
+export function managedEndpointDigestInput(
+  stage: string,
+  userId: string,
+  environmentId: string,
+): string {
+  return `${stage}:${userId}:${environmentId}`;
 }
 
 export function managedEndpointHostname(stage: string, baseDomain: string, hash: string): string {

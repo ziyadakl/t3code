@@ -22,6 +22,7 @@ import {
   managedEndpointHostname,
   managedEndpointTunnelName,
 } from "../deploymentConfig.ts";
+import { ManagedEndpointAllocations } from "./ManagedEndpointAllocations.ts";
 
 export class ManagedEndpointProvisioningNotConfigured extends Data.TaggedError(
   "ManagedEndpointProvisioningNotConfigured",
@@ -52,6 +53,7 @@ export interface ManagedEndpointProvisioningResult {
 
 export interface ManagedEndpointProviderShape {
   readonly provision: (input: {
+    readonly userId: string;
     readonly environmentId: string;
     readonly origin: RelayManagedEndpointOrigin;
   }) => Effect.Effect<ManagedEndpointProvisioningResult, ManagedEndpointProviderError>;
@@ -117,15 +119,18 @@ export class ManagedEndpointDnsClientError extends Data.TaggedError(
 }> {}
 
 export interface ManagedEndpointDnsClientShape {
-  readonly listCnameRecords: (
+  readonly listRecords: (
     hostname: string,
   ) => Effect.Effect<ReadonlyArray<{ readonly id: string }>, ManagedEndpointDnsClientError>;
-  readonly createCnameRecord: (
+  readonly createRecord: (
     request: ManagedEndpointCnameRecordInput,
-  ) => Effect.Effect<unknown, ManagedEndpointDnsClientError>;
-  readonly updateCnameRecord: (
+  ) => Effect.Effect<{ readonly id: string }, ManagedEndpointDnsClientError>;
+  readonly updateRecord: (
     dnsRecordId: string,
     request: ManagedEndpointCnameRecordInput,
+  ) => Effect.Effect<unknown, ManagedEndpointDnsClientError>;
+  readonly deleteRecord: (
+    dnsRecordId: string,
   ) => Effect.Effect<unknown, ManagedEndpointDnsClientError>;
 }
 
@@ -175,10 +180,61 @@ const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const tunnels = yield* ManagedEndpointTunnelClient;
   const dns = yield* ManagedEndpointDnsClient;
+  const allocations = yield* ManagedEndpointAllocations;
+
+  const updateExistingDnsRecords = Effect.fnUntraced(function* (
+    records: ReadonlyArray<{ readonly id: string }>,
+    preferredDnsRecordId: string | null,
+    dnsRecord: ManagedEndpointCnameRecordInput,
+  ) {
+    const keptRecord = records.find((record) => record.id === preferredDnsRecordId) ?? records[0];
+    if (keptRecord === undefined) {
+      return null;
+    }
+    yield* Effect.forEach(
+      records,
+      (record) => (record.id === keptRecord.id ? Effect.void : dns.deleteRecord(record.id)),
+      { discard: true },
+    );
+    yield* dns.updateRecord(keptRecord.id, dnsRecord);
+    return keptRecord.id;
+  });
+
+  const ensureDnsRecord = Effect.fnUntraced(function* (
+    hostname: string,
+    preferredDnsRecordId: string | null,
+    dnsRecord: ManagedEndpointCnameRecordInput,
+  ) {
+    const existingDnsRecords = yield* dns.listRecords(hostname);
+    const existingDnsRecordId = yield* updateExistingDnsRecords(
+      existingDnsRecords,
+      preferredDnsRecordId,
+      dnsRecord,
+    );
+    if (existingDnsRecordId !== null) {
+      return existingDnsRecordId;
+    }
+    return yield* dns.createRecord(dnsRecord).pipe(
+      Effect.map((record) => record.id),
+      Effect.catch((createError) =>
+        dns.listRecords(hostname).pipe(
+          Effect.flatMap((records) =>
+            records.length > 0
+              ? updateExistingDnsRecords(records, preferredDnsRecordId, dnsRecord)
+              : Effect.fail(createError),
+          ),
+          Effect.flatMap((dnsRecordId) =>
+            dnsRecordId === null ? Effect.fail(createError) : Effect.succeed(dnsRecordId),
+          ),
+        ),
+      ),
+    );
+  });
 
   return ManagedEndpointProvider.of({
     provision: Effect.fn("relay.managed_endpoint_provider.provision")(function* (input) {
       yield* Effect.annotateCurrentSpan({
+        "relay.user_id": input.userId,
         "relay.environment_id": input.environmentId,
         "relay.managed_endpoint.origin_host": input.origin.localHttpHost,
         "relay.managed_endpoint.origin_port": input.origin.localHttpPort,
@@ -193,14 +249,23 @@ const make = Effect.gen(function* () {
       const environmentHash = yield* crypto
         .digest(
           "SHA-256",
-          new TextEncoder().encode(managedEndpointDigestInput(cf.namespace, input.environmentId)),
+          new TextEncoder().encode(
+            managedEndpointDigestInput(cf.namespace, input.userId, input.environmentId),
+          ),
         )
         .pipe(
           Effect.map(Encoding.encodeHex),
           Effect.mapError((cause) => new ManagedEndpointProvisioningFailed({ cause })),
         );
-      const hostname = managedEndpointHostname(cf.namespace, cf.baseDomain, environmentHash);
-      const tunnelName = managedEndpointTunnelName(cf.namespace, environmentHash);
+      const allocation = yield* allocations
+        .reserve({
+          userId: input.userId,
+          environmentId: input.environmentId,
+          hostname: managedEndpointHostname(cf.namespace, cf.baseDomain, environmentHash),
+          tunnelName: managedEndpointTunnelName(cf.namespace, environmentHash),
+        })
+        .pipe(Effect.mapError((cause) => new ManagedEndpointProvisioningFailed({ cause })));
+      const { hostname, tunnelName } = allocation;
 
       const tunnel = yield* tunnels.list({ name: tunnelName, isDeleted: false }).pipe(
         Effect.map((tunnels) => tunnels.result),
@@ -218,6 +283,13 @@ const make = Effect.gen(function* () {
         ),
         Effect.mapError((cause) => new ManagedEndpointProvisioningFailed({ cause })),
       );
+      yield* allocations
+        .recordTunnel({
+          userId: input.userId,
+          environmentId: input.environmentId,
+          tunnelId: tunnel.id,
+        })
+        .pipe(Effect.mapError((cause) => new ManagedEndpointProvisioningFailed({ cause })));
 
       yield* tunnels
         .putConfiguration(tunnel.id, {
@@ -231,12 +303,6 @@ const make = Effect.gen(function* () {
         })
         .pipe(Effect.mapError((cause) => new ManagedEndpointProvisioningFailed({ cause })));
 
-      const existingDnsRecordId = yield* dns.listCnameRecords(hostname).pipe(
-        Effect.map(Arr.head),
-        Effect.map(Option.map((record) => record.id)),
-        Effect.mapError((cause) => new ManagedEndpointProvisioningFailed({ cause })),
-      );
-
       const dnsRecord = {
         type: "CNAME",
         name: hostname,
@@ -245,13 +311,25 @@ const make = Effect.gen(function* () {
         proxied: true,
       } as const;
 
-      yield* Option.match(existingDnsRecordId, {
-        onSome: (id) => dns.updateCnameRecord(id, dnsRecord),
-        onNone: () => dns.createCnameRecord(dnsRecord),
-      }).pipe(Effect.mapError((cause) => new ManagedEndpointProvisioningFailed({ cause })));
+      const dnsRecordId = yield* ensureDnsRecord(hostname, allocation.dnsRecordId, dnsRecord).pipe(
+        Effect.mapError((cause) => new ManagedEndpointProvisioningFailed({ cause })),
+      );
+      yield* allocations
+        .recordDns({
+          userId: input.userId,
+          environmentId: input.environmentId,
+          dnsRecordId,
+        })
+        .pipe(Effect.mapError((cause) => new ManagedEndpointProvisioningFailed({ cause })));
 
       const connectorToken = yield* tunnels
         .getToken(tunnel.id)
+        .pipe(Effect.mapError((cause) => new ManagedEndpointProvisioningFailed({ cause })));
+      yield* allocations
+        .markReady({
+          userId: input.userId,
+          environmentId: input.environmentId,
+        })
         .pipe(Effect.mapError((cause) => new ManagedEndpointProvisioningFailed({ cause })));
 
       return {
@@ -309,19 +387,30 @@ export const layerCloudflareBindings = (
         Layer.succeed(
           ManagedEndpointDnsClient,
           ManagedEndpointDnsClient.of({
-            listCnameRecords: (hostname) =>
-              dnsClient.listDnsRecords({ type: "CNAME", name: { exact: hostname } }).pipe(
-                Effect.map((response) => response.result),
+            listRecords: (hostname) =>
+              dnsClient.listDnsRecords({ name: { exact: hostname } }).pipe(
+                Effect.map((response) =>
+                  response.result.filter(
+                    (record): record is typeof record & { readonly id: string } =>
+                      typeof record.id === "string",
+                  ),
+                ),
                 Effect.mapError((cause) => new ManagedEndpointDnsClientError({ cause })),
                 Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
               ),
-            createCnameRecord: (request) =>
+            createRecord: (request) =>
               dnsClient.createDnsRecord(request).pipe(
+                Effect.map((response) => ({ id: response.id })),
                 Effect.mapError((cause) => new ManagedEndpointDnsClientError({ cause })),
                 Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
               ),
-            updateCnameRecord: (dnsRecordId, request) =>
+            updateRecord: (dnsRecordId, request) =>
               dnsClient.updateDnsRecord(dnsRecordId, request).pipe(
+                Effect.mapError((cause) => new ManagedEndpointDnsClientError({ cause })),
+                Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+              ),
+            deleteRecord: (dnsRecordId) =>
+              dnsClient.deleteDnsRecord(dnsRecordId).pipe(
                 Effect.mapError((cause) => new ManagedEndpointDnsClientError({ cause })),
                 Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
               ),

@@ -50,7 +50,9 @@ describe("managed endpoint names", () => {
   it("uses the stage slug and a stable stage-scoped digest suffix", () => {
     const hash = "ABCDEF0123456789ABCDEF0123456789";
 
-    expect(managedEndpointDigestInput("dev_julius", "env_123")).toBe("dev_julius:env_123");
+    expect(managedEndpointDigestInput("dev_julius", "user_123", "env_123")).toBe(
+      "dev_julius:user_123:env_123",
+    );
     expect(managedEndpointHostname("dev_julius", ".example.com.", hash)).toBe(
       "tunnels-dev-julius-abcdef0123456789.example.com",
     );

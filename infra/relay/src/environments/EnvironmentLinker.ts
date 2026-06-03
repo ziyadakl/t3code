@@ -234,6 +234,7 @@ const make = Effect.gen(function* () {
       }
       const provisioned = input.request.managedTunnelsEnabled
         ? yield* managedEndpointProvider.provision({
+            userId: input.userId,
             environmentId: verified.environmentId,
             origin: verified.origin,
           })

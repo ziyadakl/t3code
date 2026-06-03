@@ -83,6 +83,26 @@ export const relayEnvironmentLinks = pgTable(
   ],
 );
 
+export const relayManagedEndpointAllocations = pgTable(
+  "relay_managed_endpoint_allocations",
+  {
+    userId: varchar("user_id", { length: 191 }).notNull(),
+    environmentId: varchar("environment_id", { length: 191 }).notNull(),
+    hostname: text("hostname").notNull(),
+    tunnelId: varchar("tunnel_id", { length: 191 }),
+    tunnelName: text("tunnel_name").notNull(),
+    dnsRecordId: varchar("dns_record_id", { length: 191 }),
+    readyAt: varchar("ready_at", { length: 64 }),
+    createdAt: varchar("created_at", { length: 64 }).notNull(),
+    updatedAt: varchar("updated_at", { length: 64 }).notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.userId, table.environmentId] }),
+    uniqueIndex("idx_relay_managed_endpoint_allocations_hostname").on(table.hostname),
+    uniqueIndex("idx_relay_managed_endpoint_allocations_tunnel_name").on(table.tunnelName),
+  ],
+);
+
 export const relayEnvironmentCredentials = pgTable(
   "relay_environment_credentials",
   {

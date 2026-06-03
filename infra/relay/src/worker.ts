@@ -38,6 +38,7 @@ import * as DpopProofs from "./auth/DpopProofs.ts";
 import * as RelayTokens from "./auth/RelayTokens.ts";
 import * as EnvironmentCredentials from "./environments/EnvironmentCredentials.ts";
 import * as EnvironmentLinks from "./environments/EnvironmentLinks.ts";
+import * as ManagedEndpointAllocations from "./environments/ManagedEndpointAllocations.ts";
 import * as LiveActivities from "./agentActivity/LiveActivities.ts";
 import { RelayDb, RelayHyperdrive } from "./db.ts";
 import { RelayApnsDeliveryDeadLetterQueue, RelayApnsDeliveryQueue } from "./queues.ts";
@@ -197,7 +198,12 @@ export default class Api extends Cloudflare.Worker<Api>()(
       Layer.provideMerge(AgentActivityRows.layer),
       Layer.provideMerge(Devices.layer),
       Layer.provideMerge(EnvironmentCredentials.layer),
-      Layer.provideMerge(EnvironmentLinks.layer),
+      Layer.provideMerge(
+        Layer.mergeAll(
+          EnvironmentLinks.layer,
+          ManagedEndpointAllocations.ManagedEndpointAllocations.layer,
+        ),
+      ),
       Layer.provideMerge(LiveActivities.layer),
       Layer.provideMerge(DeliveryAttempts.layer),
       Layer.provideMerge(RelayTokens.layer),

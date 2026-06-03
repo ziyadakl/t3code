@@ -7,6 +7,7 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 
 import * as RelayConfiguration from "../Config.ts";
+import * as ManagedEndpointAllocations from "./ManagedEndpointAllocations.ts";
 import * as ManagedEndpointProvider from "./ManagedEndpointProvider.ts";
 
 const config = RelayConfiguration.RelayConfiguration.of({
@@ -34,8 +35,17 @@ interface TunnelCall {
 }
 
 interface DnsCall {
-  readonly operation: "listCnameRecords" | "createCnameRecord" | "updateCnameRecord";
+  readonly operation: "listRecords" | "createRecord" | "updateRecord" | "deleteRecord";
   readonly input: unknown;
+}
+
+interface AllocationCall {
+  readonly operation: "reserve" | "recordTunnel" | "recordDns" | "markReady";
+  readonly input: unknown;
+}
+
+function allocationKey(input: { readonly userId: string; readonly environmentId: string }) {
+  return `${input.userId}:${input.environmentId}`;
 }
 
 function makeTunnelClient(calls: TunnelCall[] = []) {
@@ -62,47 +72,134 @@ function makeTunnelClient(calls: TunnelCall[] = []) {
   });
 }
 
-function makeDnsClient(
-  calls: DnsCall[] = [],
-  records: ReadonlyArray<{ readonly id: string }> = [],
-) {
-  return ManagedEndpointProvider.ManagedEndpointDnsClient.of({
-    listCnameRecords: (hostname) =>
+function makePersistentTunnelClient(calls: TunnelCall[] = []) {
+  let tunnel: { readonly id: string; readonly name: string } | null = null;
+  return ManagedEndpointProvider.ManagedEndpointTunnelClient.of({
+    list: (request) =>
       Effect.sync(() => {
-        calls.push({ operation: "listCnameRecords", input: hostname });
-        return records;
+        calls.push({ operation: "list", input: request });
+        return { result: tunnel === null ? [] : [tunnel] };
       }),
-    createCnameRecord: (request) =>
+    create: (request) =>
       Effect.sync(() => {
-        calls.push({ operation: "createCnameRecord", input: request });
+        calls.push({ operation: "create", input: request });
+        tunnel = { id: "tunnel-id", name: request.name };
+        return tunnel;
       }),
-    updateCnameRecord: (dnsRecordId, request) =>
+    putConfiguration: (tunnelId, tunnelConfig) =>
       Effect.sync(() => {
-        calls.push({ operation: "updateCnameRecord", input: { dnsRecordId, request } });
+        calls.push({ operation: "putConfiguration", input: { tunnelId, tunnelConfig } });
+      }),
+    getToken: (tunnelId) =>
+      Effect.sync(() => {
+        calls.push({ operation: "getToken", input: tunnelId });
+        return "connector-token";
       }),
   });
 }
 
-function providerLayer(tunnelClient = makeTunnelClient(), dnsClient = makeDnsClient()) {
+function makeDnsClient(
+  calls: DnsCall[] = [],
+  records: ReadonlyArray<{ readonly id: string }> = [],
+) {
+  let currentRecords = [...records];
+  return ManagedEndpointProvider.ManagedEndpointDnsClient.of({
+    listRecords: (hostname) =>
+      Effect.sync(() => {
+        calls.push({ operation: "listRecords", input: hostname });
+        return currentRecords;
+      }),
+    createRecord: (request) =>
+      Effect.sync(() => {
+        calls.push({ operation: "createRecord", input: request });
+        const record = { id: "created-record-id" };
+        currentRecords = [record];
+        return record;
+      }),
+    updateRecord: (dnsRecordId, request) =>
+      Effect.sync(() => {
+        calls.push({ operation: "updateRecord", input: { dnsRecordId, request } });
+      }),
+    deleteRecord: (dnsRecordId) =>
+      Effect.sync(() => {
+        calls.push({ operation: "deleteRecord", input: dnsRecordId });
+        currentRecords = currentRecords.filter((record) => record.id !== dnsRecordId);
+      }),
+  });
+}
+
+function makeAllocations(calls: AllocationCall[] = []) {
+  const allocations = new Map<string, ManagedEndpointAllocations.ManagedEndpointAllocation>();
+  return ManagedEndpointAllocations.ManagedEndpointAllocations.of({
+    reserve: (input) =>
+      Effect.sync(() => {
+        calls.push({ operation: "reserve", input });
+        const allocation = allocations.get(allocationKey(input)) ?? {
+          ...input,
+          tunnelId: null,
+          dnsRecordId: null,
+          readyAt: null,
+        };
+        allocations.set(allocationKey(input), allocation);
+        return allocation;
+      }),
+    recordTunnel: (input) =>
+      Effect.sync(() => {
+        calls.push({ operation: "recordTunnel", input });
+        const allocation = allocations.get(allocationKey(input));
+        if (allocation !== undefined) {
+          allocations.set(allocationKey(input), { ...allocation, tunnelId: input.tunnelId });
+        }
+      }),
+    recordDns: (input) =>
+      Effect.sync(() => {
+        calls.push({ operation: "recordDns", input });
+        const allocation = allocations.get(allocationKey(input));
+        if (allocation !== undefined) {
+          allocations.set(allocationKey(input), { ...allocation, dnsRecordId: input.dnsRecordId });
+        }
+      }),
+    markReady: (input) =>
+      Effect.sync(() => {
+        calls.push({ operation: "markReady", input });
+        const allocation = allocations.get(allocationKey(input));
+        if (allocation !== undefined) {
+          allocations.set(allocationKey(input), {
+            ...allocation,
+            readyAt: "2026-06-02T00:00:00.000Z",
+          });
+        }
+      }),
+  });
+}
+
+function providerLayer(
+  tunnelClient = makeTunnelClient(),
+  dnsClient = makeDnsClient(),
+  allocations = makeAllocations(),
+) {
   return ManagedEndpointProvider.layer.pipe(
     Layer.provideMerge(NodeServices.layer),
     Layer.provide(Layer.succeed(RelayConfiguration.RelayConfiguration, config)),
     Layer.provide(Layer.succeed(ManagedEndpointProvider.ManagedEndpointTunnelClient, tunnelClient)),
     Layer.provide(Layer.succeed(ManagedEndpointProvider.ManagedEndpointDnsClient, dnsClient)),
+    Layer.provide(
+      Layer.succeed(ManagedEndpointAllocations.ManagedEndpointAllocations, allocations),
+    ),
   );
 }
 
-function expectedManagedHostname(environmentId: string): string {
+function expectedManagedHostname(environmentId: string, userId = "user_ABC"): string {
   const hash = NodeCrypto.createHash("sha256")
-    .update(`dev_julius:${environmentId}`)
+    .update(`dev_julius:${userId}:${environmentId}`)
     .digest("hex")
     .slice(0, 16);
   return `tunnels-dev-julius-${hash}.t3code.test`;
 }
 
-function expectedManagedTunnelName(environmentId: string): string {
+function expectedManagedTunnelName(environmentId: string, userId = "user_ABC"): string {
   const hash = NodeCrypto.createHash("sha256")
-    .update(`dev_julius:${environmentId}`)
+    .update(`dev_julius:${userId}:${environmentId}`)
     .digest("hex")
     .slice(0, 16);
   return `t3coderelay-managedendpoint-dev-julius-${hash}`;
@@ -112,11 +209,13 @@ describe("ManagedEndpointProvider", () => {
   it.effect("provisions a Cloudflare tunnel endpoint and connector token", () => {
     const tunnelCalls: TunnelCall[] = [];
     const dnsCalls: DnsCall[] = [];
+    const allocationCalls: AllocationCall[] = [];
 
     return Effect.gen(function* () {
       const hostname = expectedManagedHostname("env_ABC");
       const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
       const result = yield* provider.provision({
+        userId: "user_ABC",
         environmentId: "env_ABC",
         origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
       });
@@ -135,9 +234,9 @@ describe("ManagedEndpointProvider", () => {
         },
       });
       expect(dnsCalls).toEqual([
-        { operation: "listCnameRecords", input: hostname },
+        { operation: "listRecords", input: hostname },
         {
-          operation: "createCnameRecord",
+          operation: "createRecord",
           input: {
             type: "CNAME",
             name: hostname,
@@ -168,7 +267,21 @@ describe("ManagedEndpointProvider", () => {
         name: expectedManagedTunnelName("env_ABC"),
         isDeleted: false,
       });
-    }).pipe(Effect.provide(providerLayer(makeTunnelClient(tunnelCalls), makeDnsClient(dnsCalls))));
+      expect(allocationCalls.map((call) => call.operation)).toEqual([
+        "reserve",
+        "recordTunnel",
+        "recordDns",
+        "markReady",
+      ]);
+    }).pipe(
+      Effect.provide(
+        providerLayer(
+          makeTunnelClient(tunnelCalls),
+          makeDnsClient(dnsCalls),
+          makeAllocations(allocationCalls),
+        ),
+      ),
+    );
   });
 
   it.effect("uses stage-scoped stable names without leaking unusual environment ids", () => {
@@ -178,6 +291,7 @@ describe("ManagedEndpointProvider", () => {
       const environmentId = "ENV With Spaces/../Symbols!" + "x".repeat(80);
       const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
       yield* provider.provision({
+        userId: "user_ABC",
         environmentId,
         origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
       });
@@ -224,6 +338,7 @@ describe("ManagedEndpointProvider", () => {
     return Effect.gen(function* () {
       const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
       yield* provider.provision({
+        userId: "user_ABC",
         environmentId: "env-ipv6",
         origin: { localHttpHost: "::1", localHttpPort: 3773 },
       });
@@ -250,6 +365,7 @@ describe("ManagedEndpointProvider", () => {
       const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
       const result = yield* Effect.result(
         provider.provision({
+          userId: "user_ABC",
           environmentId: "env_ABC",
           origin: { localHttpHost: "192.168.1.10", localHttpPort: 3773 },
         }),
@@ -270,6 +386,7 @@ describe("ManagedEndpointProvider", () => {
       const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
       const result = yield* Effect.result(
         provider.provision({
+          userId: "user_ABC",
           environmentId: "env_ABC",
           origin: { localHttpHost: "127.0.0.1", localHttpPort: 65_536 },
         }),
@@ -283,19 +400,17 @@ describe("ManagedEndpointProvider", () => {
     }).pipe(Effect.provide(providerLayer(makeTunnelClient(), makeDnsClient(dnsCalls))));
   });
 
-  it.effect("updates an existing CNAME record through the DNS client", () => {
+  it.effect("reconciles an existing same-host DNS record through the DNS client", () => {
     const dnsCalls: DnsCall[] = [];
     return Effect.gen(function* () {
       const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
       yield* provider.provision({
+        userId: "user_ABC",
         environmentId: "env_ABC",
         origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
       });
 
-      expect(dnsCalls.map((call) => call.operation)).toEqual([
-        "listCnameRecords",
-        "updateCnameRecord",
-      ]);
+      expect(dnsCalls.map((call) => call.operation)).toEqual(["listRecords", "updateRecord"]);
       expect(dnsCalls[1]?.input).toMatchObject({ dnsRecordId: "existing-record-id" });
     }).pipe(
       Effect.provide(
@@ -304,20 +419,140 @@ describe("ManagedEndpointProvider", () => {
     );
   });
 
+  it.effect("reuses checkpointed resources when provisioning is retried", () => {
+    const tunnelCalls: TunnelCall[] = [];
+    const dnsCalls: DnsCall[] = [];
+    const allocationCalls: AllocationCall[] = [];
+    const layer = providerLayer(
+      makePersistentTunnelClient(tunnelCalls),
+      makeDnsClient(dnsCalls),
+      makeAllocations(allocationCalls),
+    );
+
+    return Effect.gen(function* () {
+      const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+      const request = {
+        userId: "user_ABC",
+        environmentId: "env_ABC",
+        origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
+      } as const;
+      yield* provider.provision(request);
+      yield* provider.provision(request);
+
+      expect(tunnelCalls.map((call) => call.operation)).toEqual([
+        "list",
+        "create",
+        "putConfiguration",
+        "getToken",
+        "list",
+        "putConfiguration",
+        "getToken",
+      ]);
+      expect(dnsCalls.map((call) => call.operation)).toEqual([
+        "listRecords",
+        "createRecord",
+        "listRecords",
+        "updateRecord",
+      ]);
+      expect(allocationCalls.map((call) => call.operation)).toEqual([
+        "reserve",
+        "recordTunnel",
+        "recordDns",
+        "markReady",
+        "reserve",
+        "recordTunnel",
+        "recordDns",
+        "markReady",
+      ]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("scopes managed endpoint resources by user", () => {
+    const tunnelCalls: TunnelCall[] = [];
+
+    return Effect.gen(function* () {
+      const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+      yield* provider.provision({
+        userId: "user_ABC",
+        environmentId: "env_shared",
+        origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
+      });
+      yield* provider.provision({
+        userId: "user_DEF",
+        environmentId: "env_shared",
+        origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
+      });
+
+      expect(
+        tunnelCalls.filter((call) => call.operation === "list").map((call) => call.input),
+      ).toEqual([
+        { name: expectedManagedTunnelName("env_shared", "user_ABC"), isDeleted: false },
+        { name: expectedManagedTunnelName("env_shared", "user_DEF"), isDeleted: false },
+      ]);
+    }).pipe(Effect.provide(providerLayer(makeTunnelClient(tunnelCalls))));
+  });
+
+  it.effect("recovers when DNS creation reports failure after the record became visible", () => {
+    const dnsCalls: DnsCall[] = [];
+    const failure = new ManagedEndpointProvider.ManagedEndpointDnsClientError({
+      cause: "ambiguous Cloudflare DNS response",
+    });
+    let records: ReadonlyArray<{ readonly id: string }> = [];
+    const dnsClient = ManagedEndpointProvider.ManagedEndpointDnsClient.of({
+      listRecords: (hostname) =>
+        Effect.sync(() => {
+          dnsCalls.push({ operation: "listRecords", input: hostname });
+          return records;
+        }),
+      createRecord: (request) =>
+        Effect.gen(function* () {
+          dnsCalls.push({ operation: "createRecord", input: request });
+          records = [{ id: "created-record-id" }];
+          return yield* failure;
+        }),
+      updateRecord: (dnsRecordId, request) =>
+        Effect.sync(() => {
+          dnsCalls.push({ operation: "updateRecord", input: { dnsRecordId, request } });
+        }),
+      deleteRecord: (dnsRecordId) =>
+        Effect.sync(() => {
+          dnsCalls.push({ operation: "deleteRecord", input: dnsRecordId });
+        }),
+    });
+
+    return Effect.gen(function* () {
+      const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+      yield* provider.provision({
+        userId: "user_ABC",
+        environmentId: "env_ABC",
+        origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
+      });
+
+      expect(dnsCalls.map((call) => call.operation)).toEqual([
+        "listRecords",
+        "createRecord",
+        "listRecords",
+        "updateRecord",
+      ]);
+    }).pipe(Effect.provide(providerLayer(makeTunnelClient(), dnsClient)));
+  });
+
   it.effect("fails provisioning when the DNS client fails", () => {
     const failure = new ManagedEndpointProvider.ManagedEndpointDnsClientError({
       cause: "Cloudflare DNS failure",
     });
     const dnsClient = ManagedEndpointProvider.ManagedEndpointDnsClient.of({
-      listCnameRecords: () => Effect.fail(failure),
-      createCnameRecord: () => Effect.die("unused"),
-      updateCnameRecord: () => Effect.die("unused"),
+      listRecords: () => Effect.fail(failure),
+      createRecord: () => Effect.die("unused"),
+      updateRecord: () => Effect.die("unused"),
+      deleteRecord: () => Effect.die("unused"),
     });
 
     return Effect.gen(function* () {
       const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
       const error = yield* Effect.flip(
         provider.provision({
+          userId: "user_ABC",
           environmentId: "env_ABC",
           origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
         }),
