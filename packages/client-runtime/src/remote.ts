@@ -170,12 +170,8 @@ const executeRemoteRequest = <A, E, R>(
   );
 
 export const makeEnvironmentHttpApiClient = (httpBaseUrl: string) =>
-  Effect.gen(function* () {
-    const httpClient = yield* HttpClient.HttpClient;
-    return yield* HttpApiClient.makeWith(EnvironmentHttpApi, {
-      httpClient,
-      baseUrl: remoteApiBaseUrl(httpBaseUrl),
-    });
+  HttpApiClient.make(EnvironmentHttpApi, {
+    baseUrl: remoteApiBaseUrl(httpBaseUrl),
   });
 
 export const exchangeRemoteDpopAccessToken = Effect.fn(
