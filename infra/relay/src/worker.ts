@@ -10,6 +10,7 @@ import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
+import * as HttpApiScalar from "effect/unstable/httpapi/HttpApiScalar";
 
 import { RelayApi } from "@t3tools/contracts/relay";
 
@@ -248,10 +249,12 @@ export default class Api extends Cloudflare.Worker<Api>()(
     );
 
     const fetch = Layer.merge(
-      HttpApiBuilder.layer(RelayApi).pipe(
-        Layer.provide(appLayer),
-        Layer.provide([Etag.layerWeak, httpPlatformNotSupportedLayer, relayCors]),
-      ),
+      Layer.mergeAll(
+        HttpApiBuilder.layer(RelayApi, { openapiPath: "/openapi.json" }).pipe(
+          Layer.provide(appLayer),
+        ),
+        HttpApiScalar.layer(RelayApi, { path: "/docs" }),
+      ).pipe(Layer.provide([Etag.layerWeak, httpPlatformNotSupportedLayer, relayCors])),
       relayNotFoundRoute,
     ).pipe(
       HttpRouter.toHttpEffect,
