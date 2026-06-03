@@ -289,6 +289,9 @@ function buildMacLauncher(electronBinaryPath) {
     currentMetadata &&
     JSON.stringify(currentMetadata) === JSON.stringify(expectedMetadata)
   ) {
+    if (isDevelopment) {
+      writeDevelopmentLauncherScript(targetBinaryPath, electronBinaryPath);
+    }
     registerMacLauncherBundle(targetAppBundlePath);
     return targetBinaryPath;
   }
