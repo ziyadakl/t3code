@@ -39,6 +39,7 @@ const CliRuntimeLayer = Layer.mergeAll(NodeServices.layer, NetService.layer);
 class ProjectCliHttpApi extends HttpApi.make("environment").add(EnvironmentOrchestrationHttpApi) {}
 
 const cloudCli = makeCli({ cloudEnabled: true });
+const noCloudCli = makeCli({ cloudEnabled: false });
 const runCli = (args: ReadonlyArray<string>, command = cli) =>
   Command.runWith(command, { version: "0.0.0" })(args);
 const runCloudCli = (args: ReadonlyArray<string>) => runCli(args, cloudCli);
@@ -175,6 +176,26 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
       }
       assert.equal(error.option, "log-level");
       assert.equal(error.value, "Debug");
+    }),
+  );
+
+  it.effect("rejects cloud commands when public cloud configuration is missing", () =>
+    Effect.gen(function* () {
+      const error = yield* runCli(["cloud", "status"], noCloudCli).pipe(
+        Effect.provide(CliRuntimeLayer),
+        Effect.flip,
+      );
+
+      if (!CliError.isCliError(error)) {
+        assert.fail(`Expected CliError, got ${String(error)}`);
+      }
+      if (error._tag !== "UserError") {
+        assert.fail(`Expected UserError, got ${error._tag}`);
+      }
+      if (!(error.cause instanceof Error)) {
+        assert.fail(`Expected Error cause, got ${String(error.cause)}`);
+      }
+      assert.include(error.cause.message, "missing T3 Cloud public configuration");
     }),
   );
 

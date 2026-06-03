@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { Command } from "effect/unstable/cli";
+import * as CliError from "effect/unstable/cli/CliError";
 
 import * as NetService from "@t3tools/shared/Net";
 import packageJson from "../package.json" with { type: "json" };
@@ -15,6 +16,20 @@ import { runServerCommand, serveCommand, startCommand } from "./cli/server.ts";
 
 const CliRuntimeLayer = Layer.mergeAll(NodeServices.layer, NetService.layer);
 
+const cloudUnavailableCommand = Command.make("cloud").pipe(
+  Command.withDescription("T3 Cloud is unavailable in builds without public cloud configuration."),
+  Command.withHidden,
+  Command.withHandler(() =>
+    Effect.fail(
+      new CliError.UserError({
+        cause: new Error(
+          "T3 Cloud commands are unavailable: this build is missing T3 Cloud public configuration.",
+        ),
+      }),
+    ),
+  ),
+);
+
 export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
   Command.make("t3", { ...sharedServerCommandFlags }).pipe(
     Command.withDescription("Run the T3 Code server."),
@@ -24,7 +39,7 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
       serveCommand,
       authCommand,
       projectCommand,
-      ...(cloudEnabled ? [cloudCommand] : []),
+      cloudEnabled ? cloudCommand : cloudUnavailableCommand,
     ]),
   );
 
