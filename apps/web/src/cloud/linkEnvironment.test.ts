@@ -29,7 +29,11 @@ import {
 } from "../environments/primary";
 
 const getSavedEnvironmentSecretMock = vi.fn();
-const confirmRelayClientInstallMock = vi.fn();
+const relayClientInstallDialogHarness = vi.hoisted(() => ({
+  requestConfirmation: vi.fn(),
+  reportProgress: vi.fn(),
+  finish: vi.fn(),
+}));
 const getRelayClientStatusMock = vi.fn();
 const installRelayClientMock = vi.fn();
 const environmentConnectionMock = {
@@ -70,13 +74,16 @@ const withCloudServices = <A, E>(
 
 vi.mock("../localApi", () => ({
   ensureLocalApi: () => ({
-    dialogs: {
-      confirm: confirmRelayClientInstallMock,
-    },
     persistence: {
       getSavedEnvironmentSecret: getSavedEnvironmentSecretMock,
     },
   }),
+}));
+
+vi.mock("./relayClientInstallDialog", () => ({
+  requestRelayClientInstallConfirmation: relayClientInstallDialogHarness.requestConfirmation,
+  reportRelayClientInstallProgress: relayClientInstallDialogHarness.reportProgress,
+  finishRelayClientInstall: relayClientInstallDialogHarness.finish,
 }));
 
 vi.mock("../environments/primary", () => ({
@@ -137,7 +144,7 @@ describe("web cloud link environment client", () => {
     createProofMock.mockClear();
     vi.stubEnv("VITE_T3CODE_RELAY_URL", "https://relay.example.test");
     getSavedEnvironmentSecretMock.mockResolvedValue("local-bearer");
-    confirmRelayClientInstallMock.mockResolvedValue(true);
+    relayClientInstallDialogHarness.requestConfirmation.mockResolvedValue(true);
     getRelayClientStatusMock.mockResolvedValue(availableRelayClient());
     installRelayClientMock.mockResolvedValue(availableRelayClient());
     vi.mocked(readPrimaryEnvironmentDescriptor).mockReturnValue(null);
@@ -181,6 +188,10 @@ describe("web cloud link environment client", () => {
           .mockResolvedValueOnce(Response.json(validChallenge()))
           .mockResolvedValueOnce(Response.json({ malformed: true }));
         vi.stubGlobal("fetch", fetchMock);
+        installRelayClientMock.mockImplementationOnce(async (onProgress) => {
+          onProgress({ type: "progress", stage: "downloading" });
+          return availableRelayClient();
+        });
 
         yield* withCloudServices(
           linkPrimaryEnvironmentToCloud({
@@ -188,9 +199,16 @@ describe("web cloud link environment client", () => {
           }),
         ).pipe(Effect.flip);
 
-        expect(confirmRelayClientInstallMock).toHaveBeenCalledOnce();
+        expect(relayClientInstallDialogHarness.requestConfirmation).toHaveBeenCalledWith(
+          "2026.5.2",
+        );
         expect(getRelayClientStatusMock).toHaveBeenCalledOnce();
         expect(installRelayClientMock).toHaveBeenCalledOnce();
+        expect(relayClientInstallDialogHarness.reportProgress).toHaveBeenCalledWith({
+          type: "progress",
+          stage: "downloading",
+        });
+        expect(relayClientInstallDialogHarness.finish).toHaveBeenCalledOnce();
         expect(installRelayClientMock.mock.invocationCallOrder[0]).toBeLessThan(
           fetchMock.mock.invocationCallOrder[0]!,
         );

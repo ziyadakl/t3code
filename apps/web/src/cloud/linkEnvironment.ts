@@ -43,6 +43,11 @@ import {
 } from "../environments/primary";
 import { withPrimaryEnvironmentRequestInit } from "../environments/primary/requestInit";
 import { resolveCloudPublicConfig } from "./publicConfig";
+import {
+  finishRelayClientInstall,
+  reportRelayClientInstallProgress,
+  requestRelayClientInstallConfirmation,
+} from "./relayClientInstallDialog";
 
 export function normalizeRelayBaseUrl(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
@@ -67,9 +72,6 @@ const relayClientRpcError = (message: string) => (cause: unknown) =>
     cause,
   });
 
-const RELAY_CLIENT_INSTALL_PROMPT =
-  "T3 Code needs the relay client to make this environment available through T3 Cloud. Download and install it now?";
-
 function ensureRelayClientAvailable(
   client: WsRpcClient,
 ): Effect.Effect<void, CloudEnvironmentLinkError> {
@@ -86,7 +88,7 @@ function ensureRelayClientAvailable(
     }
 
     const confirmed = yield* Effect.tryPromise({
-      try: () => ensureLocalApi().dialogs.confirm(RELAY_CLIENT_INSTALL_PROMPT),
+      try: () => requestRelayClientInstallConfirmation(status.version),
       catch: relayClientRpcError("Could not confirm relay client installation."),
     });
     if (!confirmed) {
@@ -96,9 +98,9 @@ function ensureRelayClientAvailable(
     }
 
     const installed = yield* Effect.tryPromise({
-      try: () => client.cloud.installRelayClient(),
+      try: () => client.cloud.installRelayClient(reportRelayClientInstallProgress),
       catch: relayClientRpcError("Could not install the relay client."),
-    });
+    }).pipe(Effect.ensuring(Effect.sync(finishRelayClientInstall)));
     if (installed.status !== "available") {
       return yield* new CloudEnvironmentLinkError({
         message:
