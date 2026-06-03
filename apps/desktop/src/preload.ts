@@ -102,8 +102,6 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.invoke(IpcChannels.SET_CLOUD_AUTH_TOKEN_CHANNEL, token),
   clearCloudAuthToken: () => ipcRenderer.invoke(IpcChannels.CLEAR_CLOUD_AUTH_TOKEN_CHANNEL),
   fetchCloudAuth: (input) => ipcRenderer.invoke(IpcChannels.FETCH_CLOUD_AUTH_CHANNEL, input),
-  getRelayClientStatus: () => ipcRenderer.invoke(IpcChannels.GET_RELAY_CLIENT_STATUS_CHANNEL),
-  installRelayClient: () => ipcRenderer.invoke(IpcChannels.INSTALL_RELAY_CLIENT_CHANNEL),
   onCloudAuthCallback: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, rawUrl: unknown) => {
       if (typeof rawUrl !== "string") return;

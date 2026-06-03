@@ -22,6 +22,7 @@ const relayClientAvailableLayer = Layer.succeed(
       version: RelayClient.CLOUDFLARED_VERSION,
     }),
     install: Effect.die("unused"),
+    installWithProgress: () => Effect.die("unused"),
   }),
 );
 
@@ -333,6 +334,7 @@ describe("CloudManagedEndpointRuntime", () => {
                   version: RelayClient.CLOUDFLARED_VERSION,
                 }),
                 install: Effect.die("unused"),
+                installWithProgress: () => Effect.die("unused"),
               }),
             ),
           ),

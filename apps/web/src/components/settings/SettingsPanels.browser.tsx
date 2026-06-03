@@ -470,18 +470,6 @@ const createDesktopBridgeStub = (overrides?: {
       headers: {},
       body: "",
     }),
-    getRelayClientStatus: vi.fn().mockResolvedValue({
-      status: "available",
-      executablePath: "/usr/local/bin/cloudflared",
-      source: "path",
-      version: "2026.5.2",
-    }),
-    installRelayClient: vi.fn().mockResolvedValue({
-      status: "available",
-      executablePath: "/usr/local/bin/cloudflared",
-      source: "path",
-      version: "2026.5.2",
-    }),
     onCloudAuthCallback: () => () => {},
     onMenuAction: () => () => {},
     getUpdateState: vi.fn().mockResolvedValue(idleUpdateState),

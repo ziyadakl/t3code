@@ -27,10 +27,15 @@ import {
   makeEnvironmentHttpApiClient,
   ManagedRelayClient,
   ManagedRelayDpopSigner,
+  type WsRpcClient,
 } from "@t3tools/client-runtime";
 
 import { ensureLocalApi } from "../localApi";
-import type { SavedEnvironmentRecord } from "../environments/runtime";
+import {
+  getPrimaryEnvironmentConnection,
+  readEnvironmentConnection,
+  type SavedEnvironmentRecord,
+} from "../environments/runtime";
 import {
   readPrimaryEnvironmentDescriptor,
   readPrimaryEnvironmentTarget,
@@ -56,23 +61,22 @@ export class CloudEnvironmentLinkError extends Data.TaggedError("CloudEnvironmen
   readonly cause?: unknown;
 }> {}
 
-const desktopRelayClientBridgeError = (cause: unknown) =>
+const relayClientRpcError = (message: string) => (cause: unknown) =>
   new CloudEnvironmentLinkError({
-    message: "Could not prepare the relay client.",
+    message,
     cause,
   });
 
-export function ensureDesktopRelayClientAvailable(): Effect.Effect<
-  void,
-  CloudEnvironmentLinkError
-> {
-  const bridge = typeof window === "undefined" ? undefined : window.desktopBridge;
-  if (!bridge) return Effect.void;
+const RELAY_CLIENT_INSTALL_PROMPT =
+  "T3 Code needs the relay client to make this environment available through T3 Cloud. Download and install it now?";
 
+function ensureRelayClientAvailable(
+  client: WsRpcClient,
+): Effect.Effect<void, CloudEnvironmentLinkError> {
   return Effect.gen(function* () {
     const status = yield* Effect.tryPromise({
-      try: () => bridge.getRelayClientStatus(),
-      catch: desktopRelayClientBridgeError,
+      try: () => client.cloud.getRelayClientStatus(),
+      catch: relayClientRpcError("Could not check relay client availability."),
     });
     if (status.status === "available") return;
     if (status.status === "unsupported") {
@@ -82,11 +86,8 @@ export function ensureDesktopRelayClientAvailable(): Effect.Effect<
     }
 
     const confirmed = yield* Effect.tryPromise({
-      try: () =>
-        bridge.confirm(
-          "T3 Code needs the relay client to make this environment available through T3 Cloud. Download and install it now?",
-        ),
-      catch: desktopRelayClientBridgeError,
+      try: () => ensureLocalApi().dialogs.confirm(RELAY_CLIENT_INSTALL_PROMPT),
+      catch: relayClientRpcError("Could not confirm relay client installation."),
     });
     if (!confirmed) {
       return yield* new CloudEnvironmentLinkError({
@@ -95,8 +96,8 @@ export function ensureDesktopRelayClientAvailable(): Effect.Effect<
     }
 
     const installed = yield* Effect.tryPromise({
-      try: () => bridge.installRelayClient(),
-      catch: desktopRelayClientBridgeError,
+      try: () => client.cloud.installRelayClient(),
+      catch: relayClientRpcError("Could not install the relay client."),
     });
     if (installed.status !== "available") {
       return yield* new CloudEnvironmentLinkError({
@@ -538,6 +539,17 @@ export function linkEnvironmentToCloud(input: {
       });
     }
 
+    const connection = readEnvironmentConnection(input.environment.environmentId);
+    if (!connection) {
+      return yield* new CloudEnvironmentLinkError({
+        message: `${input.environment.label} is not connected.`,
+      });
+    }
+    yield* ensureRelayClientAvailable(connection.client);
+
+    const environmentClient = yield* makeEnvironmentHttpApiClient(input.environment.httpBaseUrl);
+    const headers = { authorization: `Bearer ${bearerToken}` };
+
     const challenge = yield* relayClient
       .createEnvironmentLinkChallenge({
         clerkToken: input.clerkToken,
@@ -554,10 +566,9 @@ export function linkEnvironmentToCloud(input: {
           ),
         ),
       );
-    const environmentClient = yield* makeEnvironmentHttpApiClient(input.environment.httpBaseUrl);
     const proof = yield* environmentClient.cloud
       .linkProof({
-        headers: { authorization: `Bearer ${bearerToken}` },
+        headers,
         payload: {
           challenge: challenge.challenge,
           relayIssuer: configuredRelayUrl,
@@ -593,7 +604,7 @@ export function linkEnvironmentToCloud(input: {
 
     yield* environmentClient.cloud
       .relayConfig({
-        headers: { authorization: `Bearer ${bearerToken}` },
+        headers,
         payload: {
           relayUrl: configuredRelayUrl,
           relayIssuer: link.relayIssuer,
@@ -624,7 +635,8 @@ export function linkPrimaryEnvironmentToCloud(input: {
         message: "Local environment is not ready yet.",
       });
     }
-    yield* ensureDesktopRelayClientAvailable();
+    const environmentClient = yield* makeEnvironmentHttpApiClient(target.httpBaseUrl);
+    yield* ensureRelayClientAvailable(getPrimaryEnvironmentConnection().client);
 
     const challenge = yield* relayClient
       .createEnvironmentLinkChallenge({
@@ -642,7 +654,6 @@ export function linkPrimaryEnvironmentToCloud(input: {
           ),
         ),
       );
-    const environmentClient = yield* makeEnvironmentHttpApiClient(target.httpBaseUrl);
     const proof = yield* environmentClient.cloud
       .linkProof({
         headers: {},

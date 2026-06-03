@@ -117,7 +117,14 @@ describe("RelayClient", () => {
         configProvider: emptyConfigProvider,
       });
 
-      const installed = yield* manager.install;
+      const progress: Array<string> = [];
+      const installed = yield* manager.installWithProgress((event) =>
+        Effect.sync(() => {
+          if (event.type === "progress") {
+            progress.push(event.stage);
+          }
+        }),
+      );
       const managedPath = resolveManagedCloudflaredPath({
         baseDir,
         platform: "linux",
@@ -132,6 +139,15 @@ describe("RelayClient", () => {
       expect(new TextDecoder().decode(yield* fileSystem.readFile(managedPath))).toBe(
         "test-cloudflared-binary",
       );
+      expect(progress).toEqual([
+        "checking",
+        "waiting_for_lock",
+        "downloading",
+        "verifying",
+        "installing",
+        "validating",
+        "activating",
+      ]);
       expect(yield* manager.resolve).toEqual(installed);
     }).pipe(
       Effect.scoped,

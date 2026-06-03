@@ -35,6 +35,7 @@ import {
   type DpopPublicJwk,
 } from "@t3tools/shared/dpop";
 import { RELAY_HEALTH_REQUEST_TYP, RELAY_MINT_REQUEST_TYP } from "@t3tools/shared/relayJwt";
+import * as RelayClient from "@t3tools/shared/relayClient";
 import { assert, it } from "@effect/vitest";
 import { assertFailure, assertInclude, assertTrue } from "@effect/vitest/utils";
 import * as Clock from "effect/Clock";
@@ -359,6 +360,7 @@ const buildAppUnderTest = (options?: {
     serverEnvironment?: Partial<ServerEnvironmentShape>;
     repositoryIdentityResolver?: Partial<RepositoryIdentityResolverShape>;
     cloudManagedEndpointRuntime?: Partial<CloudManagedEndpointRuntimeShape>;
+    relayClient?: Partial<RelayClient.RelayClientShape>;
   };
 }) =>
   Effect.gen(function* () {
@@ -759,6 +761,20 @@ const buildAppUnderTest = (options?: {
           CloudManagedEndpointRuntime.of({
             applyConfig: () => Effect.succeed({ status: "disabled" }),
             ...options?.layers?.cloudManagedEndpointRuntime,
+          }),
+        ),
+      ),
+      Layer.provide(
+        Layer.succeed(
+          RelayClient.RelayClient,
+          RelayClient.RelayClient.of({
+            resolve: Effect.succeed({
+              status: "missing",
+              version: RelayClient.CLOUDFLARED_VERSION,
+            }),
+            install: Effect.die("unused relay-client install"),
+            installWithProgress: () => Effect.die("unused relay-client install"),
+            ...options?.layers?.relayClient,
           }),
         ),
       ),
@@ -1948,6 +1964,52 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(body.linked, false);
       assert.equal(body.publishAgentActivity, false);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "reports relay client status and streams installation progress over environment RPC",
+    () =>
+      Effect.gen(function* () {
+        const installedRelayClient = {
+          status: "available" as const,
+          executablePath: "/tmp/t3/tools/cloudflared",
+          source: "managed" as const,
+          version: RelayClient.CLOUDFLARED_VERSION,
+        };
+        yield* buildAppUnderTest({
+          layers: {
+            relayClient: {
+              resolve: Effect.succeed({
+                status: "missing",
+                version: RelayClient.CLOUDFLARED_VERSION,
+              }),
+              install: Effect.succeed(installedRelayClient),
+              installWithProgress: (report) =>
+                report({ type: "progress", stage: "checking" }).pipe(
+                  Effect.andThen(report({ type: "progress", stage: "downloading" })),
+                  Effect.as(installedRelayClient),
+                ),
+            },
+          },
+        });
+
+        const wsUrl = yield* getWsServerUrl("/ws");
+        const status = yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) => client[WS_METHODS.cloudGetRelayClientStatus]({})),
+        );
+        const installEvents = yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[WS_METHODS.cloudInstallRelayClient]({}).pipe(Stream.runCollect),
+          ),
+        );
+
+        assert.equal(status.status, "missing");
+        assert.deepEqual(Array.from(installEvents), [
+          { type: "progress", stage: "checking" },
+          { type: "progress", stage: "downloading" },
+          { type: "complete", status: installedRelayClient },
+        ]);
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("requires relay write scope to update agent activity publication", () =>

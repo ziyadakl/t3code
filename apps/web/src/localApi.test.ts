@@ -245,18 +245,6 @@ function makeDesktopBridge(overrides: Partial<DesktopBridge> = {}): DesktopBridg
       headers: {},
       body: "",
     }),
-    getRelayClientStatus: async () => ({
-      status: "available",
-      executablePath: "/usr/local/bin/cloudflared",
-      source: "path",
-      version: "2026.5.2",
-    }),
-    installRelayClient: async () => ({
-      status: "available",
-      executablePath: "/usr/local/bin/cloudflared",
-      source: "path",
-      version: "2026.5.2",
-    }),
     onCloudAuthCallback: () => () => undefined,
     onMenuAction: () => () => undefined,
     getUpdateState: async () => {

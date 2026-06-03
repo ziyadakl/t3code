@@ -1,7 +1,6 @@
 import { EnvironmentId } from "@t3tools/contracts";
 import { RelayWebClientId } from "@t3tools/contracts/relay";
 import { afterEach, beforeEach, vi } from "vitest";
-import type { DesktopBridge } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -16,7 +15,6 @@ import {
 import type { SavedEnvironmentRecord } from "../environments/runtime";
 import {
   connectManagedCloudEnvironment,
-  ensureDesktopRelayClientAvailable,
   linkEnvironmentToCloud,
   linkPrimaryEnvironmentToCloud,
   listManagedCloudEnvironments,
@@ -31,6 +29,17 @@ import {
 } from "../environments/primary";
 
 const getSavedEnvironmentSecretMock = vi.fn();
+const confirmRelayClientInstallMock = vi.fn();
+const getRelayClientStatusMock = vi.fn();
+const installRelayClientMock = vi.fn();
+const environmentConnectionMock = {
+  client: {
+    cloud: {
+      getRelayClientStatus: getRelayClientStatusMock,
+      installRelayClient: installRelayClientMock,
+    },
+  },
+};
 
 const createProofMock = vi.fn(
   (_input: { readonly method: string; readonly url: string; readonly accessToken?: string }) =>
@@ -61,6 +70,9 @@ const withCloudServices = <A, E>(
 
 vi.mock("../localApi", () => ({
   ensureLocalApi: () => ({
+    dialogs: {
+      confirm: confirmRelayClientInstallMock,
+    },
     persistence: {
       getSavedEnvironmentSecret: getSavedEnvironmentSecretMock,
     },
@@ -71,6 +83,11 @@ vi.mock("../environments/primary", () => ({
   readPrimaryEnvironmentDescriptor: vi.fn(() => null),
   readPrimaryEnvironmentTarget: vi.fn(() => null),
   resolvePrimaryEnvironmentHttpUrl: vi.fn((path: string) => `http://127.0.0.1:3000${path}`),
+}));
+
+vi.mock("../environments/runtime", () => ({
+  getPrimaryEnvironmentConnection: () => environmentConnectionMock,
+  readEnvironmentConnection: () => environmentConnectionMock,
 }));
 
 const savedEnvironment: SavedEnvironmentRecord = {
@@ -93,6 +110,15 @@ function validChallenge() {
   };
 }
 
+function availableRelayClient() {
+  return {
+    status: "available",
+    executablePath: "/Users/test/.t3/tools/cloudflared/cloudflared",
+    source: "managed",
+    version: "2026.5.2",
+  };
+}
+
 function requestBodyText(body: BodyInit | null | undefined): string {
   return body instanceof Uint8Array ? new TextDecoder().decode(body) : String(body ?? "");
 }
@@ -107,9 +133,13 @@ describe("web cloud link environment client", () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.clearAllMocks();
     createProofMock.mockClear();
     vi.stubEnv("VITE_T3CODE_RELAY_URL", "https://relay.example.test");
     getSavedEnvironmentSecretMock.mockResolvedValue("local-bearer");
+    confirmRelayClientInstallMock.mockResolvedValue(true);
+    getRelayClientStatusMock.mockResolvedValue(availableRelayClient());
+    installRelayClientMock.mockResolvedValue(availableRelayClient());
     vi.mocked(readPrimaryEnvironmentDescriptor).mockReturnValue(null);
     vi.mocked(readPrimaryEnvironmentTarget).mockReturnValue(null);
     vi.mocked(resolvePrimaryEnvironmentHttpUrl).mockImplementation(
@@ -124,47 +154,51 @@ describe("web cloud link environment client", () => {
     expect(normalizeRelayBaseUrl("   ")).toBeNull();
   });
 
-  it("installs the relay client after desktop confirmation", async () => {
-    vi.stubGlobal("window", {});
-    const confirm = vi.fn().mockResolvedValue(true);
-    const installRelayClient = vi.fn().mockResolvedValue({
-      status: "available",
-      executablePath: "/Users/test/.t3/tools/cloudflared/cloudflared",
-      source: "managed",
-      version: "2026.5.2",
-    });
-    window.desktopBridge = {
-      confirm,
-      getRelayClientStatus: vi.fn().mockResolvedValue({
-        status: "missing",
-        version: "2026.5.2",
+  it.effect(
+    "installs the relay client over environment RPC before requesting a cloud challenge",
+    () =>
+      Effect.gen(function* () {
+        getRelayClientStatusMock.mockResolvedValue({
+          status: "missing",
+          version: "2026.5.2",
+        });
+        vi.mocked(readPrimaryEnvironmentDescriptor).mockReturnValue({
+          environmentId: EnvironmentId.make("env-1"),
+          label: "Desktop",
+          platform: { os: "darwin", arch: "arm64" },
+          serverVersion: "0.0.0-test",
+          capabilities: { repositoryIdentity: true },
+        });
+        vi.mocked(readPrimaryEnvironmentTarget).mockReturnValue({
+          source: "desktop-managed",
+          target: {
+            httpBaseUrl: "http://127.0.0.1:3000",
+            wsBaseUrl: "ws://127.0.0.1:3000",
+          },
+        });
+        const fetchMock = vi
+          .fn()
+          .mockResolvedValueOnce(Response.json(validChallenge()))
+          .mockResolvedValueOnce(Response.json({ malformed: true }));
+        vi.stubGlobal("fetch", fetchMock);
+
+        yield* withCloudServices(
+          linkPrimaryEnvironmentToCloud({
+            clerkToken: "clerk-token",
+          }),
+        ).pipe(Effect.flip);
+
+        expect(confirmRelayClientInstallMock).toHaveBeenCalledOnce();
+        expect(getRelayClientStatusMock).toHaveBeenCalledOnce();
+        expect(installRelayClientMock).toHaveBeenCalledOnce();
+        expect(installRelayClientMock.mock.invocationCallOrder[0]).toBeLessThan(
+          fetchMock.mock.invocationCallOrder[0]!,
+        );
+        expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+          "https://relay.example.test/v1/client/environment-link-challenges",
+        );
       }),
-      installRelayClient,
-    } as unknown as DesktopBridge;
-
-    await Effect.runPromise(ensureDesktopRelayClientAvailable());
-
-    expect(confirm).toHaveBeenCalledOnce();
-    expect(installRelayClient).toHaveBeenCalledOnce();
-  });
-
-  it("does not install the relay client when desktop confirmation is declined", async () => {
-    vi.stubGlobal("window", {});
-    const installRelayClient = vi.fn();
-    window.desktopBridge = {
-      confirm: vi.fn().mockResolvedValue(false),
-      getRelayClientStatus: vi.fn().mockResolvedValue({
-        status: "missing",
-        version: "2026.5.2",
-      }),
-      installRelayClient,
-    } as unknown as DesktopBridge;
-
-    await expect(Effect.runPromise(ensureDesktopRelayClientAvailable())).rejects.toMatchObject({
-      message: "Relay client installation was cancelled.",
-    });
-    expect(installRelayClient).not.toHaveBeenCalled();
-  });
+  );
 
   it.effect("lists relay-managed environments for hosted and served web clients", () =>
     Effect.gen(function* () {
@@ -453,6 +487,7 @@ describe("web cloud link environment client", () => {
           }),
         );
 
+        expect(getRelayClientStatusMock).toHaveBeenCalledOnce();
         expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
           "https://relay.example.test/v1/client/environment-link-challenges",
         );

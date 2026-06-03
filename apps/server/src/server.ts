@@ -243,6 +243,14 @@ const AuthLayerLive = EnvironmentAuth.layer.pipe(
   Layer.provide(ServerSecretStore.layer),
 );
 
+const CloudManagedEndpointRuntimeLive = Layer.mergeAll(
+  RelayClientLive,
+  CloudManagedEndpointRuntime.layer.pipe(
+    Layer.provide(ServerSecretStore.layer),
+    Layer.provide(RelayClientLive),
+  ),
+);
+
 const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   Layer.provideMerge(ProviderLayerLive),
   Layer.provideMerge(OrchestrationLayerLive),
@@ -284,12 +292,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(ServerEnvironmentLive),
   Layer.provideMerge(AuthLayerLive),
   Layer.provideMerge(ServerSecretStore.layer),
-  Layer.provideMerge(
-    CloudManagedEndpointRuntime.layer.pipe(
-      Layer.provide(ServerSecretStore.layer),
-      Layer.provide(RelayClientLive),
-    ),
-  ),
+  Layer.provideMerge(CloudManagedEndpointRuntimeLive),
 );
 
 const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
