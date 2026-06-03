@@ -60,6 +60,7 @@ import * as RelayConfiguration from "../Config.ts";
 import * as AgentActivityPublisher from "../agentActivity/AgentActivityPublisher.ts";
 import * as EnvironmentConnector from "../environments/EnvironmentConnector.ts";
 import * as EnvironmentLinker from "../environments/EnvironmentLinker.ts";
+import * as ManagedEndpointProvider from "../environments/ManagedEndpointProvider.ts";
 import * as EnvironmentPublishSignatures from "../environments/EnvironmentPublishSignatures.ts";
 import * as MobileRegistrations from "../agentActivity/MobileRegistrations.ts";
 import { withSpanAttributes } from "../observability.ts";
@@ -410,6 +411,7 @@ export const clientApi = HttpApiBuilder.group(
     const relayTokens = yield* RelayTokens.RelayTokens;
     const linker = yield* EnvironmentLinker.EnvironmentLinker;
     const links = yield* EnvironmentLinks.EnvironmentLinks;
+    const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
     const credentials = yield* EnvironmentCredentials.EnvironmentCredentials;
     const devices = yield* Devices.Devices;
     return handlers
@@ -526,6 +528,12 @@ export const clientApi = HttpApiBuilder.group(
         Effect.fn("relay.api.client.unlinkEnvironment")(function* (args) {
           const { params } = args;
           const { userId } = yield* RelayClientPrincipal;
+          yield* managedEndpointProvider
+            .deprovision({
+              userId,
+              environmentId: params.environmentId,
+            })
+            .pipe(Effect.catch(() => relayInternalErrorResponse("upstream_unavailable")));
           const link = yield* links.getForUser({
             userId,
             environmentId: params.environmentId,

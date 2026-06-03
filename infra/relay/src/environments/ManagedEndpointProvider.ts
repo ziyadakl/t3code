@@ -34,6 +34,12 @@ export class ManagedEndpointProvisioningFailed extends Data.TaggedError(
   readonly cause: unknown;
 }> {}
 
+export class ManagedEndpointDeprovisioningFailed extends Data.TaggedError(
+  "ManagedEndpointDeprovisioningFailed",
+)<{
+  readonly cause: unknown;
+}> {}
+
 export class ManagedEndpointOriginNotAllowed extends Data.TaggedError(
   "ManagedEndpointOriginNotAllowed",
 )<{
@@ -57,6 +63,10 @@ export interface ManagedEndpointProviderShape {
     readonly environmentId: string;
     readonly origin: RelayManagedEndpointOrigin;
   }) => Effect.Effect<ManagedEndpointProvisioningResult, ManagedEndpointProviderError>;
+  readonly deprovision: (input: {
+    readonly userId: string;
+    readonly environmentId: string;
+  }) => Effect.Effect<void, ManagedEndpointDeprovisioningFailed>;
 }
 
 export class ManagedEndpointProvider extends Context.Service<
@@ -97,6 +107,7 @@ export interface ManagedEndpointTunnelClientShape {
     },
   ) => Effect.Effect<unknown, ManagedEndpointTunnelClientError>;
   readonly getToken: (tunnelId: string) => Effect.Effect<string, ManagedEndpointTunnelClientError>;
+  readonly delete: (tunnelId: string) => Effect.Effect<unknown, ManagedEndpointTunnelClientError>;
 }
 
 export class ManagedEndpointTunnelClient extends Context.Service<
@@ -162,6 +173,7 @@ function normalizeHostname(hostname: string): string {
   return hostname
     .trim()
     .toLowerCase()
+    .replace(/\.$/u, "")
     .replace(/^\[(.*)\]$/u, "$1");
 }
 
@@ -174,6 +186,25 @@ function isLoopbackOrigin(origin: RelayManagedEndpointOrigin): boolean {
     origin.localHttpPort <= 65_535
   );
 }
+
+function isNotFoundCause(cause: unknown): boolean {
+  if (typeof cause !== "object" || cause === null) {
+    return false;
+  }
+  if ("_tag" in cause && cause._tag === "NotFound") {
+    return true;
+  }
+  if ("status" in cause && cause.status === 404) {
+    return true;
+  }
+  return "cause" in cause && isNotFoundCause(cause.cause);
+}
+
+const ignoreNotFound = <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<void, E> =>
+  effect.pipe(
+    Effect.asVoid,
+    Effect.catch((cause) => (isNotFoundCause(cause) ? Effect.void : Effect.fail(cause))),
+  );
 
 const make = Effect.gen(function* () {
   const config = yield* RelayConfiguration.RelayConfiguration;
@@ -205,6 +236,17 @@ const make = Effect.gen(function* () {
     preferredDnsRecordId: string | null,
     dnsRecord: ManagedEndpointCnameRecordInput,
   ) {
+    if (preferredDnsRecordId !== null) {
+      const checkpointedRecordUpdated = yield* dns
+        .updateRecord(preferredDnsRecordId, dnsRecord)
+        .pipe(
+          Effect.as(true),
+          Effect.catch(() => Effect.succeed(false)),
+        );
+      if (checkpointedRecordUpdated) {
+        return preferredDnsRecordId;
+      }
+    }
     const existingDnsRecords = yield* dns.listRecords(hostname);
     const existingDnsRecordId = yield* updateExistingDnsRecords(
       existingDnsRecords,
@@ -217,7 +259,14 @@ const make = Effect.gen(function* () {
     return yield* dns.createRecord(dnsRecord).pipe(
       Effect.map((record) => record.id),
       Effect.catch((createError) =>
-        dns.listRecords(hostname).pipe(
+        Effect.gen(function* () {
+          let records = yield* dns.listRecords(hostname);
+          for (let attempt = 0; records.length === 0 && attempt < 4; attempt++) {
+            yield* Effect.sleep("200 millis");
+            records = yield* dns.listRecords(hostname);
+          }
+          return records;
+        }).pipe(
           Effect.flatMap((records) =>
             records.length > 0
               ? updateExistingDnsRecords(records, preferredDnsRecordId, dnsRecord)
@@ -232,6 +281,31 @@ const make = Effect.gen(function* () {
   });
 
   return ManagedEndpointProvider.of({
+    deprovision: Effect.fn("relay.managed_endpoint_provider.deprovision")(function* (input) {
+      yield* Effect.annotateCurrentSpan({
+        "relay.user_id": input.userId,
+        "relay.environment_id": input.environmentId,
+      });
+      const allocation = yield* allocations
+        .get(input)
+        .pipe(Effect.mapError((cause) => new ManagedEndpointDeprovisioningFailed({ cause })));
+      if (allocation === null) {
+        return;
+      }
+      if (allocation.dnsRecordId !== null) {
+        yield* ignoreNotFound(dns.deleteRecord(allocation.dnsRecordId)).pipe(
+          Effect.mapError((cause) => new ManagedEndpointDeprovisioningFailed({ cause })),
+        );
+      }
+      if (allocation.tunnelId !== null) {
+        yield* ignoreNotFound(tunnels.delete(allocation.tunnelId)).pipe(
+          Effect.mapError((cause) => new ManagedEndpointDeprovisioningFailed({ cause })),
+        );
+      }
+      yield* allocations
+        .remove(input)
+        .pipe(Effect.mapError((cause) => new ManagedEndpointDeprovisioningFailed({ cause })));
+    }),
     provision: Effect.fn("relay.managed_endpoint_provider.provision")(function* (input) {
       yield* Effect.annotateCurrentSpan({
         "relay.user_id": input.userId,
@@ -382,17 +456,23 @@ export const layerCloudflareBindings = (
                 Effect.mapError((cause) => new ManagedEndpointTunnelClientError({ cause })),
                 Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
               ),
+            delete: (tunnelId) =>
+              tunnelClient.delete(tunnelId).pipe(
+                Effect.mapError((cause) => new ManagedEndpointTunnelClientError({ cause })),
+                Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+              ),
           }),
         ),
         Layer.succeed(
           ManagedEndpointDnsClient,
           ManagedEndpointDnsClient.of({
             listRecords: (hostname) =>
-              dnsClient.listDnsRecords({ name: { exact: hostname } }).pipe(
+              dnsClient.listDnsRecords({ search: hostname }).pipe(
                 Effect.map((response) =>
                   response.result.filter(
                     (record): record is typeof record & { readonly id: string } =>
-                      typeof record.id === "string",
+                      typeof record.id === "string" &&
+                      normalizeHostname(record.name) === normalizeHostname(hostname),
                   ),
                 ),
                 Effect.mapError((cause) => new ManagedEndpointDnsClientError({ cause })),

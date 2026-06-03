@@ -487,6 +487,14 @@ export function unlinkPrimaryEnvironmentFromCloud(input: {
         message: "Local environment is not ready yet.",
       });
     }
+    const client = yield* makeEnvironmentHttpApiClient(resolvePrimaryEnvironmentHttpUrl("/"));
+    yield* client.cloud
+      .unlink({ headers: {} })
+      .pipe(
+        withPrimaryEnvironmentRequestInit,
+        Effect.mapError(environmentApiError("Could not unlink the environment from cloud.")),
+      );
+
     const configuredRelayUrl = relayUrl();
     if (configuredRelayUrl && input.clerkToken) {
       const relayClient = yield* ManagedRelayClient;
@@ -497,20 +505,12 @@ export function unlinkPrimaryEnvironmentFromCloud(input: {
         })
         .pipe(
           Effect.catch((cause) =>
-            Effect.logWarning("Could not revoke cloud environment link before local unlink.", {
+            Effect.logWarning("Could not revoke cloud environment link after local unlink.", {
               cause,
             }),
           ),
         );
     }
-
-    const client = yield* makeEnvironmentHttpApiClient(resolvePrimaryEnvironmentHttpUrl("/"));
-    yield* client.cloud
-      .unlink({ headers: {} })
-      .pipe(
-        withPrimaryEnvironmentRequestInit,
-        Effect.mapError(environmentApiError("Could not unlink the environment from cloud.")),
-      );
   });
 }
 

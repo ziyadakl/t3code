@@ -43,6 +43,9 @@ interface RecordManagedEndpointDnsInput extends ManagedEndpointAllocationKey {
 }
 
 export interface ManagedEndpointAllocationsShape {
+  readonly get: (
+    input: ManagedEndpointAllocationKey,
+  ) => Effect.Effect<ManagedEndpointAllocation | null, ManagedEndpointAllocationPersistenceError>;
   readonly reserve: (
     input: ReserveManagedEndpointAllocationInput,
   ) => Effect.Effect<ManagedEndpointAllocation, ManagedEndpointAllocationPersistenceError>;
@@ -53,6 +56,9 @@ export interface ManagedEndpointAllocationsShape {
     input: RecordManagedEndpointDnsInput,
   ) => Effect.Effect<void, ManagedEndpointAllocationPersistenceError>;
   readonly markReady: (
+    input: ManagedEndpointAllocationKey,
+  ) => Effect.Effect<void, ManagedEndpointAllocationPersistenceError>;
+  readonly remove: (
     input: ManagedEndpointAllocationKey,
   ) => Effect.Effect<void, ManagedEndpointAllocationPersistenceError>;
 }
@@ -82,6 +88,19 @@ const make = Effect.gen(function* () {
   const db = yield* RelayDb;
 
   return ManagedEndpointAllocations.of({
+    get: Effect.fn("relay.managed_endpoint_allocations.get")(function* (
+      input: ManagedEndpointAllocationKey,
+    ) {
+      return yield* db
+        .select(allocationSelection)
+        .from(relayManagedEndpointAllocations)
+        .where(whereAllocation(input))
+        .limit(1)
+        .pipe(
+          Effect.map((rows) => rows[0] ?? null),
+          Effect.mapError(persistenceError),
+        );
+    }),
     reserve: Effect.fn("relay.managed_endpoint_allocations.reserve")(function* (
       input: ReserveManagedEndpointAllocationInput,
     ) {
@@ -146,6 +165,11 @@ const make = Effect.gen(function* () {
           updatedAt: now,
         })
         .where(whereAllocation(input));
+    }, Effect.mapError(persistenceError)),
+    remove: Effect.fn("relay.managed_endpoint_allocations.remove")(function* (
+      input: ManagedEndpointAllocationKey,
+    ) {
+      yield* db.delete(relayManagedEndpointAllocations).where(whereAllocation(input));
     }, Effect.mapError(persistenceError)),
   });
 });

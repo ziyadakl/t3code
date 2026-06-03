@@ -624,7 +624,7 @@ describe("web cloud link environment client", () => {
     }),
   );
 
-  it.effect("revokes the primary cloud link before clearing local relay credentials", () =>
+  it.effect("clears local relay credentials before revoking the primary cloud link", () =>
     Effect.gen(function* () {
       vi.mocked(readPrimaryEnvironmentDescriptor).mockReturnValue({
         environmentId: EnvironmentId.make("env-1"),
@@ -642,10 +642,10 @@ describe("web cloud link environment client", () => {
       });
       const fetchMock = vi
         .fn()
-        .mockResolvedValueOnce(Response.json({ ok: true }))
         .mockResolvedValueOnce(
           Response.json({ ok: true, endpointRuntimeStatus: { status: "disabled" } }),
-        );
+        )
+        .mockResolvedValueOnce(Response.json({ ok: true }));
       vi.stubGlobal("fetch", fetchMock);
 
       yield* withCloudServices(
@@ -654,16 +654,16 @@ describe("web cloud link environment client", () => {
         }),
       );
 
-      expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
-        "https://relay.example.test/v1/client/environment-links/env-1",
-      );
-      expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("DELETE");
-      expect(fetchMock.mock.calls[0]?.[1]?.headers.authorization).toBe("Bearer clerk-token");
-      expect(String(fetchMock.mock.calls[1]?.[0])).toBe("http://127.0.0.1:3000/api/cloud/unlink");
-      expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
+      expect(String(fetchMock.mock.calls[0]?.[0])).toBe("http://127.0.0.1:3000/api/cloud/unlink");
+      expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
         method: "POST",
         credentials: "include",
       });
+      expect(String(fetchMock.mock.calls[1]?.[0])).toBe(
+        "https://relay.example.test/v1/client/environment-links/env-1",
+      );
+      expect(fetchMock.mock.calls[1]?.[1]?.method).toBe("DELETE");
+      expect(fetchMock.mock.calls[1]?.[1]?.headers.authorization).toBe("Bearer clerk-token");
     }),
   );
 
@@ -685,10 +685,10 @@ describe("web cloud link environment client", () => {
       });
       const fetchMock = vi
         .fn()
-        .mockResolvedValueOnce(Response.json({ error: "unavailable" }, { status: 503 }))
         .mockResolvedValueOnce(
           Response.json({ ok: true, endpointRuntimeStatus: { status: "disabled" } }),
-        );
+        )
+        .mockResolvedValueOnce(Response.json({ error: "unavailable" }, { status: 503 }));
       vi.stubGlobal("fetch", fetchMock);
 
       yield* withCloudServices(
@@ -698,8 +698,8 @@ describe("web cloud link environment client", () => {
       );
 
       expect(fetchMock).toHaveBeenCalledTimes(2);
-      expect(String(fetchMock.mock.calls[1]?.[0])).toBe("http://127.0.0.1:3000/api/cloud/unlink");
-      expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
+      expect(String(fetchMock.mock.calls[0]?.[0])).toBe("http://127.0.0.1:3000/api/cloud/unlink");
+      expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
         method: "POST",
         credentials: "include",
       });
