@@ -490,7 +490,7 @@ export class RelayEnvironmentPrincipal extends Context.Service<
   RelayEnvironmentPrincipalShape
 >()("@t3tools/contracts/relay/RelayEnvironmentPrincipal") {}
 
-const RelayClientBearerAuthorization = HttpApiSecurity.bearer.pipe(
+const RelayClientBearerAuthorization = HttpApiSecurity.http({ scheme: "bearer" }).pipe(
   HttpApiSecurity.annotate(
     OpenApi.Description,
     "Clerk session or OAuth bearer token for the signed-in T3 Cloud user.",
@@ -505,7 +505,7 @@ export class RelayClientAuth extends HttpApiMiddleware.Service<
   security: { clientBearer: RelayClientBearerAuthorization },
 }) {}
 
-const RelayEnvironmentBearerAuthorization = HttpApiSecurity.bearer.pipe(
+const RelayEnvironmentBearerAuthorization = HttpApiSecurity.http({ scheme: "bearer" }).pipe(
   HttpApiSecurity.annotate(
     OpenApi.Description,
     "Relay-issued environment credential installed when the environment is linked.",
