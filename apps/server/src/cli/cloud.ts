@@ -135,14 +135,14 @@ const runLiveCloudUnlink = Effect.fn("cloud.cli.run_live_unlink")(function* () {
   const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
   const result = yield* Effect.exit(
     withCloudCliSessionToken(environmentAuth, (token) =>
-      Effect.gen(function* () {
-        const httpClient = yield* HttpClient.HttpClient;
-        const client = yield* HttpApiClient.makeWith(EnvironmentHttpApi, {
-          baseUrl: runtimeState.value.origin,
-          httpClient,
-        });
-        return yield* client.cloud.unlink({ headers: { authorization: `Bearer ${token}` } });
-      }).pipe(Effect.timeout(CLOUD_CLI_LIVE_SERVER_TIMEOUT)),
+      HttpApiClient.make(EnvironmentHttpApi, {
+        baseUrl: runtimeState.value.origin,
+      }).pipe(
+        Effect.flatMap((client) =>
+          client.cloud.unlink({ headers: { authorization: `Bearer ${token}` } }),
+        ),
+        Effect.timeout(CLOUD_CLI_LIVE_SERVER_TIMEOUT),
+      ),
     ),
   );
   return Exit.isSuccess(result)
