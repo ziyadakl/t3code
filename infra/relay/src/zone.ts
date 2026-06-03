@@ -8,7 +8,7 @@ import * as Option from "effect/Option";
 import { relayPublicDomainForStage } from "./deploymentConfig.ts";
 
 export const RelayDeploymentConfig = Effect.gen(function* () {
-  const stage = yield* Alchemy.Stage;
+  const { stage } = yield* Alchemy.Stack;
   const managedEndpointZoneName = yield* Config.nonEmptyString("RELAY_ZONE_NAME");
   const relayPublicDomainOverride = yield* Config.nonEmptyString("RELAY_DOMAIN").pipe(
     Config.option,
