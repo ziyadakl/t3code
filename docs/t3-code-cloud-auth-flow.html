@@ -289,6 +289,33 @@
             The relay cannot mint an environment access token by itself. It can only ask the local
             environment to mint a short-lived bootstrap credential for an authorized cloud user.
           </div>
+          <p>During an honest connection flow, the relay cannot act as the remote client:</p>
+          <ul>
+            <li>
+              Normal environment API traffic goes directly from the remote client through the
+              managed endpoint. The relay does not receive the resulting environment access token.
+            </li>
+            <li>
+              The one-time bootstrap credential and resulting environment access token are bound to
+              the remote client's DPoP public-key thumbprint. Redeeming or using them requires
+              request proofs signed by the corresponding private key, which stays on the client.
+            </li>
+            <li>
+              Relay-signed health and mint proofs are short-lived, audience-bound, scoped, and
+              replay-guarded. They are accepted only by the narrow cloud endpoints, not as normal
+              environment API credentials.
+            </li>
+            <li>
+              Environment health and mint responses are signed by the linked environment and bound
+              to the request nonce, so a different process behind the tunnel cannot impersonate the
+              linked environment.
+            </li>
+          </ul>
+          <div class="callout warning">
+            The hosted relay remains a trusted mint broker: it holds the cloud-mint signing key.
+            DPoP prevents credential reuse by the relay or tunnel transport during an honest flow,
+            but it does not make compromise of the relay signing authority harmless.
+          </div>
         </article>
 
         <article class="panel half">
@@ -697,6 +724,47 @@ sequenceDiagram
             config, and agent-activity preference.
           </p>
         </article>
+      </section>
+
+      <section class="panel" aria-label="Cloudflare tunnel operational profile">
+        <h2>Cloudflare Tunnel Operational Profile</h2>
+        <p>
+          Managed tunnels are private application backends, not general-purpose public hosting. The
+          relay provisions one named Cloudflare tunnel and one DNS record per active
+          <code>(userId, environmentId)</code> allocation.
+        </p>
+        <ul>
+          <li>
+            <strong>Lifecycle:</strong> the tunnel is created when an environment is linked, reused
+            across retry-safe reconciliation, kept for the lifetime of that link, and deleted on
+            unlink. If teardown fails, the allocation checkpoint remains so cleanup can be retried.
+          </li>
+          <li>
+            <strong>Origin:</strong> tunnel ingress is restricted to the linked environment server's
+            validated loopback HTTP origin. Arbitrary upstream hosts and raw TCP origins are
+            rejected.
+          </li>
+          <li>
+            <strong>Protocols:</strong> managed endpoints carry HTTPS request/response traffic and
+            WSS connections only. Remote clients use the normal environment HTTP APIs and
+            authenticated WebSocket RPC transport through the tunnel.
+          </li>
+          <li>
+            <strong>Relay-generated traffic:</strong> the hosted relay sends sparse HTTPS health
+            checks and credential-mint requests during status checks and remote connection
+            bootstrap. It does not proxy steady-state remote sessions.
+          </li>
+          <li>
+            <strong>Traffic shape:</strong> expected load is interactive and user-driven. Active
+            remote sessions may keep WebSockets open and exchange terminal, agent, and UI updates;
+            inactive linked environments should carry little or no tunnel traffic.
+          </li>
+          <li>
+            <strong>Capacity planning:</strong> the project is pre-launch, so there is not yet a
+            production bandwidth baseline. Tunnel count grows with active linked user/environment
+            allocations, while bandwidth and concurrent WebSockets grow with active remote use.
+          </li>
+        </ul>
       </section>
 
       <section class="panel" aria-label="SSRF and tunnel hardening">
