@@ -1,6 +1,5 @@
 import { useAuth, useUser, useUserProfileModal } from "@clerk/expo";
 import * as Notifications from "expo-notifications";
-import { RELAY_CLERK_TOKEN_OPTIONS } from "@t3tools/shared/relayAuth";
 import { Link, Stack, useRouter } from "expo-router";
 import { SymbolView } from "expo-symbols";
 import * as Effect from "effect/Effect";
@@ -14,7 +13,10 @@ import { setLiveActivityUpdatesEnabled } from "../../features/agent-awareness/li
 import { requestAgentNotificationPermission } from "../../features/agent-awareness/notificationPermissions";
 import { refreshAgentAwarenessRegistration } from "../../features/agent-awareness/remoteRegistration";
 import { refreshManagedRelayEnvironments } from "../../features/cloud/managedRelayState";
-import { hasCloudPublicConfig } from "../../features/cloud/publicConfig";
+import {
+  hasCloudPublicConfig,
+  resolveRelayClerkTokenOptions,
+} from "../../features/cloud/publicConfig";
 import { mobileRuntime } from "../../lib/runtime";
 import { loadPreferences } from "../../lib/storage";
 import { useThemeColor } from "../../lib/useThemeColor";
@@ -176,7 +178,7 @@ function ConfiguredSettingsRouteScreen() {
 
     setLiveActivityStatus("linking");
     try {
-      const token = await getToken(RELAY_CLERK_TOKEN_OPTIONS);
+      const token = await getToken(resolveRelayClerkTokenOptions());
       if (!token) {
         promptSignIn();
         setLiveActivityStatus("signed-out");
@@ -232,7 +234,7 @@ function ConfiguredSettingsRouteScreen() {
         setLiveActivityStatus("disabled");
         void (async () => {
           try {
-            const token = isSignedIn ? await getToken(RELAY_CLERK_TOKEN_OPTIONS) : null;
+            const token = isSignedIn ? await getToken(resolveRelayClerkTokenOptions()) : null;
             await mobileRuntime.runPromise(
               setLiveActivityUpdatesEnabled({
                 enabled: false,

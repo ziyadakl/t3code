@@ -578,7 +578,7 @@ export const tokenApi = HttpApiBuilder.group(
         const verified = yield* verifyClerkBearerToken(config, args.payload.subject_token).pipe(
           Effect.catch(() => relayAuthInvalidError("invalid_bearer")),
         );
-        if (!verified.sub || !hasExpectedClerkAudience(verified.aud, config.relayIssuer)) {
+        if (!verified.sub || !hasExpectedClerkAudience(verified.aud, config.clerkJwtAudience)) {
           return yield* relayAuthInvalidError("invalid_bearer");
         }
         const proofKeyThumbprint = yield* requireDpopProof().pipe(
@@ -960,8 +960,7 @@ function clerkVerificationFailureReason(cause: unknown): string {
   return "unknown";
 }
 
-function hasExpectedClerkAudience(audience: unknown, relayIssuer: string): boolean {
-  const expectedAudience = normalizeRelayIssuer(relayIssuer);
+function hasExpectedClerkAudience(audience: unknown, expectedAudience: string): boolean {
   return typeof audience === "string"
     ? audience === expectedAudience
     : Array.isArray(audience) &&
@@ -973,7 +972,7 @@ function verifyClerkBearerToken(config: RelayConfiguration.RelayConfigurationSha
     try: () =>
       verifyToken(token, {
         secretKey: Redacted.value(config.clerkSecretKey),
-        audience: normalizeRelayIssuer(config.relayIssuer),
+        audience: config.clerkJwtAudience,
       }),
     catch: (cause) => new ClerkTokenVerificationFailed({ cause }),
   }).pipe(
@@ -1015,7 +1014,7 @@ export function verifyRelayClientBearerToken(
 ) {
   return verifyClerkBearerToken(config, token).pipe(
     Effect.flatMap((verified) =>
-      verified.sub && hasExpectedClerkAudience(verified.aud, config.relayIssuer)
+      verified.sub && hasExpectedClerkAudience(verified.aud, config.clerkJwtAudience)
         ? Effect.succeed({ sub: verified.sub, mode: "clerk_session_bearer" as const })
         : Effect.fail(new ClerkTokenVerificationFailed({ cause: "missing_relay_audience" })),
     ),

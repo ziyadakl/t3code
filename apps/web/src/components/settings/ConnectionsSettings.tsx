@@ -30,7 +30,6 @@ import {
   type EnvironmentId,
 } from "@t3tools/contracts";
 import { WsRpcClient } from "@t3tools/client-runtime";
-import { RELAY_CLERK_TOKEN_OPTIONS } from "@t3tools/shared/relayAuth";
 import type { RelayClientEnvironmentRecord } from "@t3tools/contracts/relay";
 import * as DateTime from "effect/DateTime";
 
@@ -38,6 +37,7 @@ import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { cn } from "../../lib/utils";
 import { formatElapsedDurationLabel, formatExpiresInLabel } from "../../timestampFormat";
 import { resolveDesktopPairingUrl, resolveHostedPairingUrl } from "./pairingUrls";
+import { resolveRelayClerkTokenOptions } from "../../cloud/publicConfig";
 import {
   SettingsPageContainer,
   SettingsRow,
@@ -1640,7 +1640,7 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
     setIsUpdating(true);
     setOperationError(null);
     try {
-      const clerkToken = await getToken(RELAY_CLERK_TOKEN_OPTIONS);
+      const clerkToken = await getToken(resolveRelayClerkTokenOptions());
       if (enabled) {
         if (!clerkToken) {
           throw new Error("Sign in from T3 Cloud settings before linking this environment.");
@@ -1753,7 +1753,7 @@ function ConfiguredCloudRemoteEnvironmentRows({
   const connectEnvironment = async (environment: RelayClientEnvironmentRecord) => {
     setConnectingEnvironmentId(environment.environmentId);
     try {
-      const clerkToken = await getToken(RELAY_CLERK_TOKEN_OPTIONS);
+      const clerkToken = await getToken(resolveRelayClerkTokenOptions());
       if (!clerkToken) {
         throw new Error("Sign in from T3 Cloud settings before connecting this environment.");
       }

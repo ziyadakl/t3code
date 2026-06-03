@@ -133,6 +133,8 @@ The `production` GitHub environment must define these Actions variables:
 - `RELAY_ZONE_NAME`
 - `RELAY_DOMAIN` if overriding the derived production relay domain
 - `CLERK_PUBLISHABLE_KEY`
+- `CLERK_JWT_AUDIENCE`
+- `CLERK_JWT_TEMPLATE`
 - `APNS_ENVIRONMENT`
 - `APNS_TEAM_ID`
 - `APNS_KEY_ID`

@@ -2,7 +2,6 @@ import { ClerkProvider, useAuth } from "@clerk/expo";
 import { tokenCache } from "@clerk/expo/token-cache";
 import { createManagedRelaySession, setManagedRelaySession } from "@t3tools/client-runtime";
 import { type ReactNode, useEffect, useRef } from "react";
-import { RELAY_CLERK_TOKEN_OPTIONS } from "@t3tools/shared/relayAuth";
 
 import { mobileRuntime } from "../../lib/runtime";
 import { appAtomRegistry } from "../../state/atom-registry";
@@ -11,7 +10,7 @@ import {
   unregisterAgentAwarenessDeviceForCurrentUser,
 } from "../agent-awareness/remoteRegistration";
 import { refreshActiveLiveActivityRemoteRegistration } from "../agent-awareness/liveActivityController";
-import { resolveCloudPublicConfig } from "./publicConfig";
+import { resolveCloudPublicConfig, resolveRelayClerkTokenOptions } from "./publicConfig";
 
 function CloudAuthBridge(props: { readonly children: ReactNode }) {
   const { getToken, isLoaded, isSignedIn, userId } = useAuth({ treatPendingAsSignedOut: false });
@@ -43,7 +42,7 @@ function CloudAuthBridge(props: { readonly children: ReactNode }) {
         .runPromise(unregisterAgentAwarenessDeviceForCurrentUser(previous.provider))
         .catch(() => undefined);
     }
-    const tokenProvider = () => getToken(RELAY_CLERK_TOKEN_OPTIONS);
+    const tokenProvider = () => getToken(resolveRelayClerkTokenOptions());
     previousTokenProviderRef.current = { userId, provider: tokenProvider };
     setAgentAwarenessRelayTokenProvider(tokenProvider, userId);
     setManagedRelaySession(

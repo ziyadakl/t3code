@@ -3,7 +3,6 @@ import { Link, Stack } from "expo-router";
 import { SymbolView } from "expo-symbols";
 import type { EnvironmentId } from "@t3tools/contracts";
 import type { RelayClientEnvironmentRecord } from "@t3tools/contracts/relay";
-import { RELAY_CLERK_TOKEN_OPTIONS } from "@t3tools/shared/relayAuth";
 import * as Effect from "effect/Effect";
 import { useCallback, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, ScrollView, View } from "react-native";
@@ -11,7 +10,10 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../components/AppText";
 import { connectCloudEnvironment } from "../../features/cloud/linkEnvironment";
-import { hasCloudPublicConfig } from "../../features/cloud/publicConfig";
+import {
+  hasCloudPublicConfig,
+  resolveRelayClerkTokenOptions,
+} from "../../features/cloud/publicConfig";
 import {
   useManagedRelayEnvironments,
   useManagedRelayEnvironmentStatus,
@@ -142,7 +144,7 @@ function ConfiguredCloudEnvironmentRows() {
     async (environment: RelayClientEnvironmentRecord) => {
       setConnectingCloudEnvironmentId(environment.environmentId);
       try {
-        const token = await getToken(RELAY_CLERK_TOKEN_OPTIONS);
+        const token = await getToken(resolveRelayClerkTokenOptions());
         if (!token) {
           throw new Error("Sign in to T3 Cloud before connecting.");
         }

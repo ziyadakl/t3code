@@ -10,7 +10,7 @@ This document covers the unified release workflow for stable and nightly desktop
   - scheduled nightly check every three hours
   - manual `workflow_dispatch` for either channel
 - Runs quality gates first: lint, typecheck, test.
-- Reads the shared production T3 Cloud relay URL and Clerk publishable key before packaging clients.
+- Reads the shared production T3 Cloud relay URL and Clerk client configuration before packaging clients.
 - Builds four artifacts in parallel for both channels:
   - macOS `arm64` DMG
   - macOS `x64` DMG
@@ -38,7 +38,7 @@ release channels.
 
 `.github/workflows/deploy-relay.yml` deploys Alchemy stage `prod` on every push to `main`. It also
 supports manual dispatch for retries. The release workflow reads the relay URL and Clerk
-publishable key from the existing `production` GitHub Actions environment before building
+client configuration from the existing `production` GitHub Actions environment before building
 desktop, CLI, or hosted web artifacts.
 
 Required repository variables shared by relay deployments:
@@ -59,6 +59,8 @@ Required `production` environment variables:
 - `RELAY_DOMAIN`
 - `RELAY_ZONE_NAME`
 - `CLERK_PUBLISHABLE_KEY`
+- `CLERK_JWT_AUDIENCE`
+- `CLERK_JWT_TEMPLATE`
 - `CLERK_CLI_OAUTH_CLIENT_ID`
 - `APNS_ENVIRONMENT`
 - `APNS_TEAM_ID`

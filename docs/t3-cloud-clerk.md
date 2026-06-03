@@ -1,8 +1,8 @@
 # T3 Cloud Clerk Setup
 
 T3 Cloud uses one Clerk application for web, desktop, and mobile authentication. The relay accepts
-Clerk JWTs only when they are generated from the `t3-relay` template with the relay URL as the
-audience.
+Clerk JWTs only when they are generated from the `t3-relay` template with the shared
+`t3-code-relay` audience.
 
 ## Application Keys
 
@@ -11,13 +11,13 @@ or `.env.local` file:
 
 ```dotenv
 T3CODE_CLERK_PUBLISHABLE_KEY=<publishable key>
+T3CODE_CLERK_JWT_TEMPLATE=<JWT template name>
 T3CODE_RELAY_URL=https://relay.example.com
 ```
 
-The shared client loader projects these canonical values into the framework-specific
-`VITE_CLERK_PUBLISHABLE_KEY`, `VITE_T3CODE_RELAY_URL`, and
-`EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY` aliases. Existing aliases remain accepted as overrides for
-compatibility, but new client configuration should use the canonical names.
+The shared client loader projects these canonical values into framework-specific `VITE_*` and
+`EXPO_PUBLIC_*` aliases. Existing aliases remain accepted as overrides for compatibility, but new
+client configuration should use the canonical names.
 
 Configuration precedence is:
 
@@ -25,17 +25,18 @@ Configuration precedence is:
 2. Repository-root `.env.local`.
 3. Repository-root `.env`.
 
-The Clerk publishable key and relay URL are public identifiers, not secrets. Web, desktop, and
-mobile builds statically inject them during their build step. A built artifact does not need an
-environment file at runtime. CI release builds should set `T3CODE_CLERK_PUBLISHABLE_KEY` and
-`T3CODE_RELAY_URL` before building. EAS preview and production builds should define the same
-client-facing values in their EAS environment.
+The Clerk publishable key, JWT template name, and relay URL are public identifiers, not secrets.
+Web, desktop, and mobile builds statically inject them during their build step. A built artifact
+does not need an environment file at runtime. CI release builds should set
+`T3CODE_CLERK_PUBLISHABLE_KEY`, `T3CODE_CLERK_JWT_TEMPLATE`, and `T3CODE_RELAY_URL` before building.
+EAS preview and production builds should define the same client-facing values in their EAS
+environment.
 
-When either public value is absent, cloud UI is omitted.
+When any client-facing public value is absent, cloud UI is omitted.
 
 For a hosted relay deployment, copy `infra/relay/.env.example` to `infra/relay/.env`. The relay
-deployment reads `RELAY_DOMAIN`, `RELAY_ZONE_NAME`, and `CLERK_PUBLISHABLE_KEY` through Effect
-`Config`. There are no checked-in deployment defaults.
+deployment reads `RELAY_DOMAIN`, `RELAY_ZONE_NAME`, `CLERK_PUBLISHABLE_KEY`, and
+`CLERK_JWT_AUDIENCE` through Effect `Config`. There are no checked-in deployment defaults.
 `bun --cwd infra/relay run deploy` invokes Alchemy from the relay directory, so Alchemy loads
 `infra/relay/.env`. After a successful deployment, the wrapper updates the repository-root `.env`
 with the HTTPS relay URL derived from `RELAY_DOMAIN`. The relay still requires
@@ -50,14 +51,16 @@ preview or developer stage.
 
 In **Clerk Dashboard > JWT templates**, create a template with:
 
-| Setting | Value                                    |
-| ------- | ---------------------------------------- |
-| Name    | `t3-relay`                               |
-| Claims  | `{ "aud": "https://relay.example.com" }` |
+| Setting | Value                        |
+| ------- | ---------------------------- |
+| Name    | `t3-relay`                   |
+| Claims  | `{ "aud": "t3-code-relay" }` |
 
-The `aud` value must be the deployed relay public URL, with no trailing slash. It must match the
-client-facing `T3CODE_RELAY_URL` and the HTTPS URL derived from the deployment's `RELAY_DOMAIN`. If
-the relay domain changes, update both values and the JWT template.
+Set `T3CODE_CLERK_JWT_TEMPLATE=t3-relay` in the repository-root `.env`, and set
+`CLERK_JWT_AUDIENCE=t3-code-relay` in `infra/relay/.env`. Define `CLERK_JWT_TEMPLATE` and
+`CLERK_JWT_AUDIENCE` in the production relay deployment environment as well. The stable `aud` value
+is shared by production and non-production relay stages. The client-facing `T3CODE_RELAY_URL` still
+selects the concrete relay deployment, but changing that URL does not require a JWT template change.
 
 ## Desktop OAuth Redirect Allowlist
 

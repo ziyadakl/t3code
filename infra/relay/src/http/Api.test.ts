@@ -40,6 +40,7 @@ const relaySettings: RelayConfiguration.RelayConfigurationShape = {
   },
   clerkSecretKey: Redacted.make("clerk-secret-key"),
   clerkPublishableKey: "pk_test_test",
+  clerkJwtAudience: "t3-code-relay",
   apnsDeliveryJobSigningSecret: Redacted.make("apns-delivery-secret"),
   cloudMintPrivateKey: Redacted.make("cloud-mint-private-key"),
   cloudMintPublicKey: "cloud-mint-public-key",
@@ -52,12 +53,16 @@ describe("relay client authentication", () => {
     Effect.gen(function* () {
       vi.mocked(verifyToken).mockResolvedValue({
         sub: "user_session",
-        aud: relaySettings.relayIssuer,
+        aud: relaySettings.clerkJwtAudience,
       } as never);
 
       expect(yield* verifyRelayClientBearerToken(relaySettings, "session-token")).toEqual({
         sub: "user_session",
         mode: "clerk_session_bearer",
+      });
+      expect(verifyToken).toHaveBeenCalledWith("session-token", {
+        secretKey: "clerk-secret-key",
+        audience: relaySettings.clerkJwtAudience,
       });
       expect(createClerkClient).not.toHaveBeenCalled();
     }).pipe(

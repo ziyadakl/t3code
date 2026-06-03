@@ -21,6 +21,9 @@ describe("loadRepoEnv", () => {
     expect(env.T3CODE_CLERK_PUBLISHABLE_KEY).toBeUndefined();
     expect(env.VITE_CLERK_PUBLISHABLE_KEY).toBeUndefined();
     expect(env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY).toBeUndefined();
+    expect(env.T3CODE_CLERK_JWT_TEMPLATE).toBeUndefined();
+    expect(env.VITE_CLERK_JWT_TEMPLATE).toBeUndefined();
+    expect(env.EXPO_PUBLIC_CLERK_JWT_TEMPLATE).toBeUndefined();
     expect(env.T3CODE_RELAY_URL).toBeUndefined();
     expect(env.VITE_T3CODE_RELAY_URL).toBeUndefined();
   });
@@ -29,11 +32,11 @@ describe("loadRepoEnv", () => {
     const repoRoot = makeTemporaryDirectory();
     writeFileSync(
       join(repoRoot, ".env"),
-      "T3CODE_CLERK_PUBLISHABLE_KEY=pk_root\nT3CODE_RELAY_URL=https://root.example.test\n",
+      "T3CODE_CLERK_PUBLISHABLE_KEY=pk_root\nT3CODE_CLERK_JWT_TEMPLATE=template_root\nT3CODE_RELAY_URL=https://root.example.test\n",
     );
     writeFileSync(
       join(repoRoot, ".env.local"),
-      "T3CODE_CLERK_PUBLISHABLE_KEY=pk_local\nT3CODE_RELAY_URL=https://local.example.test\n",
+      "T3CODE_CLERK_PUBLISHABLE_KEY=pk_local\nT3CODE_CLERK_JWT_TEMPLATE=template_local\nT3CODE_RELAY_URL=https://local.example.test\n",
     );
 
     expect(loadRepoEnv({ baseEnv: {}, repoRoot }).T3CODE_RELAY_URL).toBe(
@@ -43,6 +46,7 @@ describe("loadRepoEnv", () => {
       loadRepoEnv({
         baseEnv: {
           T3CODE_CLERK_PUBLISHABLE_KEY: "pk_ci",
+          T3CODE_CLERK_JWT_TEMPLATE: "template_ci",
           T3CODE_RELAY_URL: "https://ci.example.test",
         },
         repoRoot,
@@ -51,6 +55,9 @@ describe("loadRepoEnv", () => {
       T3CODE_CLERK_PUBLISHABLE_KEY: "pk_ci",
       VITE_CLERK_PUBLISHABLE_KEY: "pk_ci",
       EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY: "pk_ci",
+      T3CODE_CLERK_JWT_TEMPLATE: "template_ci",
+      VITE_CLERK_JWT_TEMPLATE: "template_ci",
+      EXPO_PUBLIC_CLERK_JWT_TEMPLATE: "template_ci",
       T3CODE_RELAY_URL: "https://ci.example.test",
       VITE_T3CODE_RELAY_URL: "https://ci.example.test",
     });
@@ -60,10 +67,12 @@ describe("loadRepoEnv", () => {
     expect(
       resolvePublicConfig({
         VITE_CLERK_PUBLISHABLE_KEY: "pk_legacy",
+        VITE_CLERK_JWT_TEMPLATE: "template_legacy",
         VITE_T3CODE_RELAY_URL: "https://legacy.example.test",
       }),
     ).toEqual({
       clerkPublishableKey: "pk_legacy",
+      clerkJwtTemplate: "template_legacy",
       relayUrl: "https://legacy.example.test",
     });
   });

@@ -130,6 +130,7 @@ export default class Api extends Cloudflare.Worker<Api>()(
 
     const clerkSecretKey = yield* Config.redacted("CLERK_SECRET_KEY");
     const clerkPublishableKey = yield* Config.string("CLERK_PUBLISHABLE_KEY");
+    const clerkJwtAudience = yield* Config.string("CLERK_JWT_AUDIENCE");
 
     const cloudMintPrivateKey = yield* cloudMintKeyPair.privateKey;
     const cloudMintPublicKey = yield* cloudMintKeyPair.publicKey;
@@ -158,6 +159,7 @@ export default class Api extends Cloudflare.Worker<Api>()(
         apnsDeliveryJobSigningSecret: yield* apnsDeliveryJobSigningSecret,
         clerkSecretKey,
         clerkPublishableKey,
+        clerkJwtAudience,
         cloudMintPrivateKey: yield* cloudMintPrivateKey,
         cloudMintPublicKey: yield* cloudMintPublicKey,
         managedEndpointBaseDomain: yield* managedEndpointZoneName,
