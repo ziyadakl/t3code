@@ -17,17 +17,18 @@ interface ResumePickerProps {
   environmentId: EnvironmentId;
   /** The project's root working directory; the dir whose terminal sessions we list. */
   cwd: string | null;
+  /** Resume the chosen session into a new thread. The picker closes after. */
+  onSelect: (session: ImportableSession) => void;
 }
 
 type LoadStatus = "loading" | "ready" | "error";
 
 /**
  * The `/resume` picker: lists past terminal Claude sessions for the current
- * project so they can be resumed inside t3. This is the deliberately minimal
- * first slice — it lists sessions; selecting one (the "import" action) is the
- * next slice. See repo CONTEXT.md + docs/adr/0001.
+ * project and resumes the chosen one into a new t3 thread (continue + display).
+ * See repo CONTEXT.md + docs/adr/0001.
  */
-export function ResumePicker({ environmentId, cwd }: ResumePickerProps) {
+export function ResumePicker({ environmentId, cwd, onSelect }: ResumePickerProps) {
   const open = useResumePickerStore((store) => store.open);
   const setOpen = useResumePickerStore((store) => store.setOpen);
 
@@ -98,13 +99,21 @@ export function ResumePicker({ environmentId, cwd }: ResumePickerProps) {
             </div>
           ) : null}
           {sessions.map((session) => (
-            <div key={session.sessionId} className="rounded-md border px-3 py-2 text-sm">
+            <button
+              key={session.sessionId}
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                onSelect(session);
+              }}
+              className="w-full rounded-md border px-3 py-2 text-left text-sm hover:bg-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
               <div className="font-medium text-foreground">{session.title}</div>
               <div className="text-xs text-muted-foreground">
                 {session.sessionId}
                 {session.alreadyImported ? " · already imported" : ""}
               </div>
-            </div>
+            </button>
           ))}
         </DialogPanel>
       </DialogPopup>

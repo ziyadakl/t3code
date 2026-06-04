@@ -1,7 +1,10 @@
 import {
   type ApprovalRequestId,
   DEFAULT_MODEL,
+  DEFAULT_MODEL_BY_PROVIDER,
+  defaultInstanceIdForDriver,
   type EnvironmentId,
+  type ImportableSession,
   type MessageId,
   type ModelSelection,
   type ProjectScript,
@@ -3868,7 +3871,54 @@ export default function ChatView(props: ChatViewProps) {
             <div className="relative isolate">
               <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
               <div className="relative z-10">
-                <ResumePicker environmentId={environmentId} cwd={activeProject?.cwd ?? null} />
+                <ResumePicker
+                  environmentId={environmentId}
+                  cwd={activeProject?.cwd ?? null}
+                  onSelect={(session: ImportableSession) => {
+                    const project = activeProject;
+                    if (!project) {
+                      return;
+                    }
+                    const api = readEnvironmentApi(environmentId);
+                    if (!api) {
+                      return;
+                    }
+                    const nextThreadId = newThreadId();
+                    // Resume targets a Claude SDK session, so the thread must
+                    // run on Claude — the seed reactor binds the resume cursor
+                    // to this instance, and the first turn must resolve the same
+                    // (Claude) instance or the resume is silently dropped.
+                    const claudeDriver = ProviderDriverKind.make("claudeAgent");
+                    const resumeModelSelection: ModelSelection = {
+                      instanceId: defaultInstanceIdForDriver(claudeDriver),
+                      model: DEFAULT_MODEL_BY_PROVIDER[claudeDriver] ?? "claude-sonnet-4-6",
+                    };
+                    void api.orchestration
+                      .dispatchCommand({
+                        type: "thread.create",
+                        commandId: newCommandId(),
+                        threadId: nextThreadId,
+                        projectId: project.id,
+                        title: session.title,
+                        modelSelection: resumeModelSelection,
+                        runtimeMode,
+                        interactionMode: "default",
+                        branch: null,
+                        worktreePath: null,
+                        // Triggers ResumeSeedReactor: seed the resume cursor +
+                        // replay the transcript. No turn.start — the user types
+                        // the first message.
+                        resumeSessionId: session.sessionId,
+                        createdAt: new Date().toISOString(),
+                      })
+                      .then(() =>
+                        navigate({
+                          to: "/$environmentId/$threadId",
+                          params: { environmentId, threadId: nextThreadId },
+                        }),
+                      );
+                  }}
+                />
                 <ChatComposer
                   composerRef={composerRef}
                   composerDraftTarget={composerDraftTarget}
