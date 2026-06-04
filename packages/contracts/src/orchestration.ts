@@ -492,6 +492,9 @@ const ThreadCreateCommand = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  // Set by the /resume picker: the Claude SDK session id to resume into the
+  // new thread. Optional so every existing producer decodes unchanged.
+  resumeSessionId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   createdAt: IsoDateTime,
 });
 
@@ -835,6 +838,9 @@ export const ThreadCreatedPayload = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  // Carried from ThreadCreateCommand so the ResumeSeedReactor (and replay) can
+  // act on a thread created from the /resume picker.
+  resumeSessionId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
