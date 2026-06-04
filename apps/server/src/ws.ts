@@ -42,6 +42,7 @@ import {
   type TerminalError,
   type TerminalEvent,
   type TerminalMetadataStreamEvent,
+  ResumeError,
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
@@ -74,6 +75,10 @@ import { VcsStatusBroadcaster } from "./vcs/VcsStatusBroadcaster.ts";
 import { VcsProvisioningService } from "./vcs/VcsProvisioningService.ts";
 import { GitWorkflowService } from "./git/GitWorkflowService.ts";
 import { ReviewService } from "./review/ReviewService.ts";
+import {
+  ImportableSessionsService,
+  ImportableSessionsServiceLive,
+} from "./resume/importableSessionsService.ts";
 import { ProjectSetupScriptRunner } from "./project/Services/ProjectSetupScriptRunner.ts";
 import { RepositoryIdentityResolver } from "./project/Services/RepositoryIdentityResolver.ts";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
@@ -152,6 +157,7 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.projectsWriteFile, AuthOrchestrationOperateScope],
   [WS_METHODS.shellOpenInEditor, AuthOrchestrationOperateScope],
   [WS_METHODS.filesystemBrowse, AuthOrchestrationReadScope],
+  [WS_METHODS.resumeListImportableSessions, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeVcsStatus, AuthOrchestrationReadScope],
   [WS_METHODS.vcsRefreshStatus, AuthOrchestrationReadScope],
   [WS_METHODS.vcsPull, AuthOrchestrationOperateScope],
@@ -242,6 +248,7 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
       const startup = yield* ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem;
+      const importableSessions = yield* ImportableSessionsService;
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner;
       const repositoryIdentityResolver = yield* RepositoryIdentityResolver;
       const serverEnvironment = yield* ServerEnvironment;
@@ -984,6 +991,15 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
           observeRpcEffect(WS_METHODS.serverGetConfig, loadServerConfig, {
             "rpc.aggregate": "server",
           }),
+        [WS_METHODS.resumeListImportableSessions]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.resumeListImportableSessions,
+            importableSessions.listForProject({ projectCwd: input.cwd }).pipe(
+              Effect.map((sessions) => ({ sessions })),
+              Effect.mapError((cause) => new ResumeError({ detail: cause.detail, cause })),
+            ),
+            { "rpc.aggregate": "resume" },
+          ),
         [WS_METHODS.serverRefreshProviders]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverRefreshProviders,
@@ -1433,6 +1449,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
           Effect.provide(
             makeWsRpcLayer(session).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
+              Layer.provide(ImportableSessionsServiceLive),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(
                 SourceControlDiscoveryLayer.layer.pipe(
