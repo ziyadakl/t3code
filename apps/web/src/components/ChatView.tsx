@@ -1840,13 +1840,12 @@ export default function ChatView(props: ChatViewProps) {
   const availableEditors = useServerAvailableEditors();
   // Prefer an instance-id match so a custom Codex instance (e.g.
   // `codex_personal`) surfaces its own status/message in the banner rather
-  // than the default Codex's. Falls back to first-match-by-kind when no
-  // saved instance id is available or the instance no longer exists.
+  // than the default Codex's. For a draft with no thread yet, fall through to
+  // the composer-selected provider (the `selectedProvider` branch below)
+  // instead of the project default, so the banner reflects the provider the
+  // user actually picked — not a disabled project-default they aren't using.
   const activeProviderInstanceId =
-    activeThread?.session?.providerInstanceId ??
-    activeThread?.modelSelection.instanceId ??
-    activeProject?.defaultModelSelection?.instanceId ??
-    null;
+    activeThread?.session?.providerInstanceId ?? activeThread?.modelSelection.instanceId ?? null;
   const activeProviderStatus = useMemo(() => {
     if (activeProviderInstanceId) {
       return (
