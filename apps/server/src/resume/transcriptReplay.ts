@@ -67,6 +67,30 @@ function extractText(message: unknown): string {
   return "";
 }
 
+const COMMAND_NAME_RE = /<command-name>([\s\S]*?)<\/command-name>/;
+const COMMAND_ARGS_RE = /<command-args>([\s\S]*?)<\/command-args>/;
+
+/**
+ * Terminal Claude records a slash-command / skill invocation as a user message
+ * whose text is an XML-ish wrapper, e.g.
+ *   <command-name>/sandcastle-status</command-name>
+ *   <command-message>sandcastle-status</command-message>
+ *   <command-args></command-args>
+ * t3 renders user text as plain text, so replayed verbatim those tags are noise.
+ * Collapse them to the command the user actually typed — "/name" plus any args —
+ * so a resumed transcript reads like the original prompt. Tag order varies, so
+ * each tag is matched independently. Returns null when the text is not a command
+ * wrapper, leaving ordinary prompts untouched.
+ */
+function formatCommandInvocation(text: string): string | null {
+  const name = COMMAND_NAME_RE.exec(text)?.[1]?.trim();
+  if (!name) {
+    return null;
+  }
+  const args = COMMAND_ARGS_RE.exec(text)?.[1]?.trim() ?? "";
+  return args.length > 0 ? `${name} ${args}` : name;
+}
+
 /** Default cap on how many trailing messages are re-rendered (see planReplayCommands). */
 export const DEFAULT_REPLAY_MESSAGE_LIMIT = 100;
 
@@ -133,7 +157,7 @@ export function buildReplayCommands(
         commandId,
         threadId: ctx.threadId,
         messageId,
-        text,
+        text: formatCommandInvocation(text) ?? text,
         createdAt,
       });
     } else if (entry.type === "assistant") {

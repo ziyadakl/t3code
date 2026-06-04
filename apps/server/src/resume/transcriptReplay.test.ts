@@ -133,3 +133,39 @@ describe("buildReplayCommands", () => {
     expect(texts).toEqual(["middle", "newest"]);
   });
 });
+
+describe("slash-command / skill invocations", () => {
+  const userText = (content: string) =>
+    buildReplayCommands([{ type: "user", uuid: "u", message: { role: "user", content } }], ctx).find(
+      (c) => c.type === "thread.message.user.record",
+    );
+
+  it("renders a command invocation as the plain command, not raw XML tags", () => {
+    // The exact shape terminal Claude writes to the transcript for a slash command.
+    const command = userText(
+      "<command-name>/sandcastle-status</command-name>\n            <command-message>sandcastle-status</command-message>\n            <command-args></command-args>",
+    );
+    expect(command?.type).toBe("thread.message.user.record");
+    if (command?.type === "thread.message.user.record") {
+      expect(command.text).toBe("/sandcastle-status");
+      expect(command.text).not.toContain("<command-name>");
+      expect(command.text).not.toContain("<command-message>");
+    }
+  });
+
+  it("appends args and tolerates message-before-name tag order", () => {
+    const command = userText(
+      "<command-message>review</command-message>\n<command-name>/review</command-name>\n<command-args>--fix src/foo.ts</command-args>",
+    );
+    if (command?.type === "thread.message.user.record") {
+      expect(command.text).toBe("/review --fix src/foo.ts");
+    }
+  });
+
+  it("leaves ordinary prompts (no command wrapper) unchanged", () => {
+    const command = userText("just a normal message");
+    if (command?.type === "thread.message.user.record") {
+      expect(command.text).toBe("just a normal message");
+    }
+  });
+});
