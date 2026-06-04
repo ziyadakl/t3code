@@ -1,7 +1,6 @@
 import {
   type ApprovalRequestId,
   DEFAULT_MODEL,
-  defaultInstanceIdForDriver,
   type EnvironmentId,
   type MessageId,
   type ModelSelection,
@@ -153,6 +152,8 @@ import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import { resolveEffectiveEnvMode, resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { ProviderStatusBanner } from "./chat/ProviderStatusBanner";
+import { resolveComposerProviderTarget } from "./chat/resolveComposerProviderTarget";
+import { deriveProviderInstanceEntries, sortProviderInstanceEntries } from "../providerInstances";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
 import {
@@ -1838,23 +1839,47 @@ export default function ChatView(props: ChatViewProps) {
   const gitStatusQuery = useVcsStatus({ environmentId, cwd: gitCwd });
   const keybindings = useServerKeybindings();
   const availableEditors = useServerAvailableEditors();
-  // Prefer an instance-id match so a custom Codex instance (e.g.
-  // `codex_personal`) surfaces its own status/message in the banner rather
-  // than the default Codex's. For a draft with no thread yet, fall through to
-  // the composer-selected provider (the `selectedProvider` branch below)
-  // instead of the project default, so the banner reflects the provider the
-  // user actually picked — not a disabled project-default they aren't using.
-  const activeProviderInstanceId =
-    activeThread?.session?.providerInstanceId ?? activeThread?.modelSelection.instanceId ?? null;
+  // Only a genuinely-running session pins the banner to a specific provider
+  // (so a live Codex thread keeps surfacing its own status, even custom
+  // instances like `codex_personal`). A draft — or any not-yet-started thread —
+  // carries the project-default `modelSelection` instance id, which must NOT
+  // short-circuit here: that's how a disabled / uninstalled default (e.g. a
+  // remote Codex) used to raise a banner for a provider the draft never runs.
+  // Unstarted threads fall through to the composer-style resolution below.
+  const activeProviderInstanceId = activeThread?.session?.providerInstanceId ?? null;
   const activeProviderStatus = useMemo(() => {
     if (activeProviderInstanceId) {
       return (
         providerStatuses.find((status) => status.instanceId === activeProviderInstanceId) ?? null
       );
     }
-    const defaultInstanceId = defaultInstanceIdForDriver(selectedProvider);
-    return providerStatuses.find((status) => status.instanceId === defaultInstanceId) ?? null;
-  }, [activeProviderInstanceId, providerStatuses, selectedProvider]);
+    // No running session (draft / unstarted thread): resolve the banner
+    // provider the same way the composer picker does. This prefers a ready
+    // provider over an enabled-but-broken default (e.g. a remote Codex that
+    // isn't installed), so the banner reflects the provider the draft will
+    // actually run on instead of warning about one the user isn't using.
+    const entries = sortProviderInstanceEntries(deriveProviderInstanceEntries(providerStatuses));
+    const target = resolveComposerProviderTarget({
+      entries,
+      candidates: [
+        selectedProviderByThreadId,
+        activeThread?.session?.providerInstanceId,
+        activeThread?.modelSelection.instanceId,
+        activeProject?.defaultModelSelection?.instanceId,
+      ],
+      lockedProvider,
+      lockedContinuationGroupKey: null,
+    });
+    return providerStatuses.find((status) => status.instanceId === target.instanceId) ?? null;
+  }, [
+    activeProviderInstanceId,
+    providerStatuses,
+    selectedProviderByThreadId,
+    activeThread?.session?.providerInstanceId,
+    activeThread?.modelSelection.instanceId,
+    activeProject?.defaultModelSelection?.instanceId,
+    lockedProvider,
+  ]);
   const activeProjectCwd = activeProject?.cwd ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
