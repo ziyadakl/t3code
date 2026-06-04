@@ -192,7 +192,11 @@ export function createDevRunnerEnv({
     if (autoBootstrapProjectFromCwd !== undefined) {
       output.T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD = autoBootstrapProjectFromCwd ? "1" : "0";
     } else {
-      delete output.T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD;
+      // Default the dev server OFF: it runs from apps/server, so the server's
+      // mode==="web" cwd-bootstrap would otherwise recreate a junk "server"
+      // project (with an empty thread that blocks deletion) on every restart.
+      // Pass --auto-bootstrap-project-from-cwd or set the env =1 to opt back in.
+      output.T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD = "0";
     }
 
     if (logWebSocketEvents !== undefined) {
