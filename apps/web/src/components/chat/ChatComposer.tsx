@@ -76,6 +76,7 @@ import { ContextWindowMeter } from "./ContextWindowMeter";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { basenameOfPath } from "../../vscode-icons";
 import { cn, randomUUID } from "~/lib/utils";
+import { useResumePickerStore } from "~/resumePickerStore";
 import { Separator } from "../ui/separator";
 import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -821,6 +822,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           description: "Switch response model for this thread",
         },
         {
+          id: "slash:resume",
+          type: "slash-command",
+          command: "resume",
+          label: "/resume",
+          description: "Resume a past terminal Claude chat in this project",
+        },
+        {
           id: "slash:plan",
           type: "slash-command",
           command: "plan",
@@ -1455,6 +1463,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           if (applied) {
             setComposerHighlightedItemId(null);
             setIsComposerModelPickerOpen(true);
+          }
+          return;
+        }
+        if (item.command === "resume") {
+          const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
+            expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+            focusEditorAfterReplace: false,
+          });
+          if (applied) {
+            setComposerHighlightedItemId(null);
+            useResumePickerStore.getState().requestOpen();
           }
           return;
         }

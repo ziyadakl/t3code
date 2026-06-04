@@ -46,8 +46,11 @@ import { readLocalApi } from "../localApi";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
 import {
   collapseExpandedComposerCursor,
+  isStandaloneResumeCommand,
   parseStandaloneComposerSlashCommand,
 } from "../composer-logic";
+import { useResumePickerStore } from "../resumePickerStore";
+import { ResumePicker } from "./chat/ResumePicker";
 import {
   deriveCompletionDividerBeforeEntryId,
   derivePendingApprovals,
@@ -2908,6 +2911,17 @@ export default function ChatView(props: ChatViewProps) {
       });
       return;
     }
+    if (
+      composerImages.length === 0 &&
+      sendableComposerTerminalContexts.length === 0 &&
+      isStandaloneResumeCommand(trimmed)
+    ) {
+      useResumePickerStore.getState().requestOpen();
+      promptRef.current = "";
+      clearComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
+      return;
+    }
     const standaloneSlashCommand =
       composerImages.length === 0 && sendableComposerTerminalContexts.length === 0
         ? parseStandaloneComposerSlashCommand(trimmed)
@@ -3854,6 +3868,7 @@ export default function ChatView(props: ChatViewProps) {
             <div className="relative isolate">
               <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
               <div className="relative z-10">
+                <ResumePicker environmentId={environmentId} cwd={activeProject?.cwd ?? null} />
                 <ChatComposer
                   composerRef={composerRef}
                   composerDraftTarget={composerDraftTarget}

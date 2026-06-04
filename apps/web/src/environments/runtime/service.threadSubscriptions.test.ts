@@ -86,6 +86,9 @@ vi.mock("@t3tools/client-runtime", async (importOriginal) => {
       subscribeShell: vi.fn(() => () => undefined),
       subscribeThread: mockSubscribeThread,
     },
+    resume: {
+      listImportableSessions: vi.fn(),
+    },
     terminal: {
       open: vi.fn(),
       attach: vi.fn(() => () => undefined),
