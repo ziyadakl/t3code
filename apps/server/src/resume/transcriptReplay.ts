@@ -67,6 +67,42 @@ function extractText(message: unknown): string {
   return "";
 }
 
+/** Default cap on how many trailing messages are re-rendered (see planReplayCommands). */
+export const DEFAULT_REPLAY_MESSAGE_LIMIT = 100;
+
+/**
+ * Cap the displayed history to the last `maxMessages` and, when truncated,
+ * prepend a notice so the user understands earlier messages are hidden. The
+ * model still has full prior context via the resume cursor, so capping only
+ * affects what is RENDERED — keeping replay dispatch volume bounded (real
+ * sessions can be thousands of messages). The notice is just a synthetic
+ * leading assistant message, so it reuses the tested mapper unchanged.
+ */
+export function planReplayCommands(
+  messages: ReadonlyArray<ReplaySessionMessage>,
+  ctx: ReplayContext,
+  maxMessages: number = DEFAULT_REPLAY_MESSAGE_LIMIT,
+): ReadonlyArray<ReplayCommand> {
+  if (messages.length <= maxMessages) {
+    return buildReplayCommands(messages, ctx);
+  }
+  const sliced = messages.slice(-maxMessages);
+  const notice: ReplaySessionMessage = {
+    type: "assistant",
+    uuid: "resume-truncation-notice",
+    message: {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `_(Resumed session — showing the last ${maxMessages} of ${messages.length} messages. Earlier history is hidden here, but the assistant still has full context.)_`,
+        },
+      ],
+    },
+  };
+  return buildReplayCommands([notice, ...sliced], ctx);
+}
+
 export function buildReplayCommands(
   messages: ReadonlyArray<ReplaySessionMessage>,
   ctx: ReplayContext,

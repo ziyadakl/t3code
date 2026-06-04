@@ -1,7 +1,7 @@
 import { ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
-import { buildReplayCommands } from "./transcriptReplay.ts";
+import { buildReplayCommands, planReplayCommands } from "./transcriptReplay.ts";
 
 const ctx = {
   threadId: ThreadId.make("thread-replay"),
@@ -95,5 +95,41 @@ describe("buildReplayCommands", () => {
     if (commands[0]?.type === "thread.message.user.record") {
       expect(commands[0].text).toBe("hi");
     }
+  });
+
+  it("does not cap or add a notice when within the limit", () => {
+    const messages = [
+      { type: "user" as const, uuid: "u1", message: { role: "user", content: "a" } },
+      { type: "user" as const, uuid: "u2", message: { role: "user", content: "b" } },
+    ];
+    const commands = planReplayCommands(messages, ctx, 2);
+    expect(commands).toHaveLength(2);
+    expect(commands.every((c) => c.type === "thread.message.user.record")).toBe(true);
+  });
+
+  it("caps to the last N messages and prepends a truncation notice", () => {
+    const messages = [
+      { type: "user" as const, uuid: "u1", message: { role: "user", content: "oldest" } },
+      { type: "user" as const, uuid: "u2", message: { role: "user", content: "middle" } },
+      { type: "user" as const, uuid: "u3", message: { role: "user", content: "newest" } },
+    ];
+    const commands = planReplayCommands(messages, ctx, 2);
+
+    // notice (assistant delta+complete) + last 2 user messages = 4 commands
+    expect(commands.map((c) => c.type)).toEqual([
+      "thread.message.assistant.delta",
+      "thread.message.assistant.complete",
+      "thread.message.user.record",
+      "thread.message.user.record",
+    ]);
+    const notice = commands[0];
+    if (notice?.type === "thread.message.assistant.delta") {
+      expect(notice.delta).toContain("last 2 of 3");
+    }
+    // the dropped "oldest" message is not present
+    const texts = commands.flatMap((c) =>
+      c.type === "thread.message.user.record" ? [c.text] : [],
+    );
+    expect(texts).toEqual(["middle", "newest"]);
   });
 });
