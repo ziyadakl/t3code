@@ -15,7 +15,9 @@
  *
  * @module ResumeSeedReactor
  */
+import { getSessionMessages } from "@anthropic-ai/claude-agent-sdk";
 import {
+  type ProjectId,
   ProviderDriverKind,
   type ProviderInstanceId,
   type RuntimeMode,
@@ -23,13 +25,23 @@ import {
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
+import * as Data from "effect/Data";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
+import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProviderSessionDirectory } from "../provider/Services/ProviderSessionDirectory.ts";
+import { planReplayCommands, type ReplaySessionMessage } from "./transcriptReplay.ts";
+
+class ResumeReplayError extends Data.TaggedError("ResumeReplayError")<{
+  readonly detail: string;
+  readonly cause?: unknown;
+}> {}
 
 const CLAUDE_DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
 
@@ -99,9 +111,49 @@ export class ResumeSeedReactor extends Context.Service<
 
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
-  // Captured here so the forked stream effect does not leak
-  // ProviderSessionDirectory into `start`'s scope-only requirement.
+  // Captured here so the forked stream effect does not leak service
+  // requirements into `start`'s scope-only signature.
   const directory = yield* ProviderSessionDirectory;
+  const snapshotQuery = yield* ProjectionSnapshotQuery;
+
+  // Display half: re-render the picked session's transcript into the new
+  // thread. Reads the project cwd (the same dir listSessions used), loads the
+  // transcript via the SDK, and dispatches the (capped) replay commands.
+  const replayTranscript = (input: {
+    readonly threadId: ThreadId;
+    readonly projectId: ProjectId;
+    readonly resumeSessionId: string;
+  }) =>
+    Effect.gen(function* () {
+      const project = yield* snapshotQuery
+        .getProjectShellById(input.projectId)
+        .pipe(Effect.map(Option.getOrUndefined));
+      const cwd = project?.workspaceRoot;
+      if (!cwd) {
+        yield* Effect.logWarning("resume replay skipped: no project cwd", {
+          threadId: input.threadId,
+        });
+        return;
+      }
+      const sdkMessages = yield* Effect.tryPromise({
+        try: () => getSessionMessages(input.resumeSessionId, { dir: cwd }),
+        catch: (cause) => new ResumeReplayError({ detail: "getSessionMessages failed", cause }),
+      });
+      const messages: ReadonlyArray<ReplaySessionMessage> = sdkMessages.map((message) => ({
+        type: message.type,
+        uuid: message.uuid,
+        message: message.message,
+      }));
+      const baseTimeMs = DateTime.toEpochMillis(yield* DateTime.now);
+      const commands = planReplayCommands(messages, {
+        threadId: input.threadId,
+        sessionId: input.resumeSessionId,
+        baseTimeMs,
+      });
+      yield* Effect.forEach(commands, (command) => orchestrationEngine.dispatch(command), {
+        discard: true,
+      });
+    });
 
   const start: ResumeSeedReactorShape["start"] = Effect.fn("start")(function* () {
     yield* Effect.forkScoped(
@@ -109,12 +161,36 @@ const make = Effect.gen(function* () {
         if (event.type !== "thread.created") {
           return Effect.void;
         }
-        // One failing event must not tear down the subscription.
-        return handleCreatedThread(event.payload).pipe(
-          Effect.provideService(ProviderSessionDirectory, directory),
+        const payload = event.payload;
+        const resumeSessionId = payload.resumeSessionId;
+        if (resumeSessionId == null) {
+          return Effect.void;
+        }
+        // Seed inline (one fast write, so the resume cursor is set promptly),
+        // then fork the transcript replay so a large replay does not block the
+        // event subscription. One failure must not tear down the stream.
+        return Effect.gen(function* () {
+          yield* handleCreatedThread(payload).pipe(
+            Effect.provideService(ProviderSessionDirectory, directory),
+          );
+          yield* Effect.forkScoped(
+            replayTranscript({
+              threadId: payload.threadId,
+              projectId: payload.projectId,
+              resumeSessionId,
+            }).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("resume replay failed", {
+                  threadId: payload.threadId,
+                  cause: Cause.pretty(cause),
+                }),
+              ),
+            ),
+          );
+        }).pipe(
           Effect.catchCause((cause) =>
-            Effect.logWarning("resume seed reactor failed to seed binding", {
-              threadId: event.payload.threadId,
+            Effect.logWarning("resume seed reactor failed", {
+              threadId: payload.threadId,
               cause: Cause.pretty(cause),
             }),
           ),
