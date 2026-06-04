@@ -716,6 +716,19 @@ const ThreadMessageAssistantCompleteCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+// Records a historical user message into a thread for DISPLAY only — used by
+// /resume transcript replay. Unlike thread.turn.start it does NOT emit
+// thread.turn-start-requested, so no live turn is fired.
+const ThreadMessageUserRecordCommand = Schema.Struct({
+  type: Schema.Literal("thread.message.user.record"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  text: Schema.String,
+  turnId: Schema.optional(TurnId),
+  createdAt: IsoDateTime,
+});
+
 const ThreadProposedPlanUpsertCommand = Schema.Struct({
   type: Schema.Literal("thread.proposed-plan.upsert"),
   commandId: CommandId,
@@ -758,6 +771,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
   ThreadMessageAssistantDeltaCommand,
   ThreadMessageAssistantCompleteCommand,
+  ThreadMessageUserRecordCommand,
   ThreadProposedPlanUpsertCommand,
   ThreadTurnDiffCompleteCommand,
   ThreadActivityAppendCommand,
