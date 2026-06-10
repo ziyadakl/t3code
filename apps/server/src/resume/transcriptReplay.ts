@@ -98,6 +98,10 @@ function formatCommandInvocation(text: string): string | null {
  * many-thousand-message session so its one-time import replay can't hang the
  * UI. With rejoin in place the replay runs only once per imported session, so
  * this generous cap costs nothing on re-resume.
+ *
+ * This cap is DISPLAY-ONLY: the canonical transcript stays uncapped in the SDK
+ * session store, so a future rewind-to-message feature reads full history
+ * independently of this limit.
  */
 export const DEFAULT_REPLAY_MESSAGE_LIMIT = 1000;
 
