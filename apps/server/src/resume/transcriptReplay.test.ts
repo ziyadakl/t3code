@@ -132,6 +132,28 @@ describe("buildReplayCommands", () => {
     );
     expect(texts).toEqual(["middle", "newest"]);
   });
+
+  it("uses totalMessageCount for the notice when the caller pre-slices the array", () => {
+    // Simulate the ResumeSeedReactor pre-slice path: caller already sliced to
+    // last 2 messages but passes totalMessageCount=3 so the notice is accurate.
+    const messages = [
+      { type: "user" as const, uuid: "u2", message: { role: "user", content: "middle" } },
+      { type: "user" as const, uuid: "u3", message: { role: "user", content: "newest" } },
+    ];
+    const commands = planReplayCommands(messages, ctx, 2, 3);
+
+    // notice (assistant delta+complete) + 2 user messages = 4 commands
+    expect(commands.map((c) => c.type)).toEqual([
+      "thread.message.assistant.delta",
+      "thread.message.assistant.complete",
+      "thread.message.user.record",
+      "thread.message.user.record",
+    ]);
+    const notice = commands[0];
+    if (notice?.type === "thread.message.assistant.delta") {
+      expect(notice.delta).toContain("last 2 of 3");
+    }
+  });
 });
 
 describe("slash-command / skill invocations", () => {

@@ -113,8 +113,10 @@ export function planReplayCommands(
   messages: ReadonlyArray<ReplaySessionMessage>,
   ctx: ReplayContext,
   maxMessages: number = DEFAULT_REPLAY_MESSAGE_LIMIT,
+  totalMessageCount?: number,
 ): ReadonlyArray<ReplayCommand> {
-  if (messages.length <= maxMessages) {
+  const total = totalMessageCount ?? messages.length;
+  if (total <= maxMessages) {
     return buildReplayCommands(messages, ctx);
   }
   const sliced = messages.slice(-maxMessages);
@@ -126,7 +128,7 @@ export function planReplayCommands(
       content: [
         {
           type: "text",
-          text: `_(Resumed session — showing the last ${maxMessages} of ${messages.length} messages. Earlier history is hidden here, but the assistant still has full context.)_`,
+          text: `_(Resumed session — showing the last ${maxMessages} of ${total} messages. Earlier history is hidden here, but the assistant still has full context.)_`,
         },
       ],
     },

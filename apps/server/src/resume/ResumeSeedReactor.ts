@@ -36,7 +36,7 @@ import * as Stream from "effect/Stream";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProviderSessionDirectory } from "../provider/Services/ProviderSessionDirectory.ts";
-import { planReplayCommands, type ReplaySessionMessage } from "./transcriptReplay.ts";
+import { DEFAULT_REPLAY_MESSAGE_LIMIT, planReplayCommands, type ReplaySessionMessage } from "./transcriptReplay.ts";
 
 class ResumeReplayError extends Data.TaggedError("ResumeReplayError")<{
   readonly detail: string;
@@ -139,17 +139,25 @@ const make = Effect.gen(function* () {
         try: () => getSessionMessages(input.resumeSessionId, { dir: cwd }),
         catch: (cause) => new ResumeReplayError({ detail: "getSessionMessages failed", cause }),
       });
-      const messages: ReadonlyArray<ReplaySessionMessage> = sdkMessages.map((message) => ({
-        type: message.type,
-        uuid: message.uuid,
-        message: message.message,
-      }));
+      const totalMessages = sdkMessages.length;
+      const messages: ReadonlyArray<ReplaySessionMessage> = sdkMessages
+        .slice(-DEFAULT_REPLAY_MESSAGE_LIMIT)
+        .map((message) => ({
+          type: message.type,
+          uuid: message.uuid,
+          message: message.message,
+        }));
       const baseTimeMs = DateTime.toEpochMillis(yield* DateTime.now);
-      const commands = planReplayCommands(messages, {
-        threadId: input.threadId,
-        sessionId: input.resumeSessionId,
-        baseTimeMs,
-      });
+      const commands = planReplayCommands(
+        messages,
+        {
+          threadId: input.threadId,
+          sessionId: input.resumeSessionId,
+          baseTimeMs,
+        },
+        DEFAULT_REPLAY_MESSAGE_LIMIT,
+        totalMessages,
+      );
       yield* Effect.forEach(commands, (command) => orchestrationEngine.dispatch(command), {
         discard: true,
       });
