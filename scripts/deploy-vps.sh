@@ -97,19 +97,29 @@ fi
 [[ -d "$DIST/client" ]] || die "missing build artifact: $DIST/client/ (web build did not land beside the server bundle)"
 echo "  Artifacts present: bin.mjs + client/"
 
-# --- 2. Stage artifacts to the VPS ---------------------------------------------
+# --- 2. Stage the FULL dist INTO THE INSTALL TREE ------------------------------
+# Two things make naive staging fail:
+#  (a) the build CODE-SPLITS: bin.mjs imports sibling chunks (PTY-*.mjs, NodePTY-*,
+#      BunPTY-*, NodeSqliteClient-*, .map) — ship the whole dist/, not just bin.mjs.
+#  (b) the bundle EXTERNALIZES some node_modules deps (e.g. @effect/platform-node),
+#      resolved by walking up to the install tree's node_modules. So we stage into a
+#      sibling of the live dist (${INSTALL_DIR}.incoming, same depth) — that way the
+#      smoke-test resolves those externals exactly as the live server does, and the
+#      final swap is a cheap in-place mv. (This is the file-swap path; deps must be
+#      unchanged, which the preflight guarantees.)
 TS="$(date +%Y%m%d-%H%M%S)"
-STAGING="/tmp/t3-deploy-$TS"
-say "Staging to $HOST:$STAGING"
-ssh "$HOST" "mkdir -p '$STAGING'"
-scp -q "$DIST/bin.mjs" "$HOST:$STAGING/bin.mjs"
-[[ -f "$DIST/bin.mjs.map" ]] && scp -q "$DIST/bin.mjs.map" "$HOST:$STAGING/bin.mjs.map"
-scp -qr "$DIST/client" "$HOST:$STAGING/client"
+STAGING="/tmp/t3-deploy-$TS"            # scratch base-dir + smoke log only
+INCOMING="${INSTALL_DIR}.incoming"
+MJS_COUNT="$(find "$DIST" -maxdepth 1 -name '*.mjs' | wc -l | tr -d ' ')"
+say "Staging full dist ($MJS_COUNT mjs files + client/) into $HOST:$INCOMING"
+ssh "$HOST" "rm -rf '$INCOMING' && mkdir -p '$INCOMING' '$STAGING/scratch-basedir'"
+# COPYFILE_DISABLE stops macOS bsdtar from emitting AppleDouble ._* sidecar files.
+COPYFILE_DISABLE=1 tar -C "$DIST" -cf - . | ssh "$HOST" "tar -C '$INCOMING' -xf -"
 echo "  Uploaded."
 
 # --- 3-7. Remote: smoke-test -> backup -> swap -> chown -> restart -> verify ----
 say "Remote: smoke-test, swap, restart, verify"
-ssh "$HOST" "STAGING='$STAGING' TS='$TS' LIVE_PORT='$LIVE_PORT' SMOKE_PORT='$SMOKE_PORT' INSTALL_DIR='$INSTALL_DIR' SERVICE='$SERVICE' BASE_DIR='$BASE_DIR' bash -s" <<'REMOTE'
+ssh "$HOST" "STAGING='$STAGING' TS='$TS' LIVE_PORT='$LIVE_PORT' SMOKE_PORT='$SMOKE_PORT' INSTALL_DIR='$INSTALL_DIR' INCOMING='$INCOMING' SERVICE='$SERVICE' BASE_DIR='$BASE_DIR' bash -s" <<'REMOTE'
 set -euo pipefail
 rfail() { printf '\n[remote] FAILED: %s\n' "$*" >&2; exit 1; }
 
@@ -125,12 +135,13 @@ else
   NEED_CHOWN=0   # files we write are already deploy-owned
 fi
 
-# node refuses any extension but .mjs (ERR_UNKNOWN_FILE_EXTENSION) — smoke copy must end in .mjs
-cp "$STAGING/bin.mjs" "$STAGING/bin.smoke.mjs"
-mkdir -p "$STAGING/scratch-basedir"
+# Smoke copy must end in .mjs (node ERR_UNKNOWN_FILE_EXTENSION) and sits in $INCOMING
+# beside its sibling chunks AND within the install tree, so both the relative chunk
+# imports and the externalized node_modules deps resolve like the live server.
+cp "$INCOMING/bin.mjs" "$INCOMING/bin.smoke.mjs"
 
 echo "[remote] boot smoke-test on :$SMOKE_PORT (VPS node $(node -v)) before touching live files"
-node "$STAGING/bin.smoke.mjs" serve --host 127.0.0.1 --port "$SMOKE_PORT" --base-dir "$STAGING/scratch-basedir" >"$STAGING/smoke.log" 2>&1 &
+node "$INCOMING/bin.smoke.mjs" serve --host 127.0.0.1 --port "$SMOKE_PORT" --base-dir "$STAGING/scratch-basedir" >"$STAGING/smoke.log" 2>&1 &
 SMOKE_PID=$!
 trap 'kill "$SMOKE_PID" 2>/dev/null || true' EXIT
 
@@ -150,17 +161,21 @@ kill "$SMOKE_PID" 2>/dev/null || true; trap - EXIT
 [[ "$code" == "000" ]] && { echo "----- smoke.log -----"; tail -n 40 "$STAGING/smoke.log" || true; rfail "smoke server never answered on :$SMOKE_PORT"; }
 echo "[remote] smoke OK (HTTP $code) — bundle boots on the VPS"
 
-[[ -f "$INSTALL_DIR/bin.mjs" ]] || rfail "install dir not found: $INSTALL_DIR/bin.mjs"
-echo "[remote] backing up live files (suffix .bak-$TS)"
-cp "$INSTALL_DIR/bin.mjs" "$INSTALL_DIR/bin.mjs.bak-$TS"
-cp -r "$INSTALL_DIR/client" "$INSTALL_DIR/client.bak-$TS"
+[[ -d "$INSTALL_DIR" ]] || rfail "install dir not found: $INSTALL_DIR"
+rm -f "$INCOMING/bin.smoke.mjs"   # don't ship the smoke copy
 
-echo "[remote] swapping in new bundle + client"
-cp "$STAGING/bin.mjs" "$INSTALL_DIR/bin.mjs"
-[[ -f "$STAGING/bin.mjs.map" ]] && cp "$STAGING/bin.mjs.map" "$INSTALL_DIR/bin.mjs.map"
-rm -rf "$INSTALL_DIR/client"
-cp -r "$STAGING/client" "$INSTALL_DIR/client"
+# Swap by RENAME, never rm -rf the live dir. Two renames within the (deploy-owned)
+# parent: the old dist becomes the timestamped backup, the validated $INCOMING takes
+# its place. Renames are atomic, never recurse, and — critically — can't partially
+# delete the live dir or choke on root-owned cruft left inside it by old deploys.
+echo "[remote] swapping: rename live dist -> ${INSTALL_DIR}.bak-$TS, move validated dist into place"
+mv "$INSTALL_DIR" "${INSTALL_DIR}.bak-$TS"
+mv "$INCOMING" "$INSTALL_DIR"
 [[ "$NEED_CHOWN" == "1" ]] && chown -R deploy:deploy "$INSTALL_DIR"
+
+# Best-effort: keep only the 3 newest backups (older ones may hold root-owned cruft
+# that we can't delete as deploy — ignore failures).
+ls -dt "${INSTALL_DIR}".bak-* 2>/dev/null | tail -n +4 | while read -r old; do rm -rf "$old" 2>/dev/null || true; done
 
 echo "[remote] restarting $SERVICE"
 as_deploy systemctl --user restart "$SERVICE"
@@ -176,7 +191,7 @@ done
 if [[ ! "$live" =~ ^[23] ]]; then
   echo "[remote] live server not answering — recent service log:"
   as_deploy journalctl --user -u "$SERVICE" -n 40 --no-pager || true
-  echo "[remote] backups kept at $INSTALL_DIR/bin.mjs.bak-$TS and client.bak-$TS — restore with cp if needed"
+  echo "[remote] previous dist kept at ${INSTALL_DIR}.bak-$TS — restore: rm -rf $INSTALL_DIR && mv ${INSTALL_DIR}.bak-$TS $INSTALL_DIR && restart"
   rfail "live server did not come back up on :$LIVE_PORT"
 fi
 NEWPID="$(as_deploy systemctl --user show -p MainPID --value "$SERVICE" 2>/dev/null || echo '?')"
@@ -186,4 +201,4 @@ cd /tmp && rm -rf "t3-deploy-$TS"
 REMOTE
 
 say "Deploy complete — live on $HOST:$LIVE_PORT"
-echo "  Rollback if needed: on $HOST, cp $INSTALL_DIR/bin.mjs.bak-$TS -> bin.mjs (and client.bak-$TS), chown deploy, restart $SERVICE."
+echo "  Rollback if needed: on $HOST, rm -rf $INSTALL_DIR && mv ${INSTALL_DIR}.bak-$TS $INSTALL_DIR, then restart $SERVICE."
