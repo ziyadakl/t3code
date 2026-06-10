@@ -23,6 +23,7 @@ import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProviderSessionDirectory } from "../provider/Services/ProviderSessionDirectory.ts";
@@ -83,23 +84,38 @@ const make = Effect.gen(function* () {
    * are eligible — archived/deleted threads fall through to a fresh import
    * rather than a broken rejoin. Best-effort: on any read failure the picker
    * still lists every session, just without rejoin targets.
+   *
+   * Bindings are scoped to the current project (resolved from `projectCwd`) so
+   * the picker never full-scans every project's bindings. This is a pure
+   * performance bound, not a behavior change: cross-project bindings carry other
+   * projects' Claude session ids, which never appear in this folder's
+   * `sdkListSessions`, so they could never have matched `buildImportedSessionMap`
+   * (keyed by Claude session id). When the cwd does NOT resolve to a known
+   * project — a genuinely new folder, or a path-representation mismatch against
+   * the stored workspace_root — fall back to the unscoped scan so rejoin targets
+   * are never silently lost (which would resurrect the duplicate-on-rejoin bug).
+   * The scan cost is paid only in that rare unresolved case, not per picker-open.
    */
-  const buildImportedSessions: Effect.Effect<ReadonlyMap<string, string>> = Effect.gen(
-    function* () {
+  const buildImportedSessions = (
+    projectCwd: string,
+  ): Effect.Effect<ReadonlyMap<string, string>> =>
+    Effect.gen(function* () {
       const activeThreadIds = yield* projection.getShellSnapshot().pipe(
         Effect.map((snapshot) => new Set<string>(snapshot.threads.map((thread) => thread.id))),
         Effect.catch(() => Effect.succeed(new Set<string>())),
       );
-      const bindings = yield* directory.listBindings();
+      const project = yield* projection.getActiveProjectByWorkspaceRoot(projectCwd);
+      const bindings = Option.isSome(project)
+        ? yield* directory.listBindingsByProjectId(project.value.id)
+        : yield* directory.listBindings();
       return buildImportedSessionMap(bindings, activeThreadIds);
-    },
-  ).pipe(
-    Effect.catch((cause) =>
-      Effect.logWarning("resume picker: failed to build rejoin map", { cause }).pipe(
-        Effect.as(new Map<string, string>() as ReadonlyMap<string, string>),
+    }).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("resume picker: failed to build rejoin map", { cause }).pipe(
+          Effect.as(new Map<string, string>() as ReadonlyMap<string, string>),
+        ),
       ),
-    ),
-  );
+    );
 
   const listForProject: ImportableSessionsServiceShape["listForProject"] = ({ projectCwd }) =>
     Effect.gen(function* () {
@@ -109,7 +125,7 @@ const make = Effect.gen(function* () {
           new ImportableSessionsError({ detail: "Claude listSessions failed", cause }),
       });
 
-      const importedSessions = yield* buildImportedSessions;
+      const importedSessions = yield* buildImportedSessions(projectCwd);
 
       return selectImportableSessions(sdkSessions.map(toSessionInfo), {
         // t3-origin hiding is still deferred (needs the t3-created id set); the

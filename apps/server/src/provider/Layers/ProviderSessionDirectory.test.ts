@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ProviderDriverKind, ThreadId } from "@t3tools/contracts";
+import { ProjectId, ProviderDriverKind, ThreadId } from "@t3tools/contracts";
 import { it, assert } from "@effect/vitest";
 import { assertSome } from "@effect/vitest/utils";
 import * as Effect from "effect/Effect";
@@ -197,6 +197,73 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
           },
         },
       ]);
+    }));
+
+  it("scopes listBindingsByProjectId to the requested project, oldest-first", () =>
+    Effect.gen(function* () {
+      const directory = yield* ProviderSessionDirectory;
+      const runtimeRepository = yield* ProviderSessionRuntimeRepository;
+      const sql = yield* SqlClient.SqlClient;
+
+      const projectAlpha = ProjectId.make("project-alpha");
+      const projectBeta = ProjectId.make("project-beta");
+
+      const alphaOlder = ThreadId.make("thread-alpha-older");
+      const alphaNewer = ThreadId.make("thread-alpha-newer");
+      const betaThread = ThreadId.make("thread-beta");
+
+      // Seed the projection rows the JOIN reads through. `model` was dropped in
+      // migration 016, so only thread_id/project_id/title/created_at/updated_at
+      // are NOT NULL without a default.
+      const seedThread = (threadId: ThreadId, projectId: ProjectId, title: string) =>
+        sql`
+          INSERT INTO projection_threads (thread_id, project_id, title, created_at, updated_at)
+          VALUES (
+            ${threadId},
+            ${projectId},
+            ${title},
+            ${"2026-01-01T00:00:00.000Z"},
+            ${"2026-01-01T00:00:00.000Z"}
+          )
+        `;
+      yield* seedThread(alphaOlder, projectAlpha, "Alpha older");
+      yield* seedThread(alphaNewer, projectAlpha, "Alpha newer");
+      yield* seedThread(betaThread, projectBeta, "Beta");
+
+      const bind = (threadId: ThreadId, lastSeenAt: string) =>
+        runtimeRepository.upsert({
+          threadId,
+          providerName: "claudeAgent",
+          providerInstanceId: null,
+          adapterKey: "claudeAgent",
+          runtimeMode: "full-access",
+          status: "stopped",
+          lastSeenAt,
+          resumeCursor: null,
+          runtimePayload: null,
+        });
+      yield* bind(alphaNewer, "2026-04-14T12:05:00.000Z");
+      yield* bind(alphaOlder, "2026-04-14T12:00:00.000Z");
+      yield* bind(betaThread, "2026-04-14T12:10:00.000Z");
+
+      const alphaBindings = yield* directory.listBindingsByProjectId(projectAlpha);
+      // Only the alpha project's bindings, oldest-first — beta is excluded.
+      assert.deepEqual(
+        alphaBindings.map((binding) => binding.threadId),
+        [alphaOlder, alphaNewer],
+      );
+
+      const betaBindings = yield* directory.listBindingsByProjectId(projectBeta);
+      assert.deepEqual(
+        betaBindings.map((binding) => binding.threadId),
+        [betaThread],
+      );
+
+      // A project with no threads returns nothing (no full-scan leakage).
+      const emptyBindings = yield* directory.listBindingsByProjectId(
+        ProjectId.make("project-unknown"),
+      );
+      assert.deepEqual(emptyBindings, []);
     }));
 
   it("resets adapterKey to the new provider when provider changes without an explicit adapter key", () =>

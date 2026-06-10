@@ -183,12 +183,29 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
       ),
     );
 
+  const listBindingsByProjectId: ProviderSessionDirectoryShape["listBindingsByProjectId"] = (
+    projectId,
+  ) =>
+    repository.listByProjectId({ projectId }).pipe(
+      Effect.mapError(
+        toPersistenceError("ProviderSessionDirectory.listBindingsByProjectId:listByProjectId"),
+      ),
+      Effect.flatMap((rows) =>
+        Effect.forEach(
+          rows,
+          (row) => toRuntimeBinding(row, "ProviderSessionDirectory.listBindingsByProjectId"),
+          { concurrency: 16 },
+        ),
+      ),
+    );
+
   return {
     upsert,
     getProvider,
     getBinding,
     listThreadIds,
     listBindings,
+    listBindingsByProjectId,
   } satisfies ProviderSessionDirectoryShape;
 });
 

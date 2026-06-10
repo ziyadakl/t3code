@@ -7,6 +7,7 @@
  */
 import {
   IsoDateTime,
+  ProjectId,
   ProviderInstanceId,
   ProviderSessionRuntimeStatus,
   RuntimeMode,
@@ -42,6 +43,10 @@ export type ProviderSessionRuntime = typeof ProviderSessionRuntime.Type;
 export const GetProviderSessionRuntimeInput = Schema.Struct({ threadId: ThreadId });
 export type GetProviderSessionRuntimeInput = typeof GetProviderSessionRuntimeInput.Type;
 
+export const ListProviderSessionRuntimeByProjectInput = Schema.Struct({ projectId: ProjectId });
+export type ListProviderSessionRuntimeByProjectInput =
+  typeof ListProviderSessionRuntimeByProjectInput.Type;
+
 export const DeleteProviderSessionRuntimeInput = Schema.Struct({ threadId: ThreadId });
 export type DeleteProviderSessionRuntimeInput = typeof DeleteProviderSessionRuntimeInput.Type;
 
@@ -71,6 +76,20 @@ export interface ProviderSessionRuntimeRepositoryShape {
    * Returned in ascending last-seen order.
    */
   readonly list: () => Effect.Effect<
+    ReadonlyArray<ProviderSessionRuntime>,
+    ProviderSessionRuntimeRepositoryError
+  >;
+
+  /**
+   * List provider runtime rows scoped to a single project.
+   *
+   * Joins through `projection_threads` (thread_id → project_id) so the resume
+   * picker reads only the current project's bindings instead of full-scanning
+   * every project. Returned in ascending last-seen order, like `list`.
+   */
+  readonly listByProjectId: (
+    input: ListProviderSessionRuntimeByProjectInput,
+  ) => Effect.Effect<
     ReadonlyArray<ProviderSessionRuntime>,
     ProviderSessionRuntimeRepositoryError
   >;
