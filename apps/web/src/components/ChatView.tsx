@@ -3891,7 +3891,7 @@ export default function ChatView(props: ChatViewProps) {
                         to: "/$environmentId/$threadId",
                         params: {
                           environmentId,
-                          threadId: session.existingThreadId as ReturnType<typeof newThreadId>,
+                          threadId: session.existingThreadId,
                         },
                       });
                       return;

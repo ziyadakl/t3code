@@ -995,7 +995,17 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
           observeRpcEffect(
             WS_METHODS.resumeListImportableSessions,
             importableSessions.listForProject({ projectCwd: input.cwd }).pipe(
-              Effect.map((sessions) => ({ sessions })),
+              Effect.map((sessions) => ({
+                sessions: sessions.map((s) => ({
+                  sessionId: s.sessionId,
+                  title: s.title,
+                  lastActivityAt: s.lastActivityAt,
+                  alreadyImported: s.alreadyImported,
+                  ...(s.existingThreadId !== undefined
+                    ? { existingThreadId: ThreadId.make(s.existingThreadId) }
+                    : {}),
+                })),
+              })),
               Effect.mapError((cause) => new ResumeError({ detail: cause.detail, cause })),
             ),
             { "rpc.aggregate": "resume" },

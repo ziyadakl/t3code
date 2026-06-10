@@ -3,6 +3,7 @@
  * See repo CONTEXT.md and docs/adr/0001-cli-t3-conversation-continuity.md.
  */
 import * as Schema from "effect/Schema";
+import { ThreadId } from "./baseSchemas.ts";
 
 /** Input: list the importable Claude sessions for a project directory. */
 export const ResumeListImportableSessionsInput = Schema.Struct({
@@ -24,7 +25,7 @@ export const ImportableSession = Schema.Struct({
    * picker can REJOIN that Thread instead of creating a duplicate (CLI-parity:
    * one conversation, not copies). Absent for not-yet-imported sessions.
    */
-  existingThreadId: Schema.optional(Schema.String),
+  existingThreadId: Schema.optional(ThreadId),
 });
 export type ImportableSession = typeof ImportableSession.Type;
 

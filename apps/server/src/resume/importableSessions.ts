@@ -34,7 +34,8 @@ export interface ImportableSession {
    * When this session has already been imported, the id of the Thread it lives
    * in. Lets the picker REJOIN that existing Thread instead of creating a
    * duplicate (CLI-parity: one conversation, not copies). Plain `string` keeps
-   * this module dependency-free; the contract layer brands it as `ThreadId`.
+   * this module dependency-free; the contract field is branded `ThreadId`
+   * (see packages/contracts/src/resume.ts).
    */
   readonly existingThreadId?: string;
 }
