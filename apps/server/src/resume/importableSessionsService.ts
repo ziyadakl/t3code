@@ -24,7 +24,10 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
+import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ProviderSessionDirectory } from "../provider/Services/ProviderSessionDirectory.ts";
 import {
+  buildImportedSessionMap,
   selectImportableSessions,
   type ImportableSession,
   type SessionInfo,
@@ -66,7 +69,38 @@ function toSessionInfo(info: {
   };
 }
 
-const make = Effect.sync(() => {
+const make = Effect.gen(function* () {
+  const directory = yield* ProviderSessionDirectory;
+  const projection = yield* ProjectionSnapshotQuery;
+
+  /**
+   * Build the "already imported" map — Claude session id → the t3 Thread that
+   * imported it — from the provider session bindings. Each thread created from
+   * /resume carries a binding whose `resumeCursor.resume` is the original Claude
+   * session id (seeded by ResumeSeedReactor, kept in step by the adapter). The
+   * latest-active binding wins, so a rejoin lands on the most recent thread when
+   * pre-fix duplicates already exist. Only threads still in the active snapshot
+   * are eligible — archived/deleted threads fall through to a fresh import
+   * rather than a broken rejoin. Best-effort: on any read failure the picker
+   * still lists every session, just without rejoin targets.
+   */
+  const buildImportedSessions: Effect.Effect<ReadonlyMap<string, string>> = Effect.gen(
+    function* () {
+      const activeThreadIds = yield* projection.getShellSnapshot().pipe(
+        Effect.map((snapshot) => new Set<string>(snapshot.threads.map((thread) => thread.id))),
+        Effect.catch(() => Effect.succeed(new Set<string>())),
+      );
+      const bindings = yield* directory.listBindings();
+      return buildImportedSessionMap(bindings, activeThreadIds);
+    },
+  ).pipe(
+    Effect.catch((cause) =>
+      Effect.logWarning("resume picker: failed to build rejoin map", { cause }).pipe(
+        Effect.as(new Map<string, string>() as ReadonlyMap<string, string>),
+      ),
+    ),
+  );
+
   const listForProject: ImportableSessionsServiceShape["listForProject"] = ({ projectCwd }) =>
     Effect.gen(function* () {
       const sdkSessions = yield* Effect.tryPromise({
@@ -75,11 +109,13 @@ const make = Effect.sync(() => {
           new ImportableSessionsError({ detail: "Claude listSessions failed", cause }),
       });
 
+      const importedSessions = yield* buildImportedSessions;
+
       return selectImportableSessions(sdkSessions.map(toSessionInfo), {
-        // Deferred (see file header): needs provider_session_runtime, which can't
-        // reach the ws-layer test env without upstream-test churn.
+        // t3-origin hiding is still deferred (needs the t3-created id set); the
+        // already-imported flag + rejoin target now come from the bindings.
         t3OriginSessionIds: new Set<string>(),
-        importedSessionIds: new Set<string>(),
+        importedSessions,
       });
     });
 

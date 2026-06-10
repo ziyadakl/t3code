@@ -91,8 +91,15 @@ function formatCommandInvocation(text: string): string | null {
   return args.length > 0 ? `${name} ${args}` : name;
 }
 
-/** Default cap on how many trailing messages are re-rendered (see planReplayCommands). */
-export const DEFAULT_REPLAY_MESSAGE_LIMIT = 100;
+/**
+ * Default cap on how many trailing messages are re-rendered (see
+ * planReplayCommands). Set high enough to show the FULL history of essentially
+ * every real session (CLI-parity), while still bounding a pathological
+ * many-thousand-message session so its one-time import replay can't hang the
+ * UI. With rejoin in place the replay runs only once per imported session, so
+ * this generous cap costs nothing on re-resume.
+ */
+export const DEFAULT_REPLAY_MESSAGE_LIMIT = 1000;
 
 /**
  * Cap the displayed history to the last `maxMessages` and, when truncated,

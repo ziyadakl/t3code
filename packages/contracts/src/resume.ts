@@ -19,6 +19,12 @@ export const ImportableSession = Schema.Struct({
   lastActivityAt: Schema.Number,
   /** True when this session has already been imported into a Thread. */
   alreadyImported: Schema.Boolean,
+  /**
+   * When already imported, the id of the Thread this session lives in, so the
+   * picker can REJOIN that Thread instead of creating a duplicate (CLI-parity:
+   * one conversation, not copies). Absent for not-yet-imported sessions.
+   */
+  existingThreadId: Schema.optional(Schema.String),
 });
 export type ImportableSession = typeof ImportableSession.Type;
 

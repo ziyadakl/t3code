@@ -3883,6 +3883,19 @@ export default function ChatView(props: ChatViewProps) {
                     if (!api) {
                       return;
                     }
+                    // Already in t3? Rejoin that thread instead of creating a
+                    // duplicate — CLI-parity: resuming the same chat returns to
+                    // the same conversation, it does not fork a copy.
+                    if (session.existingThreadId) {
+                      navigate({
+                        to: "/$environmentId/$threadId",
+                        params: {
+                          environmentId,
+                          threadId: session.existingThreadId as ReturnType<typeof newThreadId>,
+                        },
+                      });
+                      return;
+                    }
                     const nextThreadId = newThreadId();
                     // Resume targets a Claude SDK session, so the thread must
                     // run on Claude — the seed reactor binds the resume cursor
