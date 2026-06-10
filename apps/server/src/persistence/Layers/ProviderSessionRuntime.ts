@@ -182,7 +182,7 @@ const makeProviderSessionRuntimeRepository = Effect.gen(function* () {
                 toPersistenceDecodeError("ProviderSessionRuntimeRepository.list:rowToRuntime"),
               ),
             ),
-          { concurrency: "unbounded" },
+          { concurrency: 16 },
         ),
       ),
     );
