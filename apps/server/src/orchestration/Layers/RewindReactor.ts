@@ -190,6 +190,41 @@ const make = Effect.gen(function* () {
     // 2. Set the provider-session cursor: resumeSessionAt = anchor, rewindPending.
     yield* setRewindCursor({ threadId, anchorUuid });
 
+    // 2b. STOP the provider session (full stop → status "stopped"), so the next
+    // prompt cold-starts through `ProviderService.startSession` and consumes the
+    // marker via the adapter's `readClaudeResumeState` (Path B). The web rewind
+    // flow never stops the session itself; without this, the still-LIVE session
+    // is reused (ProviderCommandReactor reuse check at :456-457) and the marker
+    // is ignored — and the first live `sendTurn` auto-advances the in-memory
+    // cursor, clobbering the persisted anchor.
+    //
+    // A direct `providerService.stopSession` (not a restart-in-place) is required:
+    //   - `listSessions()` derives `activeSession` from the adapters' LIVE
+    //     in-memory sessions; the Claude adapter's stop deletes the session from
+    //     its map (ClaudeAdapter.ts:2566) so it drops out of `listSessions()` →
+    //     `activeSession` becomes undefined → the reuse check yields null → cold
+    //     start. A restart-in-place would instead pass the marker-less in-memory
+    //     `activeSession.resumeCursor` (ProviderCommandReactor.ts:486-488).
+    //   - The stop's directory upsert OMITS `resumeCursor` (ProviderService.ts:
+    //     830-838) and `ProviderSessionDirectory.upsert` preserves the existing
+    //     blob when the field is absent (ProviderSessionDirectory.ts:140-143), so
+    //     the marker survives stop → cold-start. The durable `resume` id in that
+    //     blob carries forward, so the cold-start is a CONTINUATION of the same
+    //     Claude session, not a new one.
+    //   - The adapter's idle stop does NOT auto-advance the cursor: it only runs
+    //     `completeTurn` (which calls `updateResumeCursor`) when a turn is in
+    //     flight (ClaudeAdapter.ts:2515-2517), and the rewind flow is idle.
+    //
+    // Guard on a live session (mirrors ProviderCommandReactor.ts:925) so a missing
+    // session is a clean no-op, not a spurious "rewind failed": `stopSession`
+    // resolves with `allowRecovery: false` and would error otherwise, aborting the
+    // handler before the abandoned event is emitted.
+    const liveSessions = yield* providerService.listSessions();
+    const hasLiveSession = liveSessions.some((entry) => entry.threadId === threadId);
+    if (hasLiveSession) {
+      yield* providerService.stopSession({ threadId });
+    }
+
     // Count the turns that will be marked abandoned (those requested at/after the
     // target prompt). The projection applies the actual flip on the emitted
     // event; we report the same cut here for the event payload.

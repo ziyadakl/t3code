@@ -63,7 +63,19 @@ function unsupported<A>() {
   return Effect.die(new Error("Unsupported provider call in test")) as Effect.Effect<A, never>;
 }
 
-function makeProviderServiceMock(cwd: string): ProviderServiceShape {
+// Records `stopSession` calls so tests can assert the rewind handler issues a
+// full provider-session stop (the cold-start trigger for the marker — ADR-0002).
+// `hasLiveSession` lets a test simulate the no-live-session branch where the
+// handler must skip the stop (clean no-op) but still emit the abandoned event.
+interface StopRecorder {
+  readonly calls: Array<{ readonly threadId: ThreadId }>;
+  hasLiveSession: boolean;
+}
+
+function makeProviderServiceMock(
+  cwd: string,
+  stopRecorder: StopRecorder,
+): ProviderServiceShape {
   const now = "2026-01-01T00:00:00.000Z";
   return {
     startSession: () => unsupported(),
@@ -71,19 +83,26 @@ function makeProviderServiceMock(cwd: string): ProviderServiceShape {
     interruptTurn: () => unsupported(),
     respondToRequest: () => unsupported(),
     respondToUserInput: () => unsupported(),
-    stopSession: () => unsupported(),
+    stopSession: (input) =>
+      Effect.sync(() => {
+        stopRecorder.calls.push({ threadId: (input as { threadId: ThreadId }).threadId });
+      }) as ReturnType<ProviderServiceShape["stopSession"]>,
     listSessions: () =>
-      Effect.succeed([
-        {
-          provider: ProviderDriverKind.make("codex"),
-          status: "ready",
-          runtimeMode: "full-access",
-          threadId,
-          cwd,
-          createdAt: now,
-          updatedAt: now,
-        },
-      ] satisfies ReadonlyArray<ProviderSession>),
+      Effect.succeed(
+        stopRecorder.hasLiveSession
+          ? ([
+              {
+                provider: ProviderDriverKind.make("codex"),
+                status: "ready",
+                runtimeMode: "full-access",
+                threadId,
+                cwd,
+                createdAt: now,
+                updatedAt: now,
+              },
+            ] satisfies ReadonlyArray<ProviderSession>)
+          : ([] satisfies ReadonlyArray<ProviderSession>),
+      ),
     getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
     getInstanceInfo: (instanceId) =>
       Effect.succeed({
@@ -166,6 +185,8 @@ describe("RewindReactor", () => {
     const cwd = createGitRepository();
     tempDirs.push(cwd);
 
+    const stopRecorder: StopRecorder = { calls: [], hasLiveSession: true };
+
     // One shared in-memory DB + one shared projection snapshot query so the
     // engine's projected rows, the reactor's reads, the test's reads, and the
     // session directory all see the same data. Everything is layered off a
@@ -189,7 +210,9 @@ describe("RewindReactor", () => {
       Layer.provideMerge(OrchestrationEngineLive),
       Layer.provideMerge(dataLayer),
       Layer.provideMerge(RuntimeReceiptBusLive),
-      Layer.provideMerge(Layer.succeed(ProviderService, makeProviderServiceMock(cwd))),
+      Layer.provideMerge(
+        Layer.succeed(ProviderService, makeProviderServiceMock(cwd, stopRecorder)),
+      ),
       Layer.provideMerge(CheckpointStoreLive.pipe(Layer.provide(VcsDriverRegistry.layer))),
       Layer.provideMerge(
         WorkspaceEntriesLive.pipe(
@@ -243,7 +266,7 @@ describe("RewindReactor", () => {
       }),
     );
 
-    return { engine, snapshotQuery, reactor, directory, checkpointStore, cwd };
+    return { engine, snapshotQuery, reactor, directory, checkpointStore, cwd, stopRecorder };
   }
 
   // Seed a small conversation with an anchor uuid on the first assistant reply.
@@ -303,6 +326,15 @@ describe("RewindReactor", () => {
 
     await seedConversation(harness.engine);
 
+    // Sanity: the forward prompt is in the active timeline BEFORE the rewind, so
+    // the post-rewind "hidden" assertion below is non-vacuous.
+    const before = await Effect.runPromise(harness.snapshotQuery.getThreadDetailById(threadId));
+    expect(
+      Option.isSome(before)
+        ? before.value.messages.map((message) => message.id)
+        : [],
+    ).toContain(MessageId.make("message-b-user"));
+
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.conversation.rewind",
@@ -331,6 +363,81 @@ describe("RewindReactor", () => {
     // The stale forward value was overridden, unknown fields preserved.
     expect(cursor.resume).toBe("session-abc");
     expect(cursor.custom).toBe("keep-me");
+
+    // The handler MUST stop the live provider session so the next prompt
+    // cold-starts and the adapter consumes the marker (ADR-0002 integration fix).
+    // Stop is awaited before the rewind completes, so by now it has fired exactly
+    // once for this thread.
+    expect(harness.stopRecorder.calls).toEqual([{ threadId }]);
+
+    // The stop's directory upsert omits `resumeCursor`, so the marker blob we set
+    // above survives the stop (it does not clobber the anchor).
+    expect(cursor.resumeSessionAt).toBe("claude-uuid-a-assistant");
+    expect(cursor.rewindPending).toBe(true);
+
+    // The abandoned event still fired: the rewound forward prompt (b-user) drops
+    // out of the active timeline (marked abandoned, not deleted).
+    await waitFor(async () => {
+      const detail = await Effect.runPromise(harness.snapshotQuery.getThreadDetailById(threadId));
+      if (Option.isNone(detail)) {
+        return false;
+      }
+      return !detail.value.messages.some(
+        (message) => message.id === MessageId.make("message-b-user"),
+      );
+    });
+    const detail = await Effect.runPromise(harness.snapshotQuery.getThreadDetailById(threadId));
+    const activeMessageIds = Option.isSome(detail)
+      ? detail.value.messages.map((message) => message.id)
+      : [];
+    expect(activeMessageIds).not.toContain(MessageId.make("message-b-user"));
+  });
+
+  it("skips the stop (clean no-op) when no live provider session is bound", async () => {
+    const harness = await createHarness();
+    await seedConversation(harness.engine);
+
+    // No live provider session for this thread: the handler must SKIP the stop
+    // (a stop with `allowRecovery: false` would error and abort the handler
+    // before the abandoned event), yet still mark the forward turns abandoned.
+    harness.stopRecorder.hasLiveSession = false;
+    harness.stopRecorder.calls.length = 0;
+
+    // Sanity: the forward prompt is present before the rewind.
+    const before = await Effect.runPromise(harness.snapshotQuery.getThreadDetailById(threadId));
+    expect(
+      Option.isSome(before)
+        ? before.value.messages.map((message) => message.id)
+        : [],
+    ).toContain(MessageId.make("message-b-user"));
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.conversation.rewind",
+        commandId: CommandId.make("cmd-rewind-noop"),
+        threadId,
+        messageId: MessageId.make("message-b-user"),
+        createdAt: "2026-01-01T00:02:00.000Z",
+      }),
+    );
+
+    await waitFor(async () => {
+      const detail = await Effect.runPromise(harness.snapshotQuery.getThreadDetailById(threadId));
+      if (Option.isNone(detail)) {
+        return false;
+      }
+      return !detail.value.messages.some(
+        (message) => message.id === MessageId.make("message-b-user"),
+      );
+    });
+    const detail = await Effect.runPromise(harness.snapshotQuery.getThreadDetailById(threadId));
+    const activeMessageIds = Option.isSome(detail)
+      ? detail.value.messages.map((message) => message.id)
+      : [];
+    expect(activeMessageIds).not.toContain(MessageId.make("message-b-user"));
+
+    // No live session → the stop was skipped, not attempted.
+    expect(harness.stopRecorder.calls).toEqual([]);
   });
 
   it("file-restore restores the tree without touching message rows", async () => {
