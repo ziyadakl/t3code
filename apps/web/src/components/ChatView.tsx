@@ -111,7 +111,13 @@ import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import PlanSidebar from "./PlanSidebar";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
-import { ChevronDownIcon, FileClockIcon, TriangleAlertIcon, WifiOffIcon } from "lucide-react";
+import {
+  ChevronDownIcon,
+  FileClockIcon,
+  TriangleAlertIcon,
+  Undo2Icon,
+  WifiOffIcon,
+} from "lucide-react";
 import { cn, randomHex } from "~/lib/utils";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
@@ -875,6 +881,12 @@ export default function ChatView(props: ChatViewProps) {
   // The post-rewind "restore files" handler is defined far below; the banner
   // (built earlier in render) calls it through this ref to avoid TDZ ordering.
   const rewindRestoreFilesRef = useRef<(messageId: MessageId) => void>(() => {});
+  // After ANY rewind (conversation-only or +files) but BEFORE the user re-sends,
+  // they may cancel it: un-hide the forward messages, clear the pending cursor,
+  // reset the composer. Cleared on send, on cancel, or overwritten by a re-rewind.
+  const [pendingRewind, setPendingRewind] = useState<{ messageId: MessageId } | null>(null);
+  // Same TDZ pattern as rewindRestoreFilesRef for the "cancel rewind" handler.
+  const rewindCancelRef = useRef<() => void>(() => {});
   const [respondingRequestIds, setRespondingRequestIds] = useState<ApprovalRequestId[]>([]);
   const [respondingUserInputRequestIds, setRespondingUserInputRequestIds] = useState<
     ApprovalRequestId[]
@@ -1450,6 +1462,23 @@ export default function ChatView(props: ChatViewProps) {
         ),
       });
     }
+    if (pendingRewind) {
+      items.push({
+        id: `rewind-cancel:${pendingRewind.messageId}`,
+        variant: "info",
+        icon: <Undo2Icon />,
+        title: "Conversation rewound — not sent yet",
+        description:
+          "Edit and send the prompt to continue from here, or cancel the rewind to restore the hidden messages.",
+        actions: (
+          <Button size="xs" variant="outline" onClick={() => rewindCancelRef.current()}>
+            Cancel rewind
+          </Button>
+        ),
+        dismissLabel: "Cancel rewind",
+        onDismiss: () => rewindCancelRef.current(),
+      });
+    }
     if (rewindFilesAhead) {
       items.push({
         id: `rewind-files-ahead:${rewindFilesAhead.messageId}`,
@@ -1496,6 +1525,7 @@ export default function ChatView(props: ChatViewProps) {
     handleReconnectActiveEnvironment,
     isRevertingCheckpoint,
     navigate,
+    pendingRewind,
     reconnectingEnvironmentId,
     rewindFilesAhead,
     showVersionMismatchBanner,
@@ -3075,6 +3105,8 @@ export default function ChatView(props: ChatViewProps) {
         return;
       }
       prefillComposerWithPrompt(messageId);
+      // Offer "Cancel rewind" until the user re-sends (ADR-0002).
+      setPendingRewind({ messageId });
       // If a checkpoint exists for this point, the working tree is now ahead of
       // the restored conversation — offer to restore it too via the inline note.
       const turnCount = revertTurnCountByUserMessageId.get(messageId);
@@ -3125,6 +3157,51 @@ export default function ChatView(props: ChatViewProps) {
     [resolveRewindContext, revertTurnCountByUserMessageId, setThreadError],
   );
   rewindRestoreFilesRef.current = onRestoreFilesForMessage;
+
+  // Cancel an un-sent rewind (ADR-0002): the inverse of onRewindConversation.
+  // Dispatch the cancel command; the server un-abandons the hidden rows and
+  // streams a fresh restored snapshot back (no client message manipulation
+  // needed). On success, reset the composer and clear the pending banners.
+  const onCancelRewind = useCallback(async () => {
+    if (!pendingRewind) return;
+    const ctx = resolveRewindContext();
+    if (!ctx) return;
+    setThreadError(ctx.thread.id, null);
+    try {
+      await ctx.api.orchestration.dispatchCommand({
+        type: "thread.conversation.rewind.cancel",
+        commandId: newCommandId(),
+        threadId: ctx.thread.id,
+        messageId: pendingRewind.messageId,
+        createdAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      setThreadError(
+        ctx.thread.id,
+        err instanceof Error ? err.message : "Failed to cancel the rewind.",
+      );
+      return;
+    }
+    // The restored messages arrive via the server snapshot. Reset the composer
+    // (it was pre-filled with the rewound prompt) and drop the pending banners.
+    setComposerDraftPrompt(composerDraftTarget, "");
+    promptRef.current = "";
+    composerRef.current?.resetCursorState({
+      cursor: collapseExpandedComposerCursor("", 0),
+      prompt: "",
+      detectTrigger: true,
+    });
+    setPendingRewind(null);
+    setRewindFilesAhead(null);
+  }, [
+    composerDraftTarget,
+    composerRef,
+    pendingRewind,
+    resolveRewindContext,
+    setComposerDraftPrompt,
+    setThreadError,
+  ]);
+  rewindCancelRef.current = () => void onCancelRewind();
 
   const onRewindConversationAndFiles = useCallback(
     async (messageId: MessageId) => {
@@ -3458,8 +3535,10 @@ export default function ChatView(props: ChatViewProps) {
         createdAt: messageCreatedAt,
       });
       turnStartSucceeded = true;
-      // A fresh turn supersedes any pending "files are still ahead" note.
+      // A fresh turn supersedes any pending "files are still ahead" note and the
+      // "cancel rewind" affordance (the rewind has now been sent).
       setRewindFilesAhead(null);
+      setPendingRewind(null);
     })().catch(async (err: unknown) => {
       if (
         !turnStartSucceeded &&
