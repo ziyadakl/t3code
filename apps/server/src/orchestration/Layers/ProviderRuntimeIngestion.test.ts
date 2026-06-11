@@ -799,6 +799,97 @@ describe("ProviderRuntimeIngestion", () => {
     expect(assistant?.providerMessageUuid).toBe(anchorUuid);
   });
 
+  it("stamps the rewind-anchor uuid on the turn-FINAL assistant segment of a multi-segment turn", async () => {
+    // A tool-using turn produces two assistant segments (text, tool call, more
+    // text). The rewind anchor is the turn-FINAL assistant message, so the uuid
+    // must land on the second segment and NOT on the earlier one. Segments carry
+    // distinct created_at (each pinned to its own first delta), as in production.
+    const harness = await createHarness();
+    const t1 = "2026-01-01T00:00:01.000Z";
+    const t2 = "2026-01-01T00:00:05.000Z";
+    const finalUuid = "99999999-8888-7777-6666-555555555555";
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-multi-turn-started"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-multi"),
+    });
+    // First assistant segment (before the tool call).
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-multi-delta-a"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: t1,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-multi"),
+      itemId: asItemId("item-multi-a"),
+      payload: { streamKind: "assistant_text", delta: "Let me check. " },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-multi-item-a"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: t1,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-multi"),
+      itemId: asItemId("item-multi-a"),
+      payload: { itemType: "assistant_message", status: "completed" },
+    });
+    // Second (turn-final) assistant segment — this is the rewind anchor.
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-multi-delta-b"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: t2,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-multi"),
+      itemId: asItemId("item-multi-b"),
+      payload: { streamKind: "assistant_text", delta: "The answer is 42." },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-multi-item-b"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: t2,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-multi"),
+      itemId: asItemId("item-multi-b"),
+      payload: { itemType: "assistant_message", status: "completed" },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-multi-turn-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: t2,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-multi"),
+      payload: { state: "completed", assistantMessageUuid: finalUuid },
+    });
+
+    await waitForThread(
+      harness.readModel,
+      (entry) =>
+        entry.messages.some(
+          (message: ProviderRuntimeTestMessage) =>
+            message.id === "assistant:item-multi-b" && !message.streaming,
+        ) && entry.session?.status === "ready",
+    );
+    await harness.drain();
+
+    const messages = await harness.listMessages();
+    const firstSegment = messages.find((row) => row.messageId === "assistant:item-multi-a");
+    const finalSegment = messages.find((row) => row.messageId === "assistant:item-multi-b");
+    expect(firstSegment).toBeDefined();
+    expect(finalSegment).toBeDefined();
+    // Anchor lands on the turn-final segment...
+    expect(finalSegment?.providerMessageUuid).toBe(finalUuid);
+    // ...and NOT on the earlier mid-turn segment.
+    expect(firstSegment?.providerMessageUuid ?? null).toBeNull();
+  });
+
   it("uses assistant item completion detail when no assistant deltas were streamed", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
