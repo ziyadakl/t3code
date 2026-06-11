@@ -365,6 +365,10 @@ const TurnCompletedPayload = Schema.Struct({
   modelUsage: Schema.optional(UnknownRecordSchema),
   totalCostUsd: Schema.optional(Schema.Number),
   errorMessage: Schema.optional(TrimmedNonEmptyStringSchema),
+  // Turn-final Claude assistant message uuid (the conversation-rewind anchor,
+  // ADR-0002). Only known once the turn completes, so it rides the completion
+  // event; ingestion stamps it onto the final `assistant.complete` command.
+  assistantMessageUuid: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type TurnCompletedPayload = typeof TurnCompletedPayload.Type;
 

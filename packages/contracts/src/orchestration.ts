@@ -641,6 +641,34 @@ const ThreadCheckpointRevertCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+// Non-destructive conversation rewind (ADR-0002). Jump the session back to an
+// earlier prompt and continue in the SAME thread/provider session; forward
+// messages are HIDDEN (marked abandoned), never deleted, and the working tree
+// is untouched. Distinct from `thread.checkpoint.revert`, which is destructive
+// and also restores files. The reactor resolves `messageId` to the anchor uuid
+// + turn count server-side. REACTOR BEHAVIOR is a later stream (WS-2); this
+// only freezes the command shape.
+const ThreadConversationRewindCommand = Schema.Struct({
+  type: Schema.Literal("thread.conversation.rewind"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  createdAt: IsoDateTime,
+});
+
+// Standalone "restore the working tree to turn N" — the file half of the old
+// bundled revert, decoupled (ADR-0002) so "also restore files" / the post-rewind
+// "restore files to this point too" action can move the tree WITHOUT truncating
+// the conversation. Calls CheckpointStore.restoreCheckpoint only. REACTOR
+// BEHAVIOR is a later stream (WS-2).
+const ThreadFilesRestoreCommand = Schema.Struct({
+  type: Schema.Literal("thread.files.restore"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  turnCount: NonNegativeInt,
+  createdAt: IsoDateTime,
+});
+
 const ThreadSessionStopCommand = Schema.Struct({
   type: Schema.Literal("thread.session.stop"),
   commandId: CommandId,
@@ -664,6 +692,8 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
+  ThreadConversationRewindCommand,
+  ThreadFilesRestoreCommand,
   ThreadSessionStopCommand,
 ]);
 export type DispatchableClientOrchestrationCommand =
@@ -685,6 +715,8 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
+  ThreadConversationRewindCommand,
+  ThreadFilesRestoreCommand,
   ThreadSessionStopCommand,
 ]);
 export type ClientOrchestrationCommand = typeof ClientOrchestrationCommand.Type;
@@ -704,6 +736,9 @@ const ThreadMessageAssistantDeltaCommand = Schema.Struct({
   messageId: MessageId,
   delta: Schema.String,
   turnId: Schema.optional(TurnId),
+  // Claude provider message uuid — the conversation-rewind anchor. Optional:
+  // live streaming deltas don't yet know the turn-final uuid; replay carries it.
+  providerMessageUuid: Schema.optional(Schema.String),
   createdAt: IsoDateTime,
 });
 
@@ -713,6 +748,9 @@ const ThreadMessageAssistantCompleteCommand = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
   turnId: Schema.optional(TurnId),
+  // Turn-final Claude message uuid (the rewind anchor) — stamped here for live
+  // turns, where the uuid is only known once the turn completes.
+  providerMessageUuid: Schema.optional(Schema.String),
   createdAt: IsoDateTime,
 });
 
@@ -726,6 +764,8 @@ const ThreadMessageUserRecordCommand = Schema.Struct({
   messageId: MessageId,
   text: Schema.String,
   turnId: Schema.optional(TurnId),
+  // Claude transcript `uuid` for this replayed user message (rewind anchor).
+  providerMessageUuid: Schema.optional(Schema.String),
   createdAt: IsoDateTime,
 });
 
@@ -803,6 +843,9 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.user-input-response-requested",
   "thread.checkpoint-revert-requested",
   "thread.reverted",
+  "thread.conversation-rewind-requested",
+  "thread.conversation-rewound",
+  "thread.files-restore-requested",
   "thread.session-stop-requested",
   "thread.session-set",
   "thread.proposed-plan-upserted",
@@ -904,6 +947,10 @@ export const ThreadMessageSentPayload = Schema.Struct({
   role: OrchestrationMessageRole,
   text: Schema.String,
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
+  // Claude provider message uuid — the conversation-rewind anchor (ADR-0002).
+  // Optional: present for assistant messages (stamped on completion) and
+  // replayed messages; absent for live streaming deltas and legacy events.
+  providerMessageUuid: Schema.optional(Schema.String),
   turnId: Schema.NullOr(TurnId),
   streaming: Schema.Boolean,
   createdAt: IsoDateTime,
@@ -952,6 +999,38 @@ export const ThreadCheckpointRevertRequestedPayload = Schema.Struct({
 export const ThreadRevertedPayload = Schema.Struct({
   threadId: ThreadId,
   turnCount: NonNegativeInt,
+});
+
+// Non-destructive conversation rewind (ADR-0002). The decider emits the
+// `-requested` event from the client command; the rewind reactor (WS-2)
+// consumes it, sets the resume anchor + marks forward rows abandoned, and emits
+// the `-rewound` event the ProjectionPipeline applies as a hide (not a delete).
+export const ThreadConversationRewindRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  createdAt: IsoDateTime,
+});
+
+export const ThreadConversationRewoundPayload = Schema.Struct({
+  threadId: ThreadId,
+  // The user-selected target message (the prompt being rewound to).
+  messageId: MessageId,
+  // The Claude message uuid the next turn resumes "up to and including".
+  // Optional: a native thread without a persisted anchor uuid may rewind by
+  // turn count alone.
+  anchorProviderMessageUuid: Schema.optional(Schema.String),
+  // Number of turns at/after the anchor that were marked abandoned.
+  turnCount: NonNegativeInt,
+});
+
+// Standalone file-restore (ADR-0002): restore the working tree to turn N
+// WITHOUT truncating the conversation. The decider emits this `-requested`
+// event; the file-restore reactor (WS-2) consumes it and calls
+// CheckpointStore.restoreCheckpoint only.
+export const ThreadFilesRestoreRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  turnCount: NonNegativeInt,
+  createdAt: IsoDateTime,
 });
 
 export const ThreadSessionStopRequestedPayload = Schema.Struct({
@@ -1091,6 +1170,21 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.reverted"),
     payload: ThreadRevertedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.conversation-rewind-requested"),
+    payload: ThreadConversationRewindRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.conversation-rewound"),
+    payload: ThreadConversationRewoundPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.files-restore-requested"),
+    payload: ThreadFilesRestoreRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

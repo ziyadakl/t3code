@@ -560,6 +560,56 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    // Non-destructive conversation rewind (ADR-0002). Scaffold only: the decider
+    // records the request; the rewind reactor (WS-2) resolves the anchor, marks
+    // forward rows abandoned, and emits `thread.conversation-rewound`.
+    case "thread.conversation.rewind": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.conversation-rewind-requested",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
+    // Standalone file-restore (ADR-0002). Scaffold only: the file-restore reactor
+    // (WS-2) consumes this and calls CheckpointStore.restoreCheckpoint, with no
+    // conversation truncation.
+    case "thread.files.restore": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.files-restore-requested",
+        payload: {
+          threadId: command.threadId,
+          turnCount: command.turnCount,
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
     case "thread.session.stop": {
       yield* requireThread({
         readModel,
@@ -622,6 +672,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           messageId: command.messageId,
           role: "assistant",
           text: command.delta,
+          ...(command.providerMessageUuid !== undefined
+            ? { providerMessageUuid: command.providerMessageUuid }
+            : {}),
           turnId: command.turnId ?? null,
           streaming: true,
           createdAt: command.createdAt,
@@ -649,6 +702,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           messageId: command.messageId,
           role: "assistant",
           text: "",
+          ...(command.providerMessageUuid !== undefined
+            ? { providerMessageUuid: command.providerMessageUuid }
+            : {}),
           turnId: command.turnId ?? null,
           streaming: false,
           createdAt: command.createdAt,
@@ -676,6 +732,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           messageId: command.messageId,
           role: "user",
           text: command.text,
+          ...(command.providerMessageUuid !== undefined
+            ? { providerMessageUuid: command.providerMessageUuid }
+            : {}),
           turnId: command.turnId ?? null,
           streaming: false,
           createdAt: command.createdAt,

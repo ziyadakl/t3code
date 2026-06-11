@@ -115,6 +115,14 @@ interface ClaudeResumeState {
   readonly resume?: string;
   readonly resumeSessionAt?: string;
   readonly turnCount?: number;
+  // Shared WS-1 <-> WS-2 marker for the conversation-rewind feature (ADR-0002).
+  // An orchestration reactor (WS-2) sets this true when it sets the rewind
+  // anchor; the adapter (WS-1) reads it to decide whether to pass
+  // `resumeSessionAt` into the query and to skip auto-advancing the cursor,
+  // then clears it. Persisted opaquely inside `resume_cursor_json`
+  // (Schema.Unknown, raw JSON round-trip) so unknown fields survive — DEFINED
+  // here only; the read/set behavior is WS-1/WS-2.
+  readonly rewindPending?: boolean;
 }
 
 interface ClaudeTurnState {
@@ -1598,6 +1606,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           ? { totalCostUsd: result.total_cost_usd }
           : {}),
         ...(errorMessage ? { errorMessage } : {}),
+        // Carry the turn-final assistant uuid (the rewind anchor) so ingestion
+        // can stamp it onto the final assistant message (ADR-0002).
+        ...(context.lastAssistantUuid ? { assistantMessageUuid: context.lastAssistantUuid } : {}),
       },
       providerRefs: nativeProviderRefs(context),
     });
