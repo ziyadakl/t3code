@@ -36,11 +36,11 @@ import {
   type LucideIcon,
   SquarePenIcon,
   TerminalIcon,
-  Undo2Icon,
   WrenchIcon,
   ZapIcon,
 } from "lucide-react";
 import { Button } from "../ui/button";
+import { RewindMenu } from "./RewindMenu";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { ChangedFilesTree } from "./ChangedFilesTree";
@@ -94,7 +94,8 @@ interface TimelineRowSharedState {
   workspaceRoot: string | undefined;
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   activeThreadEnvironmentId: EnvironmentId;
-  onRevertUserMessage: (messageId: MessageId) => void;
+  onRewindConversation: (messageId: MessageId) => void;
+  onRewindConversationAndFiles: (messageId: MessageId) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
 }
@@ -127,7 +128,8 @@ interface MessagesTimelineProps {
   routeThreadKey: string;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
-  onRevertUserMessage: (messageId: MessageId) => void;
+  onRewindConversation: (messageId: MessageId) => void;
+  onRewindConversationAndFiles: (messageId: MessageId) => void;
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   activeThreadEnvironmentId: EnvironmentId;
@@ -156,7 +158,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   routeThreadKey,
   onOpenTurnDiff,
   revertTurnCountByUserMessageId,
-  onRevertUserMessage,
+  onRewindConversation,
+  onRewindConversationAndFiles,
   isRevertingCheckpoint,
   onImageExpand,
   activeThreadEnvironmentId,
@@ -228,7 +231,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       workspaceRoot,
       skills,
       activeThreadEnvironmentId,
-      onRevertUserMessage,
+      onRewindConversation,
+      onRewindConversationAndFiles,
       onImageExpand,
       onOpenTurnDiff,
     }),
@@ -240,7 +244,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       workspaceRoot,
       skills,
       activeThreadEnvironmentId,
-      onRevertUserMessage,
+      onRewindConversation,
+      onRewindConversationAndFiles,
       onImageExpand,
       onOpenTurnDiff,
     ],
@@ -338,7 +343,11 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   const userImages = row.message.attachments ?? [];
   const displayedUserMessage = deriveDisplayedUserMessageState(row.message.text);
   const terminalContexts = displayedUserMessage.contexts;
-  const canRevertAgentWork = typeof row.revertTurnCount === "number";
+  // A git checkpoint exists for this prompt's turn iff a revert turn count was
+  // resolvable (ChatView builds the map only when a checkpoint is present).
+  // Conversation-only rewind is offered for EVERY user prompt; "also restore
+  // files" is gated on this checkpoint existence inside the rewind menu.
+  const hasCheckpoint = typeof row.revertTurnCount === "number";
 
   return (
     <div className="flex justify-end">
@@ -386,7 +395,10 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                 {displayedUserMessage.copyText && (
                   <MessageCopyButton text={displayedUserMessage.copyText} />
                 )}
-                {canRevertAgentWork && <RevertUserMessageButton messageId={row.message.id} />}
+                <RewindUserMessageButton
+                  messageId={row.message.id}
+                  hasCheckpoint={hasCheckpoint}
+                />
               </div>
               <p className="text-right text-xs text-muted-foreground/50">
                 {formatTimestamp(row.message.createdAt, ctx.timestampFormat)}
@@ -399,21 +411,24 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   );
 }
 
-function RevertUserMessageButton({ messageId }: { messageId: MessageId }) {
+function RewindUserMessageButton({
+  messageId,
+  hasCheckpoint,
+}: {
+  messageId: MessageId;
+  hasCheckpoint: boolean;
+}) {
   const ctx = use(TimelineRowCtx);
   const activity = use(TimelineRowActivityCtx);
 
   return (
-    <Button
-      type="button"
-      size="xs"
-      variant="outline"
+    <RewindMenu
+      messageId={messageId}
+      hasCheckpoint={hasCheckpoint}
       disabled={activity.isRevertingCheckpoint || activity.isWorking}
-      onClick={() => ctx.onRevertUserMessage(messageId)}
-      title="Revert to this message"
-    >
-      <Undo2Icon className="size-3" />
-    </Button>
+      onRestoreConversation={ctx.onRewindConversation}
+      onRestoreConversationAndFiles={ctx.onRewindConversationAndFiles}
+    />
   );
 }
 
