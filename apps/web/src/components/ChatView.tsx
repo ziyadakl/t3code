@@ -3008,15 +3008,32 @@ export default function ChatView(props: ChatViewProps) {
 
   // Guard shared by every rewind action. Returns null when blocked.
   const resolveRewindContext = useCallback(() => {
-    const api = readEnvironmentApi(environmentId);
     const localApi = readLocalApi();
-    if (!api || !localApi || !activeThread || isRevertingCheckpoint) {
+    if (!localApi || !activeThread || isRevertingCheckpoint) {
       return null;
     }
+    // A saved (non-primary) environment that isn't currently connected has no
+    // entry in the connection map, so `readEnvironmentApi` returns undefined for
+    // its threads. Surface the actionable reconnect message *before* the bare
+    // api guard below — otherwise the missing api silently swallows the click
+    // (no command, no error) on exactly the imported/cloud threads this feature
+    // must support (ADR-0002 §2). Once reconnected, the rewind dispatches as
+    // normal through that environment's adapter.
     if (activeEnvironmentUnavailable && activeEnvironmentUnavailableLabel) {
       setThreadError(
         activeThread.id,
         `Reconnect ${activeEnvironmentUnavailableLabel} before rewinding this thread.`,
+      );
+      return null;
+    }
+    const api = readEnvironmentApi(environmentId);
+    if (!api) {
+      // No live connection for this thread's environment and it isn't a known
+      // saved-environment we can name a reconnect for (e.g. its registry entry
+      // is gone). Never fail silently — that is the bug this guard replaces.
+      setThreadError(
+        activeThread.id,
+        "Can't reach this thread's environment to rewind. Reconnect it and try again.",
       );
       return null;
     }
