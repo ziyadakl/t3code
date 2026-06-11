@@ -183,6 +183,16 @@ export interface ProjectionTurnRepositoryShape {
   readonly markAbandonedFromRequestedAt: (
     input: MarkProjectionTurnsAbandonedInput,
   ) => Effect.Effect<number, ProjectionRepositoryError>;
+
+  /**
+   * Cancel an un-sent conversation rewind (ADR-0002): the exact inverse of
+   * `markAbandonedFromRequestedAt` — flip `abandoned = 0` on every turn requested
+   * at or after `fromRequestedAt` that a prior rewind had hidden. Returns the
+   * number of concrete (`turn_id IS NOT NULL`) turns un-hidden.
+   */
+  readonly unmarkAbandonedFromRequestedAt: (
+    input: MarkProjectionTurnsAbandonedInput,
+  ) => Effect.Effect<number, ProjectionRepositoryError>;
 }
 
 export class ProjectionTurnRepository extends Context.Service<

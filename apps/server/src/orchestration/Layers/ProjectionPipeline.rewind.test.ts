@@ -357,4 +357,145 @@ it.layer(TestLayer)("OrchestrationProjectionPipeline (conversation-rewind)", (it
       );
     }),
   );
+
+  // Cancel an un-sent rewind (ADR-0002): on replay/rebuild (where reactors don't
+  // run), `thread.conversation-rewind-cancelled` must RE-APPLY the un-abandon so
+  // the timeline restores. Idempotent with the reactor's direct un-mark.
+  it.effect("un-marks abandoned messages + turns for the cancelled event", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+
+      const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
+        eventStore
+          .append(event)
+          .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+
+      const projectId = ProjectId.make("project-rwc");
+      const threadId = ThreadId.make("thread-rwc");
+      const t0 = "2026-07-01T00:00:00.000Z";
+
+      yield* appendAndProject({
+        type: "project.created",
+        eventId: EventId.make("evt-rwc-1"),
+        aggregateKind: "project",
+        aggregateId: projectId,
+        occurredAt: t0,
+        commandId: CommandId.make("cmd-rwc-1"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-rwc-1"),
+        metadata: {},
+        payload: {
+          projectId,
+          title: "Project RWC",
+          workspaceRoot: "/tmp/project-rwc",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: t0,
+          updatedAt: t0,
+        },
+      });
+      yield* appendAndProject({
+        type: "thread.created",
+        eventId: EventId.make("evt-rwc-2"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: t0,
+        commandId: CommandId.make("cmd-rwc-2"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-rwc-2"),
+        metadata: {},
+        payload: {
+          threadId,
+          projectId,
+          title: "Thread RWC",
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt: t0,
+          updatedAt: t0,
+        },
+      });
+
+      const sendMessage = (suffix: string, role: "user" | "assistant", createdAt: string) =>
+        appendAndProject({
+          type: "thread.message-sent",
+          eventId: EventId.make(`evt-rwc-msg-${suffix}`),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: createdAt,
+          commandId: CommandId.make(`cmd-rwc-msg-${suffix}`),
+          causationEventId: null,
+          correlationId: CorrelationId.make(`cmd-rwc-msg-${suffix}`),
+          metadata: {},
+          payload: {
+            threadId,
+            messageId: MessageId.make(`message-${suffix}`),
+            role,
+            text: suffix,
+            turnId: null,
+            streaming: false,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        });
+
+      yield* sendMessage("a-user", "user", "2026-07-01T00:01:00.000Z");
+      yield* sendMessage("a-assistant", "assistant", "2026-07-01T00:01:01.000Z");
+      yield* sendMessage("b-user", "user", "2026-07-01T00:01:02.000Z"); // rewind target
+      yield* sendMessage("b-assistant", "assistant", "2026-07-01T00:01:03.000Z");
+
+      yield* appendAndProject({
+        type: "thread.conversation-rewound",
+        eventId: EventId.make("evt-rwc-rewound"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-07-01T00:02:00.000Z",
+        commandId: CommandId.make("cmd-rwc-rewound"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-rwc-rewound"),
+        metadata: {},
+        payload: {
+          threadId,
+          messageId: MessageId.make("message-b-user"),
+          turnCount: 0,
+        },
+      });
+
+      // Sanity: two rows are hidden by the rewind.
+      const hidden = yield* sql<{
+        readonly count: number;
+      }>`SELECT COUNT(*) AS count FROM projection_thread_messages WHERE thread_id = ${threadId} AND abandoned = 1`;
+      assert.equal(hidden[0]?.count, 2);
+
+      // Cancel: re-applying the un-abandon restores every row.
+      yield* appendAndProject({
+        type: "thread.conversation-rewind-cancelled",
+        eventId: EventId.make("evt-rwc-cancelled"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-07-01T00:03:00.000Z",
+        commandId: CommandId.make("cmd-rwc-cancelled"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-rwc-cancelled"),
+        metadata: {},
+        payload: {
+          threadId,
+          messageId: MessageId.make("message-b-user"),
+        },
+      });
+
+      const stillHidden = yield* sql<{
+        readonly count: number;
+      }>`SELECT COUNT(*) AS count FROM projection_thread_messages WHERE thread_id = ${threadId} AND abandoned = 1`;
+      assert.equal(stillHidden[0]?.count, 0);
+
+      const totalAfter = yield* sql<{
+        readonly count: number;
+      }>`SELECT COUNT(*) AS count FROM projection_thread_messages WHERE thread_id = ${threadId}`;
+      assert.equal(totalAfter[0]?.count, 4);
+    }),
+  );
 });

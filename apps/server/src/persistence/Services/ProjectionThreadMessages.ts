@@ -111,6 +111,16 @@ export interface ProjectionThreadMessageRepositoryShape {
   readonly markAbandonedFromCreatedAt: (
     input: MarkProjectionThreadMessagesAbandonedInput,
   ) => Effect.Effect<number, ProjectionRepositoryError>;
+
+  /**
+   * Cancel an un-sent conversation rewind (ADR-0002): the exact inverse of
+   * `markAbandonedFromCreatedAt` — flip `abandoned = 0` on every row at or after
+   * `fromCreatedAt` that a prior rewind had hidden, so the timeline restores.
+   * Returns the number of rows un-hidden.
+   */
+  readonly unmarkAbandonedFromCreatedAt: (
+    input: MarkProjectionThreadMessagesAbandonedInput,
+  ) => Effect.Effect<number, ProjectionRepositoryError>;
 }
 
 /**

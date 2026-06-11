@@ -177,6 +177,88 @@ const make = Effect.gen(function* () {
     });
   });
 
+  // Cancel an un-sent rewind: the inverse of `setRewindCursor`. Strip the rewind
+  // anchor (`resumeSessionAt`) and clear `rewindPending`, preserving the durable
+  // `resume` id and any other adapter-owned blob fields so the session continues
+  // normally on the next turn (no rewind in flight).
+  const clearRewindCursor = Effect.fn("clearRewindCursor")(function* (input: {
+    readonly threadId: ThreadId;
+  }) {
+    const binding = yield* providerSessionDirectory.getBinding(input.threadId);
+    if (Option.isNone(binding)) {
+      yield* Effect.logWarning("rewind-cancel: no provider session binding to clear the marker", {
+        threadId: input.threadId,
+      });
+      return;
+    }
+    const existingCursor =
+      binding.value.resumeCursor && typeof binding.value.resumeCursor === "object"
+        ? (binding.value.resumeCursor as Record<string, unknown>)
+        : {};
+    const { resumeSessionAt: _staleResumeSessionAt, ...preservedCursor } = existingCursor;
+    const nextCursor: RewindCursorBlob = {
+      ...preservedCursor,
+      rewindPending: false,
+    };
+    yield* providerSessionDirectory.upsert({
+      threadId: binding.value.threadId,
+      provider: binding.value.provider,
+      ...(binding.value.providerInstanceId !== undefined
+        ? { providerInstanceId: binding.value.providerInstanceId }
+        : {}),
+      resumeCursor: nextCursor,
+    });
+  });
+
+  // Cancel an un-sent conversation rewind (ADR-0002). The inverse of
+  // `handleRewindRequested`. RACE-FREE RESTORE: the rewind REMOVED the forward
+  // rows from clients' stores, so the cancel must make them come back from the
+  // server. We un-abandon the rows DIRECTLY here (committed before any client
+  // re-read) and THEN dispatch the bridge command; ws.ts, on the resulting
+  // `-cancelled` event, re-queries and streams a fresh restored snapshot. We do
+  // NOT rely on the projector/stream ordering for the live restore. No session
+  // stop/start — the rewind was never sent, so the live session is unchanged.
+  const handleRewindCancelRequested = Effect.fn("handleRewindCancelRequested")(function* (
+    event: Extract<OrchestrationEvent, { type: "thread.conversation-rewind-cancel-requested" }>,
+  ) {
+    const now = yield* nowIso;
+    const threadId = event.payload.threadId;
+    const messageId = event.payload.messageId;
+
+    // 1. Resolve the rewind anchor prompt's createdAt (unfiltered PK lookup — the
+    // anchor row is itself hidden by the rewind it is cancelling).
+    const target = yield* projectionThreadMessageRepository.getByMessageId({ messageId });
+    if (Option.isNone(target)) {
+      return;
+    }
+    const cutAt = target.value.createdAt;
+
+    // 2. Un-abandon the hidden message + turn rows DIRECTLY (committed now, so the
+    // ws.ts snapshot re-read below returns them restored).
+    yield* projectionThreadMessageRepository.unmarkAbandonedFromCreatedAt({
+      threadId,
+      fromCreatedAt: cutAt,
+    });
+    yield* projectionTurnRepository.unmarkAbandonedFromRequestedAt({
+      threadId,
+      fromRequestedAt: cutAt,
+    });
+
+    // 3. Clear the pending cursor anchor so the next turn continues normally.
+    yield* clearRewindCursor({ threadId });
+
+    // 4. Dispatch the bridge; the decider emits `thread.conversation-rewind-cancelled`,
+    // which ws.ts uses to stream a fresh (now-restored) snapshot to clients and the
+    // ProjectionPipeline re-applies on replay (idempotent with step 2).
+    yield* orchestrationEngine.dispatch({
+      type: "thread.conversation-rewind.cancel.complete",
+      commandId: yield* serverCommandId("conversation-rewind-cancel-complete"),
+      threadId,
+      messageId,
+      createdAt: now,
+    });
+  });
+
   const handleRewindRequested = Effect.fn("handleRewindRequested")(function* (
     event: Extract<OrchestrationEvent, { type: "thread.conversation-rewind-requested" }>,
   ) {
@@ -357,6 +439,23 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    if (event.type === "thread.conversation-rewind-cancel-requested") {
+      yield* handleRewindCancelRequested(event).pipe(
+        Effect.catch((error) =>
+          Effect.flatMap(nowIso, (createdAt) =>
+            appendFailureActivity({
+              threadId: event.payload.threadId,
+              kind: "rewind.failed",
+              summary: "Cancel rewind failed",
+              detail: error.message,
+              createdAt,
+            }),
+          ),
+        ),
+      );
+      return;
+    }
+
     if (event.type === "thread.files-restore-requested") {
       yield* handleFilesRestoreRequested(event).pipe(
         Effect.catch((error) =>
@@ -395,6 +494,7 @@ const make = Effect.gen(function* () {
       Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
         if (
           event.type !== "thread.conversation-rewind-requested" &&
+          event.type !== "thread.conversation-rewind-cancel-requested" &&
           event.type !== "thread.files-restore-requested"
         ) {
           return Effect.void;

@@ -28,6 +28,8 @@ import {
   OrchestrationDispatchCommandError,
   type OrchestrationEvent,
   type OrchestrationShellStreamEvent,
+  type OrchestrationThread,
+  type OrchestrationThreadStreamItem,
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetSnapshotError,
   OrchestrationGetTurnDiffError,
@@ -116,6 +118,7 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
       | "thread.turn-diff-completed"
       | "thread.reverted"
       | "thread.conversation-rewound"
+      | "thread.conversation-rewind-cancelled"
       | "thread.session-set";
   }
 > {
@@ -126,7 +129,45 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
     event.type === "thread.turn-diff-completed" ||
     event.type === "thread.reverted" ||
     event.type === "thread.conversation-rewound" ||
+    event.type === "thread.conversation-rewind-cancelled" ||
     event.type === "thread.session-set"
+  );
+}
+
+/**
+ * Map a single live thread-detail event into a subscribeThread stream item
+ * (ADR-0002). Cancel-rewind un-abandons rows the rewind had REMOVED from the
+ * client's store, so a bare event can't restore them: re-query the (now-restored)
+ * thread detail and emit a fresh SNAPSHOT the client applies by overwrite. The
+ * reactor commits the un-abandon BEFORE emitting the event, so this re-read is
+ * guaranteed restored. All other events forward as a bare `{ kind: "event" }`.
+ * Extracted so the cancel-rewind snapshot path is unit-testable.
+ */
+export function mapThreadDetailStreamItem<E>(input: {
+  readonly event: OrchestrationEvent;
+  readonly threadId: ThreadId;
+  readonly snapshotSequence: number;
+  readonly getThreadDetailById: (
+    threadId: ThreadId,
+  ) => Effect.Effect<Option.Option<OrchestrationThread>, E>;
+}): Effect.Effect<OrchestrationThreadStreamItem> {
+  const { event, threadId, snapshotSequence, getThreadDetailById } = input;
+  if (event.type !== "thread.conversation-rewind-cancelled") {
+    return Effect.succeed({ kind: "event", event });
+  }
+  return getThreadDetailById(threadId).pipe(
+    Effect.map(
+      (threadDetailOption): OrchestrationThreadStreamItem =>
+        Option.isNone(threadDetailOption)
+          ? { kind: "event", event }
+          : {
+              kind: "snapshot",
+              snapshot: { snapshotSequence, thread: threadDetailOption.value },
+            },
+    ),
+    Effect.catch(() =>
+      Effect.succeed<OrchestrationThreadStreamItem>({ kind: "event", event }),
+    ),
   );
 }
 
@@ -970,10 +1011,16 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
                     event.aggregateId === input.threadId &&
                     isThreadDetailEvent(event),
                 ),
-                Stream.map((event) => ({
-                  kind: "event" as const,
-                  event,
-                })),
+                // Cancel-rewind streams a fresh restored snapshot; all other
+                // events forward as bare events. See `mapThreadDetailStreamItem`.
+                Stream.mapEffect((event) =>
+                  mapThreadDetailStreamItem({
+                    event,
+                    threadId: input.threadId,
+                    snapshotSequence,
+                    getThreadDetailById: projectionSnapshotQuery.getThreadDetailById,
+                  }),
+                ),
               );
 
               return Stream.concat(

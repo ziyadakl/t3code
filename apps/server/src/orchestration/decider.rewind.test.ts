@@ -122,6 +122,56 @@ it.layer(NodeServices.layer)("decider conversation-rewind", (it) => {
     }),
   );
 
+  // Cancel an un-sent rewind (ADR-0002): the client cancel command records the
+  // request the rewind reactor consumes to un-abandon the hidden rows.
+  it.effect("emits thread.conversation-rewind-cancel-requested for the cancel command", () =>
+    Effect.gen(function* () {
+      const readModel = yield* seedReadModel;
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.conversation.rewind.cancel",
+          commandId: CommandId.make("cmd-rewind-cancel"),
+          threadId: ThreadId.make("thread-rw"),
+          messageId: MessageId.make("message-target"),
+          createdAt: now,
+        },
+        readModel,
+      });
+      const event = Array.isArray(result) ? result[0] : result;
+      assert.equal(event?.type, "thread.conversation-rewind-cancel-requested");
+      if (event?.type === "thread.conversation-rewind-cancel-requested") {
+        assert.equal(event.payload.threadId, "thread-rw");
+        assert.equal(event.payload.messageId, "message-target");
+      }
+    }),
+  );
+
+  // The server-only cancel bridge turns into the terminal cancelled event that
+  // ws.ts uses to stream a fresh restored snapshot.
+  it.effect(
+    "turns thread.conversation-rewind.cancel.complete into thread.conversation-rewind-cancelled",
+    () =>
+      Effect.gen(function* () {
+        const readModel = yield* seedReadModel;
+        const result = yield* decideOrchestrationCommand({
+          command: {
+            type: "thread.conversation-rewind.cancel.complete",
+            commandId: CommandId.make("cmd-rewind-cancel-complete"),
+            threadId: ThreadId.make("thread-rw"),
+            messageId: MessageId.make("message-target"),
+            createdAt: now,
+          },
+          readModel,
+        });
+        const event = Array.isArray(result) ? result[0] : result;
+        assert.equal(event?.type, "thread.conversation-rewind-cancelled");
+        if (event?.type === "thread.conversation-rewind-cancelled") {
+          assert.equal(event.payload.threadId, "thread-rw");
+          assert.equal(event.payload.messageId, "message-target");
+        }
+      }),
+  );
+
   // The decoupled file-restore command records its own request, distinct from
   // the destructive checkpoint revert.
   it.effect("emits thread.files-restore-requested for the file-restore command", () =>

@@ -440,6 +440,90 @@ describe("RewindReactor", () => {
     expect(harness.stopRecorder.calls).toEqual([]);
   });
 
+  it("cancel un-abandons the hidden rows, clears the cursor, restores the timeline", async () => {
+    const harness = await createHarness();
+
+    // Seed a binding with the rewind marker already present (as a rewind would
+    // have left it) plus the durable resume id + an unknown field to preserve.
+    await Effect.runPromise(
+      harness.directory.upsert({
+        threadId,
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        resumeCursor: {
+          resume: "session-abc",
+          resumeSessionAt: "claude-uuid-a-assistant",
+          rewindPending: true,
+          custom: "keep-me",
+        },
+      }),
+    );
+
+    await seedConversation(harness.engine);
+
+    // Rewind to the b-user prompt (hides b-user forward).
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.conversation.rewind",
+        commandId: CommandId.make("cmd-rewind"),
+        threadId,
+        messageId: MessageId.make("message-b-user"),
+        createdAt: "2026-01-01T00:02:00.000Z",
+      }),
+    );
+
+    // Wait until b-user is hidden (the rewind landed).
+    await waitFor(async () => {
+      const detail = await Effect.runPromise(harness.snapshotQuery.getThreadDetailById(threadId));
+      return (
+        Option.isSome(detail) &&
+        !detail.value.messages.some((message) => message.id === MessageId.make("message-b-user"))
+      );
+    });
+
+    // Cancel the un-sent rewind.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.conversation.rewind.cancel",
+        commandId: CommandId.make("cmd-rewind-cancel"),
+        threadId,
+        messageId: MessageId.make("message-b-user"),
+        createdAt: "2026-01-01T00:02:30.000Z",
+      }),
+    );
+
+    // The hidden prompt comes back into the active timeline.
+    await waitFor(async () => {
+      const detail = await Effect.runPromise(harness.snapshotQuery.getThreadDetailById(threadId));
+      return (
+        Option.isSome(detail) &&
+        detail.value.messages.some((message) => message.id === MessageId.make("message-b-user"))
+      );
+    });
+    const detail = await Effect.runPromise(harness.snapshotQuery.getThreadDetailById(threadId));
+    const activeMessageIds = Option.isSome(detail)
+      ? detail.value.messages.map((message) => message.id)
+      : [];
+    expect(activeMessageIds).toContain(MessageId.make("message-b-user"));
+
+    // The pending cursor was cleared: rewindPending false, the anchor stripped,
+    // durable + unknown fields preserved.
+    let cursor: Record<string, unknown> = {};
+    await waitFor(async () => {
+      const binding = await Effect.runPromise(harness.directory.getBinding(threadId));
+      if (Option.isNone(binding)) {
+        return false;
+      }
+      const raw = binding.value.resumeCursor;
+      cursor = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+      return cursor.rewindPending === false;
+    });
+    expect(cursor.rewindPending).toBe(false);
+    expect(cursor.resumeSessionAt).toBeUndefined();
+    expect(cursor.resume).toBe("session-abc");
+    expect(cursor.custom).toBe("keep-me");
+  });
+
   it("file-restore restores the tree without touching message rows", async () => {
     const harness = await createHarness();
     await seedConversation(harness.engine);

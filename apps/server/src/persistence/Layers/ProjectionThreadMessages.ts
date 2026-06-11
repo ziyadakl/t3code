@@ -215,6 +215,22 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
       `,
   });
 
+  // Cancel an un-sent rewind: the exact inverse of the abandon flip above.
+  // Un-hide rows that a rewind had marked abandoned at/after the anchor.
+  const unmarkProjectionThreadMessageRowsAbandoned = SqlSchema.findAll({
+    Request: MarkProjectionThreadMessagesAbandonedInput,
+    Result: MarkedMessageIdRowSchema,
+    execute: ({ threadId, fromCreatedAt }) =>
+      sql`
+        UPDATE projection_thread_messages
+        SET abandoned = 0
+        WHERE thread_id = ${threadId}
+          AND abandoned = 1
+          AND created_at >= ${fromCreatedAt}
+        RETURNING message_id AS "messageId"
+      `,
+  });
+
   const upsert: ProjectionThreadMessageRepositoryShape["upsert"] = (row) =>
     upsertProjectionThreadMessageRow(row).pipe(
       Effect.mapError(toPersistenceSqlError("ProjectionThreadMessageRepository.upsert:query")),
@@ -254,12 +270,24 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
         Effect.map((rows) => rows.length),
       );
 
+  const unmarkAbandonedFromCreatedAt: ProjectionThreadMessageRepositoryShape["unmarkAbandonedFromCreatedAt"] =
+    (input) =>
+      unmarkProjectionThreadMessageRowsAbandoned(input).pipe(
+        Effect.mapError(
+          toPersistenceSqlError(
+            "ProjectionThreadMessageRepository.unmarkAbandonedFromCreatedAt:query",
+          ),
+        ),
+        Effect.map((rows) => rows.length),
+      );
+
   return {
     upsert,
     getByMessageId,
     listByThreadId,
     deleteByThreadId,
     markAbandonedFromCreatedAt,
+    unmarkAbandonedFromCreatedAt,
   } satisfies ProjectionThreadMessageRepositoryShape;
 });
 

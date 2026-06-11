@@ -235,4 +235,55 @@ layer("ProjectionThreadMessageRepository", (it) => {
       assert.equal(flippedAgain, 0);
     }),
   );
+
+  // Cancel an un-sent rewind (ADR-0002): the exact inverse of the mark — un-hide
+  // the rows a rewind had marked abandoned so the active timeline restores.
+  it.effect("unmarkAbandonedFromCreatedAt restores rows a rewind had hidden", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectionThreadMessageRepository;
+      const threadId = ThreadId.make("thread-rewind-unmark");
+
+      const seed = (suffix: string, role: "user" | "assistant", createdAt: string) =>
+        repository.upsert({
+          messageId: MessageId.make(`message-${suffix}`),
+          threadId,
+          turnId: null,
+          role,
+          text: suffix,
+          isStreaming: false,
+          createdAt,
+          updatedAt: createdAt,
+        });
+
+      yield* seed("a-user", "user", "2026-03-01T10:00:00.000Z");
+      yield* seed("a-assistant", "assistant", "2026-03-01T10:00:01.000Z");
+      yield* seed("b-user", "user", "2026-03-01T10:00:02.000Z"); // rewind target
+      yield* seed("b-assistant", "assistant", "2026-03-01T10:00:03.000Z");
+
+      // Rewind: hide the target prompt and everything forward of it.
+      yield* repository.markAbandonedFromCreatedAt({
+        threadId,
+        fromCreatedAt: "2026-03-01T10:00:02.000Z",
+      });
+
+      // Cancel: un-hide exactly those rows.
+      const restored = yield* repository.unmarkAbandonedFromCreatedAt({
+        threadId,
+        fromCreatedAt: "2026-03-01T10:00:02.000Z",
+      });
+      assert.equal(restored, 2); // b-user, b-assistant.
+
+      const rows = yield* repository.listByThreadId({ threadId });
+      assert.equal(rows.length, 4);
+      const abandoned = rows.filter((row) => row.abandoned === true);
+      assert.equal(abandoned.length, 0);
+
+      // Idempotent: a second cancel un-hides nothing new.
+      const restoredAgain = yield* repository.unmarkAbandonedFromCreatedAt({
+        threadId,
+        fromCreatedAt: "2026-03-01T10:00:02.000Z",
+      });
+      assert.equal(restoredAgain, 0);
+    }),
+  );
 });

@@ -656,6 +656,21 @@ const ThreadConversationRewindCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+// Cancel an UN-SENT conversation rewind (ADR-0002). The inverse of
+// `thread.conversation.rewind`: after a rewind hid forward rows + set the
+// resume anchor but BEFORE the user re-sent, this un-hides the rows, clears the
+// pending cursor anchor, and resets the composer. No session stop/start — the
+// reactor un-abandons the rows directly then emits the cancelled event, which
+// streams a fresh restored snapshot to clients (ws.ts). Distinct from a full
+// rewind; carries the same target `messageId` (the rewind anchor prompt).
+const ThreadConversationRewindCancelCommand = Schema.Struct({
+  type: Schema.Literal("thread.conversation.rewind.cancel"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  createdAt: IsoDateTime,
+});
+
 // Standalone "restore the working tree to turn N" — the file half of the old
 // bundled revert, decoupled (ADR-0002) so "also restore files" / the post-rewind
 // "restore files to this point too" action can move the tree WITHOUT truncating
@@ -693,6 +708,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
   ThreadConversationRewindCommand,
+  ThreadConversationRewindCancelCommand,
   ThreadFilesRestoreCommand,
   ThreadSessionStopCommand,
 ]);
@@ -716,6 +732,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
   ThreadConversationRewindCommand,
+  ThreadConversationRewindCancelCommand,
   ThreadFilesRestoreCommand,
   ThreadSessionStopCommand,
 ]);
@@ -821,6 +838,18 @@ const ThreadConversationRewindCompleteCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+// Server-only bridge command (ADR-0002): the rewind reactor dispatches this
+// once it has un-abandoned the hidden rows and cleared the pending cursor; the
+// decider turns it into the terminal `thread.conversation-rewind-cancelled`
+// event (mirrors `thread.conversation-rewind.complete`). Never sent by clients.
+const ThreadConversationRewindCancelCompleteCommand = Schema.Struct({
+  type: Schema.Literal("thread.conversation-rewind.cancel.complete"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  createdAt: IsoDateTime,
+});
+
 const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
   ThreadMessageAssistantDeltaCommand,
@@ -831,6 +860,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadActivityAppendCommand,
   ThreadRevertCompleteCommand,
   ThreadConversationRewindCompleteCommand,
+  ThreadConversationRewindCancelCompleteCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 
@@ -860,6 +890,8 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.reverted",
   "thread.conversation-rewind-requested",
   "thread.conversation-rewound",
+  "thread.conversation-rewind-cancel-requested",
+  "thread.conversation-rewind-cancelled",
   "thread.files-restore-requested",
   "thread.session-stop-requested",
   "thread.session-set",
@@ -1038,6 +1070,23 @@ export const ThreadConversationRewoundPayload = Schema.Struct({
   turnCount: NonNegativeInt,
 });
 
+// Cancel an un-sent conversation rewind (ADR-0002). The decider emits the
+// `-requested` event from the client cancel command; the rewind reactor
+// consumes it, un-abandons the hidden rows + clears the pending cursor, then
+// emits the terminal `-cancelled` event the ProjectionPipeline applies (for
+// replay idempotency) and ws.ts uses to stream a fresh restored snapshot.
+export const ThreadConversationRewindCancelRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  createdAt: IsoDateTime,
+});
+
+export const ThreadConversationRewindCancelledPayload = Schema.Struct({
+  threadId: ThreadId,
+  // The rewind anchor prompt whose forward rows are being un-hidden.
+  messageId: MessageId,
+});
+
 // Standalone file-restore (ADR-0002): restore the working tree to turn N
 // WITHOUT truncating the conversation. The decider emits this `-requested`
 // event; the file-restore reactor (WS-2) consumes it and calls
@@ -1195,6 +1244,16 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.conversation-rewound"),
     payload: ThreadConversationRewoundPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.conversation-rewind-cancel-requested"),
+    payload: ThreadConversationRewindCancelRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.conversation-rewind-cancelled"),
+    payload: ThreadConversationRewindCancelledPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

@@ -275,6 +275,21 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
       `,
   });
 
+  // Cancel an un-sent rewind: the exact inverse of the abandon flip above.
+  const unmarkProjectionTurnsAbandoned = SqlSchema.findAll({
+    Request: MarkProjectionTurnsAbandonedInput,
+    Result: MarkedTurnRowSchema,
+    execute: ({ threadId, fromRequestedAt }) =>
+      sql`
+        UPDATE projection_turns
+        SET abandoned = 0
+        WHERE thread_id = ${threadId}
+          AND abandoned = 1
+          AND requested_at >= ${fromRequestedAt}
+        RETURNING turn_id AS "turnId"
+      `,
+  });
+
   const upsertByTurnId: ProjectionTurnRepositoryShape["upsertByTurnId"] = (row) =>
     upsertProjectionTurnById(row).pipe(
       Effect.mapError(
@@ -374,6 +389,15 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
         Effect.map((rows) => rows.filter((row) => row.turnId !== null).length),
       );
 
+  const unmarkAbandonedFromRequestedAt: ProjectionTurnRepositoryShape["unmarkAbandonedFromRequestedAt"] =
+    (input) =>
+      unmarkProjectionTurnsAbandoned(input).pipe(
+        Effect.mapError(
+          toPersistenceSqlError("ProjectionTurnRepository.unmarkAbandonedFromRequestedAt:query"),
+        ),
+        Effect.map((rows) => rows.filter((row) => row.turnId !== null).length),
+      );
+
   return {
     upsertByTurnId,
     replacePendingTurnStart,
@@ -384,6 +408,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
     clearCheckpointTurnConflict,
     deleteByThreadId,
     markAbandonedFromRequestedAt,
+    unmarkAbandonedFromRequestedAt,
   } satisfies ProjectionTurnRepositoryShape;
 });
 

@@ -883,6 +883,25 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
         }
 
+        // Cancel an un-sent conversation rewind (ADR-0002): the inverse of
+        // `thread.conversation-rewound` above. Un-hide the message rows the rewind
+        // had marked abandoned. The reactor already applied this directly (for the
+        // race-free live restore); this case re-applies it on a projection
+        // rebuild/replay, where reactors don't run. Idempotent.
+        case "thread.conversation-rewind-cancelled": {
+          const targetMessage = yield* projectionThreadMessageRepository.getByMessageId({
+            messageId: event.payload.messageId,
+          });
+          if (Option.isNone(targetMessage)) {
+            return;
+          }
+          yield* projectionThreadMessageRepository.unmarkAbandonedFromCreatedAt({
+            threadId: event.payload.threadId,
+            fromCreatedAt: targetMessage.value.createdAt,
+          });
+          return;
+        }
+
         default:
           return;
       }
@@ -1271,6 +1290,23 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             return;
           }
           yield* projectionTurnRepository.markAbandonedFromRequestedAt({
+            threadId: event.payload.threadId,
+            fromRequestedAt: targetMessage.value.createdAt,
+          });
+          return;
+        }
+
+        // Cancel an un-sent conversation rewind (ADR-0002): the inverse of the
+        // turn flip above. Re-applied on a projection rebuild/replay; idempotent
+        // with the reactor's direct un-abandon.
+        case "thread.conversation-rewind-cancelled": {
+          const targetMessage = yield* projectionThreadMessageRepository.getByMessageId({
+            messageId: event.payload.messageId,
+          });
+          if (Option.isNone(targetMessage)) {
+            return;
+          }
+          yield* projectionTurnRepository.unmarkAbandonedFromRequestedAt({
             threadId: event.payload.threadId,
             fromRequestedAt: targetMessage.value.createdAt,
           });

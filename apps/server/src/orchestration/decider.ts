@@ -585,6 +585,31 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    // Cancel an un-sent conversation rewind (ADR-0002). The decider records the
+    // request; the rewind reactor un-abandons the hidden rows + clears the
+    // pending cursor, then emits `thread.conversation-rewind-cancelled`.
+    case "thread.conversation.rewind.cancel": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.conversation-rewind-cancel-requested",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
     // Standalone file-restore (ADR-0002). Scaffold only: the file-restore reactor
     // (WS-2) consumes this and calls CheckpointStore.restoreCheckpoint, with no
     // conversation truncation.
@@ -837,6 +862,32 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ? { anchorProviderMessageUuid: command.anchorProviderMessageUuid }
             : {}),
           turnCount: command.turnCount,
+        },
+      };
+    }
+
+    // Server-only bridge (ADR-0002): the rewind reactor dispatches
+    // `thread.conversation-rewind.cancel.complete` after it has un-abandoned the
+    // hidden rows and cleared the pending cursor; this turns it into the terminal
+    // event the ProjectionPipeline re-applies on replay and ws.ts uses to stream
+    // a fresh restored snapshot.
+    case "thread.conversation-rewind.cancel.complete": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.conversation-rewind-cancelled",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
         },
       };
     }
