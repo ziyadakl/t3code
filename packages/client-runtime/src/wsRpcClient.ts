@@ -160,6 +160,11 @@ export interface WsRpcClient {
     readonly subscribeShell: RpcStreamMethod<typeof ORCHESTRATION_WS_METHODS.subscribeShell>;
     readonly subscribeThread: RpcInputStreamMethod<typeof ORCHESTRATION_WS_METHODS.subscribeThread>;
   };
+  readonly resume: {
+    readonly listImportableSessions: RpcUnaryMethod<
+      typeof WS_METHODS.resumeListImportableSessions
+    >;
+  };
 }
 
 export interface CreateWsRpcClientOptions {
@@ -343,6 +348,10 @@ export function createWsRpcClient(
           listener,
           subscriptionOptions(options, ORCHESTRATION_WS_METHODS.subscribeThread),
         ),
+    },
+    resume: {
+      listImportableSessions: (input) =>
+        transport.request((client) => client[WS_METHODS.resumeListImportableSessions](input)),
     },
   };
 }

@@ -110,6 +110,11 @@ import {
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
+import {
+  ResumeError,
+  ResumeListImportableSessionsInput,
+  ResumeListImportableSessionsResult,
+} from "./resume.ts";
 
 export const WS_METHODS = {
   // Project registry methods
@@ -142,6 +147,9 @@ export const WS_METHODS = {
 
   // Review methods
   reviewGetDiffPreview: "review.getDiffPreview",
+
+  // Resume methods (CLI <-> t3 conversation continuity)
+  resumeListImportableSessions: "resume.listImportableSessions",
 
   // Terminal methods
   terminalOpen: "terminal.open",
@@ -523,6 +531,12 @@ export const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess,
   stream: true,
 });
 
+export const WsResumeListImportableSessionsRpc = Rpc.make(WS_METHODS.resumeListImportableSessions, {
+  payload: ResumeListImportableSessionsInput,
+  success: ResumeListImportableSessionsResult,
+  error: Schema.Union([ResumeError, EnvironmentAuthorizationError]),
+});
+
 export const WsRpcGroup = RpcGroup.make(
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
@@ -556,6 +570,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsVcsSwitchRefRpc,
   WsVcsInitRpc,
   WsReviewGetDiffPreviewRpc,
+  WsResumeListImportableSessionsRpc,
   WsTerminalOpenRpc,
   WsTerminalAttachRpc,
   WsTerminalWriteRpc,

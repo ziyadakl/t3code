@@ -76,6 +76,7 @@ import { ContextWindowMeter } from "./ContextWindowMeter";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { basenameOfPath } from "../../vscode-icons";
 import { cn, randomUUID } from "~/lib/utils";
+import { useResumePickerStore } from "~/resumePickerStore";
 import { Separator } from "../ui/separator";
 import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -95,10 +96,13 @@ import { proposedPlanTitle } from "../../proposedPlan";
 import { getProviderInteractionModeToggle } from "../../providerModels";
 import {
   deriveProviderInstanceEntries,
-  resolveProviderDriverKindForInstanceSelection,
   sortProviderInstanceEntries,
   type ProviderInstanceEntry,
 } from "../../providerInstances";
+import {
+  resolveComposerProviderTarget,
+  type ComposerProviderTarget,
+} from "./resolveComposerProviderTarget";
 import { type AppModelOption, getAppModelOptionsForInstance } from "../../modelSelection";
 import type { UnifiedSettings } from "@t3tools/contracts/settings";
 import type { SessionPhase, Thread } from "../../types";
@@ -593,21 +597,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     () => sortProviderInstanceEntries(deriveProviderInstanceEntries(providerStatuses)),
     [providerStatuses],
   );
-  const selectedProviderByThreadId = composerDraft.activeProvider ?? null;
-  const threadProvider =
-    activeThread?.session?.providerInstanceId ??
-    activeThreadModelSelection?.instanceId ??
-    activeProjectDefaultModelSelection?.instanceId ??
-    null;
-  const explicitSelectedInstanceId = selectedProviderByThreadId ?? threadProvider;
-
-  const unlockedSelectedProvider =
-    resolveProviderDriverKindForInstanceSelection(
-      providerInstanceEntries,
-      providerStatuses,
-      explicitSelectedInstanceId,
-    ) ?? ProviderDriverKind.make("codex");
-  const selectedProvider: ProviderDriverKind = lockedProvider ?? unlockedSelectedProvider;
   const lockedContinuationGroupKey = useMemo((): string | null => {
     if (!lockedProvider || !activeThread) return null;
     const lockedInstanceId =
@@ -624,70 +613,40 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     providerInstanceEntries,
   ]);
 
-  // Resolve which configured instance the composer is currently targeting.
-  // Priority:
-  //   1. The composer draft's `activeProvider` — the user's unsaved pick
-  //      from the model picker (must win, otherwise the UI appears to
-  //      ignore picker selections).
-  //   2. Thread's persisted instance id (server-side saved selection).
-  //   3. Project default's instance id.
-  //   4. First enabled entry matching the current driver kind.
-  //   5. First enabled entry overall / default instance for the kind.
-  //
-  const selectedInstanceId = useMemo<ProviderInstanceId>(() => {
-    const candidates: Array<string | null | undefined> = [
-      composerDraft.activeProvider,
+  // Resolve the configured instance + driver kind the composer is targeting as
+  // a single matched pair. Candidate priority: the draft's unsaved pick, the
+  // thread's session/persisted instance, then the project default. A DISABLED
+  // candidate (e.g. a Codex project default while only Claude is enabled) never
+  // wins over an enabled instance, so the picker's provider identity (icon +
+  // auto-opened tab) stays in lockstep with the model that actually resolves
+  // (which already falls back to the first enabled provider). Without this, a
+  // fresh draft showed a Claude model under a Codex icon that opened an empty
+  // Codex tab. See `resolveComposerProviderTarget`.
+  const providerTarget = useMemo<ComposerProviderTarget>(
+    () =>
+      resolveComposerProviderTarget({
+        entries: providerInstanceEntries,
+        candidates: [
+          composerDraft.activeProvider,
+          activeThread?.session?.providerInstanceId,
+          activeThreadModelSelection?.instanceId,
+          activeProjectDefaultModelSelection?.instanceId,
+        ],
+        lockedProvider,
+        lockedContinuationGroupKey,
+      }),
+    [
+      activeProjectDefaultModelSelection?.instanceId,
       activeThread?.session?.providerInstanceId,
       activeThreadModelSelection?.instanceId,
-      activeProjectDefaultModelSelection?.instanceId,
-    ];
-    for (const candidate of candidates) {
-      if (!candidate) continue;
-      const match = providerInstanceEntries.find(
-        (entry) => entry.instanceId === candidate && entry.enabled,
-      );
-      if (match) {
-        // When locked to a specific driver kind, ignore persisted instance
-        // ids from a different kind or continuation group.
-        if (lockedProvider && match.driverKind !== lockedProvider) continue;
-        if (
-          lockedContinuationGroupKey &&
-          match.continuationGroupKey !== lockedContinuationGroupKey
-        ) {
-          continue;
-        }
-        return match.instanceId;
-      }
-    }
-    if (explicitSelectedInstanceId) {
-      return ProviderInstanceId.make(explicitSelectedInstanceId);
-    }
-    const byKind = providerInstanceEntries.find(
-      (entry) =>
-        entry.enabled &&
-        entry.driverKind === selectedProvider &&
-        (!lockedContinuationGroupKey || entry.continuationGroupKey === lockedContinuationGroupKey),
-    );
-    if (byKind) return byKind.instanceId;
-    const anyEnabled = providerInstanceEntries.find((entry) => entry.enabled);
-    return (
-      anyEnabled?.instanceId ??
-      providerInstanceEntries[0]?.instanceId ??
-      activeThreadModelSelection?.instanceId ??
-      activeProjectDefaultModelSelection?.instanceId ??
-      ProviderInstanceId.make("codex")
-    );
-  }, [
-    activeProjectDefaultModelSelection?.instanceId,
-    activeThread?.session?.providerInstanceId,
-    activeThreadModelSelection?.instanceId,
-    composerDraft.activeProvider,
-    explicitSelectedInstanceId,
-    lockedContinuationGroupKey,
-    lockedProvider,
-    providerInstanceEntries,
-    selectedProvider,
-  ]);
+      composerDraft.activeProvider,
+      lockedContinuationGroupKey,
+      lockedProvider,
+      providerInstanceEntries,
+    ],
+  );
+  const selectedInstanceId: ProviderInstanceId = providerTarget.instanceId;
+  const selectedProvider: ProviderDriverKind = providerTarget.driverKind;
 
   const { modelOptions: composerModelOptions, selectedModel } = useEffectiveComposerModelState({
     threadRef: composerDraftTarget,
@@ -861,6 +820,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           command: "model",
           label: "/model",
           description: "Switch response model for this thread",
+        },
+        {
+          id: "slash:resume",
+          type: "slash-command",
+          command: "resume",
+          label: "/resume",
+          description: "Resume a past terminal Claude chat in this project",
         },
         {
           id: "slash:plan",
@@ -1497,6 +1463,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           if (applied) {
             setComposerHighlightedItemId(null);
             setIsComposerModelPickerOpen(true);
+          }
+          return;
+        }
+        if (item.command === "resume") {
+          const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
+            expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+            focusEditorAfterReplace: false,
+          });
+          if (applied) {
+            setComposerHighlightedItemId(null);
+            useResumePickerStore.getState().requestOpen();
           }
           return;
         }

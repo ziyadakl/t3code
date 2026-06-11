@@ -1433,6 +1433,73 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.equal(shellSnapshot.threads.length, 0);
     }),
   );
+
+  // ADR-0002 conversation-rewind read-path filter. Messages flagged
+  // `abandoned = 1` are retained in the table but excluded from the active
+  // timeline returned by getThreadDetailById.
+  it.effect("getThreadDetailById excludes abandoned (rewound) messages", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_thread_messages`;
+
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, default_model_selection_json,
+          scripts_json, created_at, updated_at, deleted_at
+        )
+        VALUES (
+          'project-1', 'Project 1', '/tmp/project-1',
+          '{"provider":"codex","model":"gpt-5-codex"}', '[]',
+          '2026-04-01T00:00:00.000Z', '2026-04-01T00:00:01.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, runtime_mode,
+          interaction_mode, branch, worktree_path, latest_turn_id,
+          latest_user_message_at, pending_approval_count, pending_user_input_count,
+          has_actionable_proposed_plan, created_at, updated_at, deleted_at
+        )
+        VALUES (
+          'thread-1', 'project-1', 'Thread 1',
+          '{"provider":"codex","model":"gpt-5-codex"}', 'full-access', 'default',
+          NULL, NULL, NULL, NULL, 0, 0, 0,
+          '2026-04-01T00:00:02.000Z', '2026-04-01T00:00:03.000Z', NULL
+        )
+      `;
+      // Two visible messages + one abandoned (rewound) message.
+      yield* sql`
+        INSERT INTO projection_thread_messages (
+          message_id, thread_id, turn_id, role, text, abandoned,
+          is_streaming, created_at, updated_at
+        )
+        VALUES
+          ('m-keep-1', 'thread-1', NULL, 'user', 'kept prompt', 0, 0,
+           '2026-04-01T00:00:04.000Z', '2026-04-01T00:00:04.000Z'),
+          ('m-keep-2', 'thread-1', NULL, 'assistant', 'kept reply', 0, 0,
+           '2026-04-01T00:00:05.000Z', '2026-04-01T00:00:05.000Z'),
+          ('m-abandoned', 'thread-1', NULL, 'user', 'rewound prompt', 1, 0,
+           '2026-04-01T00:00:06.000Z', '2026-04-01T00:00:06.000Z')
+      `;
+
+      const threadDetail = yield* snapshotQuery.getThreadDetailById(ThreadId.make("thread-1"));
+      assert.equal(threadDetail._tag, "Some");
+      if (threadDetail._tag === "Some") {
+        const ids = threadDetail.value.messages.map((message) => message.id);
+        assert.deepEqual(ids, [asMessageId("m-keep-1"), asMessageId("m-keep-2")]);
+      }
+
+      // The abandoned row is retained in the table (non-destructive).
+      const allRows = yield* sql<{
+        readonly count: number;
+      }>`SELECT COUNT(*) AS count FROM projection_thread_messages WHERE thread_id = 'thread-1'`;
+      assert.equal(allRows[0]?.count, 3);
+    }),
+  );
 });
 
 it.effect(

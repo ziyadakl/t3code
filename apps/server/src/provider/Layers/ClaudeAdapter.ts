@@ -115,6 +115,14 @@ interface ClaudeResumeState {
   readonly resume?: string;
   readonly resumeSessionAt?: string;
   readonly turnCount?: number;
+  // Shared WS-1 <-> WS-2 marker for the conversation-rewind feature (ADR-0002).
+  // An orchestration reactor (WS-2) sets this true when it sets the rewind
+  // anchor; the adapter (WS-1) reads it to decide whether to pass
+  // `resumeSessionAt` into the query and to skip auto-advancing the cursor,
+  // then clears it. Persisted opaquely inside `resume_cursor_json`
+  // (Schema.Unknown, raw JSON round-trip) so unknown fields survive — DEFINED
+  // here only; the read/set behavior is WS-1/WS-2.
+  readonly rewindPending?: boolean;
 }
 
 interface ClaudeTurnState {
@@ -180,6 +188,11 @@ interface ClaudeSessionContext {
   lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
   lastAssistantUuid: string | undefined;
   lastThreadStartedId: string | undefined;
+  // ADR-0002 conversation-rewind: true only while an intentional rewind anchor
+  // is in flight. The query at session start consumes the anchor; until it is
+  // cleared, `updateResumeCursor` must NOT auto-advance the anchor to the
+  // latest assistant uuid (which would overwrite the rewind target).
+  rewindPending: boolean;
   stopped: boolean;
 }
 
@@ -412,6 +425,7 @@ function readClaudeResumeState(resumeCursor: unknown): ClaudeResumeState | undef
     sessionId?: unknown;
     resumeSessionAt?: unknown;
     turnCount?: unknown;
+    rewindPending?: unknown;
   };
 
   const threadIdCandidate = typeof cursor.threadId === "string" ? cursor.threadId : undefined;
@@ -429,6 +443,11 @@ function readClaudeResumeState(resumeCursor: unknown): ClaudeResumeState | undef
   const resumeSessionAt =
     typeof cursor.resumeSessionAt === "string" ? cursor.resumeSessionAt : undefined;
   const turnCountValue = typeof cursor.turnCount === "number" ? cursor.turnCount : undefined;
+  // ADR-0002 conversation-rewind: the orchestration reactor (WS-2) sets this
+  // true alongside an anchor `resumeSessionAt` for an intentional rewind. It is
+  // the ONLY signal that distinguishes a rewind from an ordinary continue, so
+  // it must survive the cursor parse on the read side (WS-1).
+  const rewindPending = cursor.rewindPending === true;
 
   return {
     ...(threadId ? { threadId } : {}),
@@ -437,6 +456,7 @@ function readClaudeResumeState(resumeCursor: unknown): ClaudeResumeState | undef
     ...(turnCountValue !== undefined && Number.isInteger(turnCountValue) && turnCountValue >= 0
       ? { turnCount: turnCountValue }
       : {}),
+    ...(rewindPending ? { rewindPending: true } : {}),
   };
 }
 
@@ -1113,10 +1133,25 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     const threadId = context.session.threadId;
     if (!threadId) return;
 
+    // ADR-0002 conversation-rewind: while a rewind is pending, hold the anchor
+    // that was loaded at session start instead of auto-advancing to the latest
+    // assistant uuid — otherwise the next cursor update would clobber the
+    // rewind target before the start query has resumed from it. The query at
+    // session start has already consumed the anchor; this just keeps the
+    // persisted cursor stable for the duration of the rewind turn.
+    const existingResumeSessionAt =
+      typeof (context.session.resumeCursor as { resumeSessionAt?: unknown } | undefined)
+        ?.resumeSessionAt === "string"
+        ? (context.session.resumeCursor as { resumeSessionAt: string }).resumeSessionAt
+        : undefined;
+    const resumeSessionAt = context.rewindPending
+      ? existingResumeSessionAt
+      : context.lastAssistantUuid;
+
     const resumeCursor = {
       threadId,
       ...(context.resumeSessionId ? { resume: context.resumeSessionId } : {}),
-      ...(context.lastAssistantUuid ? { resumeSessionAt: context.lastAssistantUuid } : {}),
+      ...(resumeSessionAt ? { resumeSessionAt } : {}),
       turnCount: context.turns.length,
     };
 
@@ -1598,6 +1633,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           ? { totalCostUsd: result.total_cost_usd }
           : {}),
         ...(errorMessage ? { errorMessage } : {}),
+        // Carry the turn-final assistant uuid (the rewind anchor) so ingestion
+        // can stamp it onto the final assistant message (ADR-0002).
+        ...(context.lastAssistantUuid ? { assistantMessageUuid: context.lastAssistantUuid } : {}),
       },
       providerRefs: nativeProviderRefs(context),
     });
@@ -2058,6 +2096,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
 
     context.lastAssistantUuid = message.uuid;
+    // ADR-0002 conversation-rewind: a fresh assistant message means the rewind
+    // turn produced new content, so the anchor is fully consumed — let the
+    // cursor advance to this uuid and resume normal auto-advance from here on.
+    context.rewindPending = false;
     yield* updateResumeCursor(context);
   });
 
@@ -2928,6 +2970,16 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(fastMode ? { fastMode: true } : {}),
         ...(ultracode ? { ultracode: true } : {}),
       };
+      // ADR-0002 conversation-rewind: pass the SDK `resumeSessionAt` option
+      // ("resume only up to and including this message uuid") ONLY for an
+      // intentional rewind — i.e. when the orchestration reactor (WS-2) set
+      // `rewindPending` on the cursor. On an ordinary continue we never pass it,
+      // so resume picks up at the latest message as before. The SDK requires it
+      // be paired with `resume`, so we also gate on a durable resume session id.
+      const rewindAnchorUuid =
+        resumeState?.rewindPending === true && existingResumeSessionId !== undefined
+          ? resumeState.resumeSessionAt
+          : undefined;
       const queryOptions: ClaudeQueryOptions = {
         ...(input.cwd ? { cwd: input.cwd } : {}),
         ...(apiModelId ? { model: apiModelId } : {}),
@@ -2947,6 +2999,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           : {}),
         ...(Object.keys(settings).length > 0 ? { settings } : {}),
         ...(existingResumeSessionId ? { resume: existingResumeSessionId } : {}),
+        ...(rewindAnchorUuid ? { resumeSessionAt: rewindAnchorUuid } : {}),
         ...(newSessionId ? { sessionId: newSessionId } : {}),
         includePartialMessages: true,
         canUseTool,
@@ -3032,6 +3085,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         lastKnownTokenUsage: undefined,
         lastAssistantUuid: resumeState?.resumeSessionAt,
         lastThreadStartedId: undefined,
+        // ADR-0002 conversation-rewind: carry the rewind marker into the live
+        // context so `updateResumeCursor` holds the anchor for this turn. The
+        // persisted `session.resumeCursor` above intentionally OMITS
+        // `rewindPending` — the anchor was consumed by the query just built, so
+        // the next ordinary continue must behave normally.
+        rewindPending: resumeState?.rewindPending === true,
         stopped: false,
       };
       yield* Ref.set(contextRef, context);

@@ -70,6 +70,10 @@ import { AuthAccessTokenResult, AuthSessionState, AuthWebSocketTicketResult } fr
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
 import { EditorId } from "./editor.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
+import type {
+  ResumeListImportableSessionsInput,
+  ResumeListImportableSessionsResult,
+} from "./resume.ts";
 import type { ClientSettings, ServerSettings, ServerSettingsPatch } from "./settings.ts";
 import type {
   SourceControlCloneRepositoryInput,
@@ -582,5 +586,10 @@ export interface EnvironmentApi {
         onResubscribe?: () => void;
       },
     ) => () => void;
+  };
+  resume: {
+    listImportableSessions: (
+      input: ResumeListImportableSessionsInput,
+    ) => Promise<ResumeListImportableSessionsResult>;
   };
 }

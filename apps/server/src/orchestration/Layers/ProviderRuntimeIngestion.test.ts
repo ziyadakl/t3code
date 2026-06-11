@@ -35,6 +35,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
 import {
   ProviderService,
   type ProviderServiceShape,
@@ -47,6 +48,7 @@ import { ProviderRuntimeIngestionLive } from "./ProviderRuntimeIngestion.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
+import { ProjectionThreadMessageRepository } from "../../persistence/Services/ProjectionThreadMessages.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -191,7 +193,10 @@ async function waitForThread(
 
 describe("ProviderRuntimeIngestion", () => {
   let runtime: ManagedRuntime.ManagedRuntime<
-    OrchestrationEngineService | ProviderRuntimeIngestionService | ProjectionSnapshotQuery,
+    | OrchestrationEngineService
+    | ProviderRuntimeIngestionService
+    | ProjectionSnapshotQuery
+    | ProjectionThreadMessageRepository,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -236,6 +241,7 @@ describe("ProviderRuntimeIngestion", () => {
     const layer = ProviderRuntimeIngestionLive.pipe(
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(projectionSnapshotLayer),
+      Layer.provideMerge(ProjectionThreadMessageRepositoryLive),
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
       Layer.provideMerge(makeTestServerSettingsLayer(options?.serverSettings)),
@@ -309,12 +315,18 @@ describe("ProviderRuntimeIngestion", () => {
       updatedAt: createdAt,
     });
 
+    const messageRepo = await runtime.runPromise(
+      Effect.service(ProjectionThreadMessageRepository),
+    );
+
     return {
       engine,
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
       emit: provider.emit,
       setProviderSession: provider.setSession,
       drain,
+      listMessages: (threadId: ThreadId = asThreadId("thread-1")) =>
+        Effect.runPromise(messageRepo.listByThreadId({ threadId })),
     };
   }
 
@@ -717,6 +729,165 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(message?.text).toBe("hello world");
     expect(message?.streaming).toBe(false);
+  });
+
+  it("stamps the turn-final assistant provider uuid (rewind anchor) onto the persisted message", async () => {
+    // Reproduces the conversation-rewind anchor bug (ADR-0002): on a live
+    // streaming turn the assistant message is finalized AND forgotten at
+    // `item.completed`, which fires before `turn.completed` arrives carrying the
+    // real `assistantMessageUuid`. The uuid must still land on the persisted row
+    // (the rewind anchor reads `provider_message_uuid`); the read model omits the
+    // field, so we assert against the projection repository directly.
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const anchorUuid = "11111111-2222-3333-4444-555555555555";
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-uuid-turn-started"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-uuid"),
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-uuid-delta"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-uuid"),
+      itemId: asItemId("item-uuid"),
+      payload: { streamKind: "assistant_text", delta: "Got it" },
+    });
+    // Finalizes AND forgets the assistant message id — before the uuid arrives.
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-uuid-item"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-uuid"),
+      itemId: asItemId("item-uuid"),
+      payload: { itemType: "assistant_message", status: "completed" },
+    });
+    // Canonical turn.completed carrying the uuid (payload defined → bypasses the
+    // legacy normalizer, exactly like the real ClaudeAdapter emit).
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-uuid-turn-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-uuid"),
+      payload: { state: "completed", assistantMessageUuid: anchorUuid },
+    });
+
+    await waitForThread(
+      harness.readModel,
+      (entry) =>
+        entry.messages.some(
+          (message: ProviderRuntimeTestMessage) =>
+            message.id === "assistant:item-uuid" && !message.streaming,
+        ) && entry.session?.status === "ready",
+    );
+    await harness.drain();
+
+    const messages = await harness.listMessages();
+    const assistant = messages.find((row) => row.messageId === "assistant:item-uuid");
+    expect(assistant).toBeDefined();
+    expect(assistant?.providerMessageUuid).toBe(anchorUuid);
+  });
+
+  it("stamps the rewind-anchor uuid on the turn-FINAL assistant segment of a multi-segment turn", async () => {
+    // A tool-using turn produces two assistant segments (text, tool call, more
+    // text). The rewind anchor is the turn-FINAL assistant message, so the uuid
+    // must land on the second segment and NOT on the earlier one. Segments carry
+    // distinct created_at (each pinned to its own first delta), as in production.
+    const harness = await createHarness();
+    const t1 = "2026-01-01T00:00:01.000Z";
+    const t2 = "2026-01-01T00:00:05.000Z";
+    const finalUuid = "99999999-8888-7777-6666-555555555555";
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-multi-turn-started"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-multi"),
+    });
+    // First assistant segment (before the tool call).
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-multi-delta-a"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: t1,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-multi"),
+      itemId: asItemId("item-multi-a"),
+      payload: { streamKind: "assistant_text", delta: "Let me check. " },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-multi-item-a"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: t1,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-multi"),
+      itemId: asItemId("item-multi-a"),
+      payload: { itemType: "assistant_message", status: "completed" },
+    });
+    // Second (turn-final) assistant segment — this is the rewind anchor.
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-multi-delta-b"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: t2,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-multi"),
+      itemId: asItemId("item-multi-b"),
+      payload: { streamKind: "assistant_text", delta: "The answer is 42." },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-multi-item-b"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: t2,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-multi"),
+      itemId: asItemId("item-multi-b"),
+      payload: { itemType: "assistant_message", status: "completed" },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-multi-turn-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: t2,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-multi"),
+      payload: { state: "completed", assistantMessageUuid: finalUuid },
+    });
+
+    await waitForThread(
+      harness.readModel,
+      (entry) =>
+        entry.messages.some(
+          (message: ProviderRuntimeTestMessage) =>
+            message.id === "assistant:item-multi-b" && !message.streaming,
+        ) && entry.session?.status === "ready",
+    );
+    await harness.drain();
+
+    const messages = await harness.listMessages();
+    const firstSegment = messages.find((row) => row.messageId === "assistant:item-multi-a");
+    const finalSegment = messages.find((row) => row.messageId === "assistant:item-multi-b");
+    expect(firstSegment).toBeDefined();
+    expect(finalSegment).toBeDefined();
+    // Anchor lands on the turn-final segment...
+    expect(finalSegment?.providerMessageUuid).toBe(finalUuid);
+    // ...and NOT on the earlier mid-turn segment.
+    expect(firstSegment?.providerMessageUuid ?? null).toBeNull();
   });
 
   it("uses assistant item completion detail when no assistant deltas were streamed", async () => {

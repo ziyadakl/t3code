@@ -239,6 +239,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           interactionMode: command.interactionMode,
           branch: command.branch,
           worktreePath: command.worktreePath,
+          ...(command.resumeSessionId != null
+            ? { resumeSessionId: command.resumeSessionId }
+            : {}),
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
@@ -557,6 +560,81 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    // Non-destructive conversation rewind (ADR-0002). Scaffold only: the decider
+    // records the request; the rewind reactor (WS-2) resolves the anchor, marks
+    // forward rows abandoned, and emits `thread.conversation-rewound`.
+    case "thread.conversation.rewind": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.conversation-rewind-requested",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
+    // Cancel an un-sent conversation rewind (ADR-0002). The decider records the
+    // request; the rewind reactor un-abandons the hidden rows + clears the
+    // pending cursor, then emits `thread.conversation-rewind-cancelled`.
+    case "thread.conversation.rewind.cancel": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.conversation-rewind-cancel-requested",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
+    // Standalone file-restore (ADR-0002). Scaffold only: the file-restore reactor
+    // (WS-2) consumes this and calls CheckpointStore.restoreCheckpoint, with no
+    // conversation truncation.
+    case "thread.files.restore": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.files-restore-requested",
+        payload: {
+          threadId: command.threadId,
+          turnCount: command.turnCount,
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
     case "thread.session.stop": {
       yield* requireThread({
         readModel,
@@ -619,6 +697,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           messageId: command.messageId,
           role: "assistant",
           text: command.delta,
+          ...(command.providerMessageUuid !== undefined
+            ? { providerMessageUuid: command.providerMessageUuid }
+            : {}),
           turnId: command.turnId ?? null,
           streaming: true,
           createdAt: command.createdAt,
@@ -646,6 +727,39 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           messageId: command.messageId,
           role: "assistant",
           text: "",
+          ...(command.providerMessageUuid !== undefined
+            ? { providerMessageUuid: command.providerMessageUuid }
+            : {}),
+          turnId: command.turnId ?? null,
+          streaming: false,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.message.user.record": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.message-sent",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          role: "user",
+          text: command.text,
+          ...(command.providerMessageUuid !== undefined
+            ? { providerMessageUuid: command.providerMessageUuid }
+            : {}),
           turnId: command.turnId ?? null,
           streaming: false,
           createdAt: command.createdAt,
@@ -719,6 +833,61 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           turnCount: command.turnCount,
+        },
+      };
+    }
+
+    // Server-only bridge (ADR-0002): the rewind reactor (WS-2) dispatches
+    // `thread.conversation-rewind.complete` after it has resolved the anchor and
+    // set the cursor marker; this turns it into the terminal event the
+    // ProjectionPipeline applies as a non-destructive "mark abandoned".
+    case "thread.conversation-rewind.complete": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.conversation-rewound",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          ...(command.anchorProviderMessageUuid !== undefined
+            ? { anchorProviderMessageUuid: command.anchorProviderMessageUuid }
+            : {}),
+          turnCount: command.turnCount,
+        },
+      };
+    }
+
+    // Server-only bridge (ADR-0002): the rewind reactor dispatches
+    // `thread.conversation-rewind.cancel.complete` after it has un-abandoned the
+    // hidden rows and cleared the pending cursor; this turns it into the terminal
+    // event the ProjectionPipeline re-applies on replay and ws.ts uses to stream
+    // a fresh restored snapshot.
+    case "thread.conversation-rewind.cancel.complete": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.conversation-rewind-cancelled",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
         },
       };
     }

@@ -4,12 +4,25 @@ import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { CircleAlertIcon } from "lucide-react";
 import { formatProviderDriverKindLabel } from "../../providerModels";
 
+/**
+ * The banner is shown only for a provider that is enabled/selected and in a
+ * non-healthy state worth surfacing. A disabled or unselected provider must
+ * never raise a red "CLI not installed" error — that was the spurious Codex
+ * banner shown while using Claude with Codex switched off. Written as a type
+ * guard so the component body can treat `status` as non-null.
+ */
+export function shouldShowProviderStatusBanner(
+  status: ServerProvider | null,
+): status is ServerProvider {
+  return !!status && status.enabled && status.status !== "ready" && status.status !== "disabled";
+}
+
 export const ProviderStatusBanner = memo(function ProviderStatusBanner({
   status,
 }: {
   status: ServerProvider | null;
 }) {
-  if (!status || status.status === "ready" || status.status === "disabled") {
+  if (!shouldShowProviderStatusBanner(status)) {
     return null;
   }
 

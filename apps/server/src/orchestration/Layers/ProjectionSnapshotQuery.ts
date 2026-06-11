@@ -419,6 +419,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_messages
+        -- Conversation-rewind (ADR-0002): the full read-model snapshot is an
+        -- active-view path too; hide forward-of-anchor rows here as well.
+        WHERE abandoned = 0
         ORDER BY thread_id ASC, created_at ASC, message_id ASC
       `,
   });
@@ -783,6 +786,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           updated_at AS "updatedAt"
         FROM projection_thread_messages
         WHERE thread_id = ${threadId}
+          -- Conversation-rewind (ADR-0002): hide forward-of-anchor rows from the
+          -- active timeline. The rows are retained (event log / transcript); only
+          -- this read path filters them.
+          AND abandoned = 0
         ORDER BY created_at ASC, message_id ASC
       `,
   });
@@ -873,6 +880,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         WHERE threads.thread_id = ${threadId}
           AND threads.deleted_at IS NULL
           AND threads.archived_at IS NULL
+          -- Conversation-rewind (ADR-0002): the active timeline never surfaces a
+          -- latest turn that was abandoned by a rewind.
+          AND turns.abandoned = 0
         LIMIT 1
       `,
   });

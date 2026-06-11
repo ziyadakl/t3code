@@ -1,8 +1,10 @@
 import {
   type ApprovalRequestId,
   DEFAULT_MODEL,
+  DEFAULT_MODEL_BY_PROVIDER,
   defaultInstanceIdForDriver,
   type EnvironmentId,
+  type ImportableSession,
   type MessageId,
   type ModelSelection,
   type ProjectScript,
@@ -47,8 +49,12 @@ import { readLocalApi } from "../localApi";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
 import {
   collapseExpandedComposerCursor,
+  isStandaloneResumeCommand,
   parseStandaloneComposerSlashCommand,
 } from "../composer-logic";
+import { useResumePickerStore } from "../resumePickerStore";
+import { ResumePicker } from "./chat/ResumePicker";
+import { RewindPicker } from "./chat/RewindMenu";
 import {
   deriveCompletionDividerBeforeEntryId,
   derivePendingApprovals,
@@ -105,7 +111,13 @@ import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import PlanSidebar from "./PlanSidebar";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
-import { ChevronDownIcon, TriangleAlertIcon, WifiOffIcon } from "lucide-react";
+import {
+  ChevronDownIcon,
+  FileClockIcon,
+  TriangleAlertIcon,
+  Undo2Icon,
+  WifiOffIcon,
+} from "lucide-react";
 import { cn, randomHex } from "~/lib/utils";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
@@ -153,6 +165,8 @@ import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import { resolveEffectiveEnvMode, resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { ProviderStatusBanner } from "./chat/ProviderStatusBanner";
+import { resolveComposerProviderTarget } from "./chat/resolveComposerProviderTarget";
+import { deriveProviderInstanceEntries, sortProviderInstanceEntries } from "../providerInstances";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
 import {
@@ -855,6 +869,24 @@ export default function ChatView(props: ChatViewProps) {
   >({});
   const [isConnecting, _setIsConnecting] = useState(false);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
+  // ESC-ESC rewind picker (ADR-0002).
+  const [rewindPickerOpen, setRewindPickerOpen] = useState(false);
+  // After a conversation-only rewind that left a git checkpoint behind, surface
+  // a "files are still ahead" note offering to restore the working tree too.
+  // Cleared when the user restores files, rewinds again, or sends a new turn.
+  const [rewindFilesAhead, setRewindFilesAhead] = useState<{
+    messageId: MessageId;
+    turnCount: number;
+  } | null>(null);
+  // The post-rewind "restore files" handler is defined far below; the banner
+  // (built earlier in render) calls it through this ref to avoid TDZ ordering.
+  const rewindRestoreFilesRef = useRef<(messageId: MessageId) => void>(() => {});
+  // After ANY rewind (conversation-only or +files) but BEFORE the user re-sends,
+  // they may cancel it: un-hide the forward messages, clear the pending cursor,
+  // reset the composer. Cleared on send, on cancel, or overwritten by a re-rewind.
+  const [pendingRewind, setPendingRewind] = useState<{ messageId: MessageId } | null>(null);
+  // Same TDZ pattern as rewindRestoreFilesRef for the "cancel rewind" handler.
+  const rewindCancelRef = useRef<() => void>(() => {});
   const [respondingRequestIds, setRespondingRequestIds] = useState<ApprovalRequestId[]>([]);
   const [respondingUserInputRequestIds, setRespondingUserInputRequestIds] = useState<
     ApprovalRequestId[]
@@ -1430,6 +1462,44 @@ export default function ChatView(props: ChatViewProps) {
         ),
       });
     }
+    if (pendingRewind) {
+      items.push({
+        id: `rewind-cancel:${pendingRewind.messageId}`,
+        variant: "info",
+        icon: <Undo2Icon />,
+        title: "Conversation rewound — not sent yet",
+        description:
+          "Edit and send the prompt to continue from here, or cancel the rewind to restore the hidden messages.",
+        actions: (
+          <Button size="xs" variant="outline" onClick={() => rewindCancelRef.current()}>
+            Cancel rewind
+          </Button>
+        ),
+        dismissLabel: "Cancel rewind",
+        onDismiss: () => rewindCancelRef.current(),
+      });
+    }
+    if (rewindFilesAhead) {
+      items.push({
+        id: `rewind-files-ahead:${rewindFilesAhead.messageId}`,
+        variant: "info",
+        icon: <FileClockIcon />,
+        title: "Your files are still at the newer state",
+        description:
+          "The conversation was rewound, but the working tree was left untouched. Restore your files to this point too?",
+        actions: (
+          <Button
+            size="xs"
+            disabled={isRevertingCheckpoint}
+            onClick={() => void rewindRestoreFilesRef.current(rewindFilesAhead.messageId)}
+          >
+            {isRevertingCheckpoint ? "Restoring…" : "Restore files to this point too"}
+          </Button>
+        ),
+        dismissLabel: "Dismiss files-out-of-step note",
+        onDismiss: () => setRewindFilesAhead(null),
+      });
+    }
     if (showVersionMismatchBanner && versionMismatch && versionMismatchDismissKey) {
       items.push({
         id: `version-mismatch:${versionMismatchDismissKey}`,
@@ -1453,8 +1523,11 @@ export default function ChatView(props: ChatViewProps) {
   }, [
     activeEnvironmentUnavailableState,
     handleReconnectActiveEnvironment,
+    isRevertingCheckpoint,
     navigate,
+    pendingRewind,
     reconnectingEnvironmentId,
+    rewindFilesAhead,
     showVersionMismatchBanner,
     versionMismatch,
     versionMismatchDismissKey,
@@ -1810,6 +1883,51 @@ export default function ChatView(props: ChatViewProps) {
     return byUserMessageId;
   }, [inferredCheckpointTurnCountByTurnId, timelineEntries, turnDiffSummaryByAssistantMessageId]);
 
+  // Prior user prompts for the ESC-ESC rewind picker, most-recent-first. A
+  // prompt is checkpoint-gated for "also restore files" iff a revert turn count
+  // resolved for it (presence in revertTurnCountByUserMessageId == checkpoint
+  // exists; imported chats never populate it, so they only ever get
+  // conversation-only rewind).
+  const userPromptsForRewind = useMemo(() => {
+    const prompts: Array<{
+      messageId: MessageId;
+      text: string;
+      createdAt: string;
+      hasCheckpoint: boolean;
+    }> = [];
+    for (const entry of timelineEntries) {
+      if (entry.kind !== "message" || entry.message.role !== "user") {
+        continue;
+      }
+      prompts.push({
+        messageId: entry.message.id,
+        text: entry.message.text ?? "",
+        createdAt: entry.message.createdAt,
+        hasCheckpoint: revertTurnCountByUserMessageId.has(entry.message.id),
+      });
+    }
+    return prompts.reverse();
+  }, [timelineEntries, revertTurnCountByUserMessageId]);
+
+  // Raw prompt text by message id — used to pre-fill the composer when a rewind
+  // lands back on a prompt (the user edits and re-sends the full prompt).
+  const promptTextByUserMessageId = useMemo(() => {
+    const byId = new Map<MessageId, string>();
+    for (const entry of timelineEntries) {
+      if (entry.kind === "message" && entry.message.role === "user") {
+        byId.set(entry.message.id, entry.message.text ?? "");
+      }
+    }
+    return byId;
+  }, [timelineEntries]);
+
+  // Reset the rewind picker + "files ahead" note when switching threads so they
+  // never leak across conversations.
+  useEffect(() => {
+    setRewindPickerOpen(false);
+    setRewindFilesAhead(null);
+  }, [activeThreadId]);
+
   const completionSummary = useMemo(() => {
     if (!latestTurnSettled) return null;
     if (!activeLatestTurn?.startedAt) return null;
@@ -1838,24 +1956,47 @@ export default function ChatView(props: ChatViewProps) {
   const gitStatusQuery = useVcsStatus({ environmentId, cwd: gitCwd });
   const keybindings = useServerKeybindings();
   const availableEditors = useServerAvailableEditors();
-  // Prefer an instance-id match so a custom Codex instance (e.g.
-  // `codex_personal`) surfaces its own status/message in the banner rather
-  // than the default Codex's. Falls back to first-match-by-kind when no
-  // saved instance id is available or the instance no longer exists.
-  const activeProviderInstanceId =
-    activeThread?.session?.providerInstanceId ??
-    activeThread?.modelSelection.instanceId ??
-    activeProject?.defaultModelSelection?.instanceId ??
-    null;
+  // Only a genuinely-running session pins the banner to a specific provider
+  // (so a live Codex thread keeps surfacing its own status, even custom
+  // instances like `codex_personal`). A draft — or any not-yet-started thread —
+  // carries the project-default `modelSelection` instance id, which must NOT
+  // short-circuit here: that's how a disabled / uninstalled default (e.g. a
+  // remote Codex) used to raise a banner for a provider the draft never runs.
+  // Unstarted threads fall through to the composer-style resolution below.
+  const activeProviderInstanceId = activeThread?.session?.providerInstanceId ?? null;
   const activeProviderStatus = useMemo(() => {
     if (activeProviderInstanceId) {
       return (
         providerStatuses.find((status) => status.instanceId === activeProviderInstanceId) ?? null
       );
     }
-    const defaultInstanceId = defaultInstanceIdForDriver(selectedProvider);
-    return providerStatuses.find((status) => status.instanceId === defaultInstanceId) ?? null;
-  }, [activeProviderInstanceId, providerStatuses, selectedProvider]);
+    // No running session (draft / unstarted thread): resolve the banner
+    // provider the same way the composer picker does. This prefers a ready
+    // provider over an enabled-but-broken default (e.g. a remote Codex that
+    // isn't installed), so the banner reflects the provider the draft will
+    // actually run on instead of warning about one the user isn't using.
+    const entries = sortProviderInstanceEntries(deriveProviderInstanceEntries(providerStatuses));
+    const target = resolveComposerProviderTarget({
+      entries,
+      candidates: [
+        selectedProviderByThreadId,
+        activeThread?.session?.providerInstanceId,
+        activeThread?.modelSelection.instanceId,
+        activeProject?.defaultModelSelection?.instanceId,
+      ],
+      lockedProvider,
+      lockedContinuationGroupKey: null,
+    });
+    return providerStatuses.find((status) => status.instanceId === target.instanceId) ?? null;
+  }, [
+    activeProviderInstanceId,
+    providerStatuses,
+    selectedProviderByThreadId,
+    activeThread?.session?.providerInstanceId,
+    activeThread?.modelSelection.instanceId,
+    activeProject?.defaultModelSelection?.instanceId,
+    lockedProvider,
+  ]);
   const activeProjectCwd = activeProject?.cwd ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
@@ -2773,6 +2914,45 @@ export default function ChatView(props: ChatViewProps) {
     toggleTerminalVisibility,
   ]);
 
+  // ESC-ESC opens the rewind picker (ADR-0002). A single ESC is left untouched
+  // so it still closes dialogs / the model picker / the command palette — we
+  // only act on the SECOND ESC within the window, and only when nothing else
+  // is open to consume it. This runs in the bubble phase, after dialogs have
+  // had their capture-phase chance to preventDefault on a closing ESC.
+  const lastEscapeAtRef = useRef(0);
+  useEffect(() => {
+    if (!activeThreadId) return;
+    const ESC_ESC_WINDOW_MS = 500;
+    const handler = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape" || event.repeat) {
+        return;
+      }
+      // Something already handled this ESC (a dialog/menu closing), or another
+      // overlay is open — let it consume the keystroke, don't start a chord.
+      if (
+        event.defaultPrevented ||
+        useCommandPaletteStore.getState().open ||
+        (composerRef.current?.isModelPickerOpen() ?? false)
+      ) {
+        lastEscapeAtRef.current = 0;
+        return;
+      }
+      const now = Date.now();
+      const previous = lastEscapeAtRef.current;
+      lastEscapeAtRef.current = now;
+      if (previous !== 0 && now - previous <= ESC_ESC_WINDOW_MS) {
+        lastEscapeAtRef.current = 0;
+        if (userPromptsForRewind.length === 0) {
+          return;
+        }
+        event.preventDefault();
+        setRewindPickerOpen(true);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [activeThreadId, composerRef, userPromptsForRewind.length]);
+
   const onRevertToTurnCount = useCallback(
     async (turnCount: number) => {
       const api = readEnvironmentApi(environmentId);
@@ -2832,6 +3012,254 @@ export default function ChatView(props: ChatViewProps) {
     ],
   );
 
+  // ----------------------------------------------------------------------
+  // Conversation rewind (ADR-0002) — non-destructive. Distinct from the
+  // destructive `onRevertToTurnCount` above, which stays callable but is no
+  // longer wired to any UI button.
+  // ----------------------------------------------------------------------
+
+  // Drop a prior prompt's text back into the composer for editing + re-send.
+  const prefillComposerWithPrompt = useCallback(
+    (messageId: MessageId) => {
+      const promptText = promptTextByUserMessageId.get(messageId) ?? "";
+      promptRef.current = promptText;
+      setComposerDraftPrompt(composerDraftTarget, promptText);
+      composerRef.current?.resetCursorState({
+        cursor: collapseExpandedComposerCursor(promptText, promptText.length),
+        prompt: promptText,
+        detectTrigger: true,
+      });
+      window.requestAnimationFrame(() => {
+        composerRef.current?.focusAtEnd();
+      });
+    },
+    [composerDraftTarget, composerRef, promptTextByUserMessageId, setComposerDraftPrompt],
+  );
+
+  // Guard shared by every rewind action. Returns null when blocked.
+  const resolveRewindContext = useCallback(() => {
+    const localApi = readLocalApi();
+    if (!localApi || !activeThread || isRevertingCheckpoint) {
+      return null;
+    }
+    // A saved (non-primary) environment that isn't currently connected has no
+    // entry in the connection map, so `readEnvironmentApi` returns undefined for
+    // its threads. Surface the actionable reconnect message *before* the bare
+    // api guard below — otherwise the missing api silently swallows the click
+    // (no command, no error) on exactly the imported/cloud threads this feature
+    // must support (ADR-0002 §2). Once reconnected, the rewind dispatches as
+    // normal through that environment's adapter.
+    if (activeEnvironmentUnavailable && activeEnvironmentUnavailableLabel) {
+      setThreadError(
+        activeThread.id,
+        `Reconnect ${activeEnvironmentUnavailableLabel} before rewinding this thread.`,
+      );
+      return null;
+    }
+    const api = readEnvironmentApi(environmentId);
+    if (!api) {
+      // No live connection for this thread's environment and it isn't a known
+      // saved-environment we can name a reconnect for (e.g. its registry entry
+      // is gone). Never fail silently — that is the bug this guard replaces.
+      setThreadError(
+        activeThread.id,
+        "Can't reach this thread's environment to rewind. Reconnect it and try again.",
+      );
+      return null;
+    }
+    if (phase === "running" || isSendBusy || isConnecting) {
+      setThreadError(activeThread.id, "Interrupt the current turn before rewinding.");
+      return null;
+    }
+    return { api, localApi, thread: activeThread };
+  }, [
+    activeEnvironmentUnavailable,
+    activeEnvironmentUnavailableLabel,
+    activeThread,
+    environmentId,
+    isConnecting,
+    isRevertingCheckpoint,
+    isSendBusy,
+    phase,
+    setThreadError,
+  ]);
+
+  const onRewindConversation = useCallback(
+    async (messageId: MessageId) => {
+      const ctx = resolveRewindContext();
+      if (!ctx) return;
+      setThreadError(ctx.thread.id, null);
+      try {
+        await ctx.api.orchestration.dispatchCommand({
+          type: "thread.conversation.rewind",
+          commandId: newCommandId(),
+          threadId: ctx.thread.id,
+          messageId,
+          createdAt: new Date().toISOString(),
+        });
+      } catch (err) {
+        setThreadError(
+          ctx.thread.id,
+          err instanceof Error ? err.message : "Failed to rewind the conversation.",
+        );
+        return;
+      }
+      prefillComposerWithPrompt(messageId);
+      // Offer "Cancel rewind" until the user re-sends (ADR-0002).
+      setPendingRewind({ messageId });
+      // If a checkpoint exists for this point, the working tree is now ahead of
+      // the restored conversation — offer to restore it too via the inline note.
+      const turnCount = revertTurnCountByUserMessageId.get(messageId);
+      setRewindFilesAhead(typeof turnCount === "number" ? { messageId, turnCount } : null);
+    },
+    [
+      prefillComposerWithPrompt,
+      resolveRewindContext,
+      revertTurnCountByUserMessageId,
+      setThreadError,
+    ],
+  );
+
+  const onRestoreFilesForMessage = useCallback(
+    async (messageId: MessageId) => {
+      const turnCount = revertTurnCountByUserMessageId.get(messageId);
+      if (typeof turnCount !== "number") return;
+      const ctx = resolveRewindContext();
+      if (!ctx) return;
+      const confirmed = await ctx.localApi.dialogs.confirm(
+        [
+          "Restore your files to this point?",
+          "This overwrites the working tree with the checkpoint from this turn.",
+          "You can move your files forward again from a later turn.",
+        ].join("\n"),
+      );
+      if (!confirmed) return;
+
+      setIsRevertingCheckpoint(true);
+      setThreadError(ctx.thread.id, null);
+      try {
+        await ctx.api.orchestration.dispatchCommand({
+          type: "thread.files.restore",
+          commandId: newCommandId(),
+          threadId: ctx.thread.id,
+          turnCount,
+          createdAt: new Date().toISOString(),
+        });
+        setRewindFilesAhead(null);
+      } catch (err) {
+        setThreadError(
+          ctx.thread.id,
+          err instanceof Error ? err.message : "Failed to restore files.",
+        );
+      }
+      setIsRevertingCheckpoint(false);
+    },
+    [resolveRewindContext, revertTurnCountByUserMessageId, setThreadError],
+  );
+  rewindRestoreFilesRef.current = onRestoreFilesForMessage;
+
+  // Cancel an un-sent rewind (ADR-0002): the inverse of onRewindConversation.
+  // Dispatch the cancel command; the server un-abandons the hidden rows and
+  // streams a fresh restored snapshot back (no client message manipulation
+  // needed). On success, reset the composer and clear the pending banners.
+  const onCancelRewind = useCallback(async () => {
+    if (!pendingRewind) return;
+    const ctx = resolveRewindContext();
+    if (!ctx) return;
+    setThreadError(ctx.thread.id, null);
+    try {
+      await ctx.api.orchestration.dispatchCommand({
+        type: "thread.conversation.rewind.cancel",
+        commandId: newCommandId(),
+        threadId: ctx.thread.id,
+        messageId: pendingRewind.messageId,
+        createdAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      setThreadError(
+        ctx.thread.id,
+        err instanceof Error ? err.message : "Failed to cancel the rewind.",
+      );
+      return;
+    }
+    // The restored messages arrive via the server snapshot. Reset the composer
+    // (it was pre-filled with the rewound prompt) and drop the pending banners.
+    setComposerDraftPrompt(composerDraftTarget, "");
+    promptRef.current = "";
+    composerRef.current?.resetCursorState({
+      cursor: collapseExpandedComposerCursor("", 0),
+      prompt: "",
+      detectTrigger: true,
+    });
+    setPendingRewind(null);
+    setRewindFilesAhead(null);
+  }, [
+    composerDraftTarget,
+    composerRef,
+    pendingRewind,
+    resolveRewindContext,
+    setComposerDraftPrompt,
+    setThreadError,
+  ]);
+  rewindCancelRef.current = () => void onCancelRewind();
+
+  const onRewindConversationAndFiles = useCallback(
+    async (messageId: MessageId) => {
+      const turnCount = revertTurnCountByUserMessageId.get(messageId);
+      if (typeof turnCount !== "number") {
+        // No checkpoint — fall back to conversation-only (menu shouldn't offer
+        // this, but stay safe).
+        void onRewindConversation(messageId);
+        return;
+      }
+      const ctx = resolveRewindContext();
+      if (!ctx) return;
+      const confirmed = await ctx.localApi.dialogs.confirm(
+        [
+          "Rewind the conversation and restore your files to this point?",
+          "This overwrites the working tree with the checkpoint from this turn.",
+          "You can move your files forward again from a later turn.",
+        ].join("\n"),
+      );
+      if (!confirmed) return;
+
+      setIsRevertingCheckpoint(true);
+      setThreadError(ctx.thread.id, null);
+      try {
+        await ctx.api.orchestration.dispatchCommand({
+          type: "thread.conversation.rewind",
+          commandId: newCommandId(),
+          threadId: ctx.thread.id,
+          messageId,
+          createdAt: new Date().toISOString(),
+        });
+        await ctx.api.orchestration.dispatchCommand({
+          type: "thread.files.restore",
+          commandId: newCommandId(),
+          threadId: ctx.thread.id,
+          turnCount,
+          createdAt: new Date().toISOString(),
+        });
+        prefillComposerWithPrompt(messageId);
+        // Files are now at this point too — no "files ahead" note needed.
+        setRewindFilesAhead(null);
+      } catch (err) {
+        setThreadError(
+          ctx.thread.id,
+          err instanceof Error ? err.message : "Failed to rewind and restore files.",
+        );
+      }
+      setIsRevertingCheckpoint(false);
+    },
+    [
+      onRewindConversation,
+      prefillComposerWithPrompt,
+      resolveRewindContext,
+      revertTurnCountByUserMessageId,
+      setThreadError,
+    ],
+  );
+
   const onSend = async (e?: { preventDefault: () => void }) => {
     e?.preventDefault();
     const api = readEnvironmentApi(environmentId);
@@ -2882,6 +3310,17 @@ export default function ChatView(props: ChatViewProps) {
         text: followUp.text,
         interactionMode: followUp.interactionMode,
       });
+      return;
+    }
+    if (
+      composerImages.length === 0 &&
+      sendableComposerTerminalContexts.length === 0 &&
+      isStandaloneResumeCommand(trimmed)
+    ) {
+      useResumePickerStore.getState().requestOpen();
+      promptRef.current = "";
+      clearComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
       return;
     }
     const standaloneSlashCommand =
@@ -3096,6 +3535,10 @@ export default function ChatView(props: ChatViewProps) {
         createdAt: messageCreatedAt,
       });
       turnStartSucceeded = true;
+      // A fresh turn supersedes any pending "files are still ahead" note and the
+      // "cancel rewind" affordance (the rewind has now been sent).
+      setRewindFilesAhead(null);
+      setPendingRewind(null);
     })().catch(async (err: unknown) => {
       if (
         !turnStartSucceeded &&
@@ -3701,18 +4144,17 @@ export default function ChatView(props: ChatViewProps) {
     },
     [environmentId, isServerThread, navigate, onDiffPanelOpen, threadId],
   );
-  // Both the Map and the revert handler are read from refs at call-time so
-  // the callback reference is fully stable and never busts context identity.
-  const revertTurnCountRef = useRef(revertTurnCountByUserMessageId);
-  revertTurnCountRef.current = revertTurnCountByUserMessageId;
-  const onRevertToTurnCountRef = useRef(onRevertToTurnCount);
-  onRevertToTurnCountRef.current = onRevertToTurnCount;
-  const onRevertUserMessage = useCallback((messageId: MessageId) => {
-    const targetTurnCount = revertTurnCountRef.current.get(messageId);
-    if (typeof targetTurnCount !== "number") {
-      return;
-    }
-    void onRevertToTurnCountRef.current(targetTurnCount);
+  // The rewind handlers are read from refs at call-time so the callbacks passed
+  // to the timeline are fully stable and never bust the LegendList row context.
+  const onRewindConversationRef = useRef(onRewindConversation);
+  onRewindConversationRef.current = onRewindConversation;
+  const onRewindConversationAndFilesRef = useRef(onRewindConversationAndFiles);
+  onRewindConversationAndFilesRef.current = onRewindConversationAndFiles;
+  const onRewindConversationStable = useCallback((messageId: MessageId) => {
+    void onRewindConversationRef.current(messageId);
+  }, []);
+  const onRewindConversationAndFilesStable = useCallback((messageId: MessageId) => {
+    void onRewindConversationAndFilesRef.current(messageId);
   }, []);
 
   // Empty state: no active thread
@@ -3792,7 +4234,8 @@ export default function ChatView(props: ChatViewProps) {
               routeThreadKey={routeThreadKey}
               onOpenTurnDiff={onOpenTurnDiff}
               revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
-              onRevertUserMessage={onRevertUserMessage}
+              onRewindConversation={onRewindConversationStable}
+              onRewindConversationAndFiles={onRewindConversationAndFilesStable}
               isRevertingCheckpoint={isRevertingCheckpoint}
               onImageExpand={onExpandTimelineImage}
               markdownCwd={gitCwd ?? undefined}
@@ -3830,6 +4273,74 @@ export default function ChatView(props: ChatViewProps) {
             <div className="relative isolate">
               <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
               <div className="relative z-10">
+                <ResumePicker
+                  environmentId={environmentId}
+                  cwd={activeProject?.cwd ?? null}
+                  onSelect={(session: ImportableSession) => {
+                    const project = activeProject;
+                    if (!project) {
+                      return;
+                    }
+                    const api = readEnvironmentApi(environmentId);
+                    if (!api) {
+                      return;
+                    }
+                    // Already in t3? Rejoin that thread instead of creating a
+                    // duplicate — CLI-parity: resuming the same chat returns to
+                    // the same conversation, it does not fork a copy.
+                    if (session.existingThreadId) {
+                      navigate({
+                        to: "/$environmentId/$threadId",
+                        params: {
+                          environmentId,
+                          threadId: session.existingThreadId,
+                        },
+                      });
+                      return;
+                    }
+                    const nextThreadId = newThreadId();
+                    // Resume targets a Claude SDK session, so the thread must
+                    // run on Claude — the seed reactor binds the resume cursor
+                    // to this instance, and the first turn must resolve the same
+                    // (Claude) instance or the resume is silently dropped.
+                    const claudeDriver = ProviderDriverKind.make("claudeAgent");
+                    const resumeModelSelection: ModelSelection = {
+                      instanceId: defaultInstanceIdForDriver(claudeDriver),
+                      model: DEFAULT_MODEL_BY_PROVIDER[claudeDriver] ?? "claude-sonnet-4-6",
+                    };
+                    void api.orchestration
+                      .dispatchCommand({
+                        type: "thread.create",
+                        commandId: newCommandId(),
+                        threadId: nextThreadId,
+                        projectId: project.id,
+                        title: session.title,
+                        modelSelection: resumeModelSelection,
+                        runtimeMode,
+                        interactionMode: "default",
+                        branch: null,
+                        worktreePath: null,
+                        // Triggers ResumeSeedReactor: seed the resume cursor +
+                        // replay the transcript. No turn.start — the user types
+                        // the first message.
+                        resumeSessionId: session.sessionId,
+                        createdAt: new Date().toISOString(),
+                      })
+                      .then(() =>
+                        navigate({
+                          to: "/$environmentId/$threadId",
+                          params: { environmentId, threadId: nextThreadId },
+                        }),
+                      );
+                  }}
+                />
+                <RewindPicker
+                  open={rewindPickerOpen}
+                  onOpenChange={setRewindPickerOpen}
+                  prompts={userPromptsForRewind}
+                  onRestoreConversation={onRewindConversationStable}
+                  onRestoreConversationAndFiles={onRewindConversationAndFilesStable}
+                />
                 <ChatComposer
                   composerRef={composerRef}
                   composerDraftTarget={composerDraftTarget}

@@ -178,7 +178,23 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
         Effect.forEach(
           rows,
           (row) => toRuntimeBinding(row, "ProviderSessionDirectory.listBindings"),
-          { concurrency: "unbounded" },
+          { concurrency: 16 },
+        ),
+      ),
+    );
+
+  const listBindingsByProjectId: ProviderSessionDirectoryShape["listBindingsByProjectId"] = (
+    projectId,
+  ) =>
+    repository.listByProjectId({ projectId }).pipe(
+      Effect.mapError(
+        toPersistenceError("ProviderSessionDirectory.listBindingsByProjectId:listByProjectId"),
+      ),
+      Effect.flatMap((rows) =>
+        Effect.forEach(
+          rows,
+          (row) => toRuntimeBinding(row, "ProviderSessionDirectory.listBindingsByProjectId"),
+          { concurrency: 16 },
         ),
       ),
     );
@@ -189,6 +205,7 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
     getBinding,
     listThreadIds,
     listBindings,
+    listBindingsByProjectId,
   } satisfies ProviderSessionDirectoryShape;
 });
 

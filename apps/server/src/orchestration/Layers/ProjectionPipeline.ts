@@ -817,6 +817,12 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             role: event.payload.role,
             text: nextText,
             ...(nextAttachments !== undefined ? { attachments: [...nextAttachments] } : {}),
+            // Conversation-rewind anchor (ADR-0002). Persisted via COALESCE in the
+            // repo, so a later uuid-bearing event (assistant.complete) sets it and
+            // an earlier uuid-less streaming delta never nulls it out.
+            ...(event.payload.providerMessageUuid !== undefined
+              ? { providerMessageUuid: event.payload.providerMessageUuid }
+              : {}),
             isStreaming: event.payload.streaming,
             createdAt: previousMessage?.createdAt ?? event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
@@ -854,6 +860,45 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             event.payload.threadId,
             collectThreadAttachmentRelativePaths(event.payload.threadId, keptRows),
           );
+          return;
+        }
+
+        // Non-destructive conversation rewind (ADR-0002). Unlike `thread.reverted`
+        // (which deletes forward rows above), this flips `abandoned = 1` in place
+        // on the rewound prompt and every message after it, so the active timeline
+        // hides them while the rows are retained. The reactor (WS-2) resolves the
+        // anchor and emits this event; here we resolve the cut timestamp from the
+        // target prompt and mark forward rows.
+        case "thread.conversation-rewound": {
+          const targetMessage = yield* projectionThreadMessageRepository.getByMessageId({
+            messageId: event.payload.messageId,
+          });
+          if (Option.isNone(targetMessage)) {
+            return;
+          }
+          yield* projectionThreadMessageRepository.markAbandonedFromCreatedAt({
+            threadId: event.payload.threadId,
+            fromCreatedAt: targetMessage.value.createdAt,
+          });
+          return;
+        }
+
+        // Cancel an un-sent conversation rewind (ADR-0002): the inverse of
+        // `thread.conversation-rewound` above. Un-hide the message rows the rewind
+        // had marked abandoned. The reactor already applied this directly (for the
+        // race-free live restore); this case re-applies it on a projection
+        // rebuild/replay, where reactors don't run. Idempotent.
+        case "thread.conversation-rewind-cancelled": {
+          const targetMessage = yield* projectionThreadMessageRepository.getByMessageId({
+            messageId: event.payload.messageId,
+          });
+          if (Option.isNone(targetMessage)) {
+            return;
+          }
+          yield* projectionThreadMessageRepository.unmarkAbandonedFromCreatedAt({
+            threadId: event.payload.threadId,
+            fromCreatedAt: targetMessage.value.createdAt,
+          });
           return;
         }
 
@@ -1231,6 +1276,40 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
                   }),
             { concurrency: 1 },
           ).pipe(Effect.asVoid);
+          return;
+        }
+
+        // Non-destructive conversation rewind (ADR-0002): flip `abandoned = 1` on
+        // every turn requested at or after the rewound prompt, mirroring the
+        // message flip above. Turns are never deleted here.
+        case "thread.conversation-rewound": {
+          const targetMessage = yield* projectionThreadMessageRepository.getByMessageId({
+            messageId: event.payload.messageId,
+          });
+          if (Option.isNone(targetMessage)) {
+            return;
+          }
+          yield* projectionTurnRepository.markAbandonedFromRequestedAt({
+            threadId: event.payload.threadId,
+            fromRequestedAt: targetMessage.value.createdAt,
+          });
+          return;
+        }
+
+        // Cancel an un-sent conversation rewind (ADR-0002): the inverse of the
+        // turn flip above. Re-applied on a projection rebuild/replay; idempotent
+        // with the reactor's direct un-abandon.
+        case "thread.conversation-rewind-cancelled": {
+          const targetMessage = yield* projectionThreadMessageRepository.getByMessageId({
+            messageId: event.payload.messageId,
+          });
+          if (Option.isNone(targetMessage)) {
+            return;
+          }
+          yield* projectionTurnRepository.unmarkAbandonedFromRequestedAt({
+            threadId: event.payload.threadId,
+            fromRequestedAt: targetMessage.value.createdAt,
+          });
           return;
         }
 

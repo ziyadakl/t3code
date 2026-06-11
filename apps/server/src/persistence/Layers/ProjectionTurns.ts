@@ -14,6 +14,7 @@ import {
   GetProjectionPendingTurnStartInput,
   GetProjectionTurnByTurnIdInput,
   ListProjectionTurnsByThreadInput,
+  MarkProjectionTurnsAbandonedInput,
   ProjectionPendingTurnStart,
   ProjectionTurn,
   ProjectionTurnById,
@@ -24,8 +25,11 @@ import {
 const ProjectionTurnDbRowSchema = ProjectionTurn.mapFields(
   Struct.assign({
     checkpointFiles: Schema.fromJsonString(Schema.Array(OrchestrationCheckpointFile)),
+    abandoned: Schema.Number,
   }),
 );
+
+const MarkedTurnRowSchema = Schema.Struct({ turnId: Schema.NullOr(Schema.String) });
 
 const ProjectionTurnByIdDbRowSchema = ProjectionTurnById.mapFields(
   Struct.assign({
@@ -188,7 +192,8 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           checkpoint_turn_count AS "checkpointTurnCount",
           checkpoint_ref AS "checkpointRef",
           checkpoint_status AS "checkpointStatus",
-          checkpoint_files_json AS "checkpointFiles"
+          checkpoint_files_json AS "checkpointFiles",
+          abandoned
         FROM projection_turns
         WHERE thread_id = ${threadId}
         ORDER BY
@@ -254,6 +259,37 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
       `,
   });
 
+  // Non-destructive rewind: flip the flag in place and RETURN the flipped
+  // concrete turn ids so the caller's count excludes pending placeholders.
+  const markProjectionTurnsAbandoned = SqlSchema.findAll({
+    Request: MarkProjectionTurnsAbandonedInput,
+    Result: MarkedTurnRowSchema,
+    execute: ({ threadId, fromRequestedAt }) =>
+      sql`
+        UPDATE projection_turns
+        SET abandoned = 1
+        WHERE thread_id = ${threadId}
+          AND abandoned = 0
+          AND requested_at >= ${fromRequestedAt}
+        RETURNING turn_id AS "turnId"
+      `,
+  });
+
+  // Cancel an un-sent rewind: the exact inverse of the abandon flip above.
+  const unmarkProjectionTurnsAbandoned = SqlSchema.findAll({
+    Request: MarkProjectionTurnsAbandonedInput,
+    Result: MarkedTurnRowSchema,
+    execute: ({ threadId, fromRequestedAt }) =>
+      sql`
+        UPDATE projection_turns
+        SET abandoned = 0
+        WHERE thread_id = ${threadId}
+          AND abandoned = 1
+          AND requested_at >= ${fromRequestedAt}
+        RETURNING turn_id AS "turnId"
+      `,
+  });
+
   const upsertByTurnId: ProjectionTurnRepositoryShape["upsertByTurnId"] = (row) =>
     upsertProjectionTurnById(row).pipe(
       Effect.mapError(
@@ -304,7 +340,14 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           "ProjectionTurnRepository.listByThreadId:decodeRows",
         ),
       ),
-      Effect.map((rows) => rows as ReadonlyArray<Schema.Schema.Type<typeof ProjectionTurn>>),
+      Effect.map((rows) =>
+        rows.map(
+          (row): Schema.Schema.Type<typeof ProjectionTurn> => ({
+            ...row,
+            abandoned: row.abandoned === 1,
+          }),
+        ),
+      ),
     );
 
   const getByTurnId: ProjectionTurnRepositoryShape["getByTurnId"] = (input) =>
@@ -337,6 +380,24 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
       Effect.mapError(toPersistenceSqlError("ProjectionTurnRepository.deleteByThreadId:query")),
     );
 
+  const markAbandonedFromRequestedAt: ProjectionTurnRepositoryShape["markAbandonedFromRequestedAt"] =
+    (input) =>
+      markProjectionTurnsAbandoned(input).pipe(
+        Effect.mapError(
+          toPersistenceSqlError("ProjectionTurnRepository.markAbandonedFromRequestedAt:query"),
+        ),
+        Effect.map((rows) => rows.filter((row) => row.turnId !== null).length),
+      );
+
+  const unmarkAbandonedFromRequestedAt: ProjectionTurnRepositoryShape["unmarkAbandonedFromRequestedAt"] =
+    (input) =>
+      unmarkProjectionTurnsAbandoned(input).pipe(
+        Effect.mapError(
+          toPersistenceSqlError("ProjectionTurnRepository.unmarkAbandonedFromRequestedAt:query"),
+        ),
+        Effect.map((rows) => rows.filter((row) => row.turnId !== null).length),
+      );
+
   return {
     upsertByTurnId,
     replacePendingTurnStart,
@@ -346,6 +407,8 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
     getByTurnId,
     clearCheckpointTurnConflict,
     deleteByThreadId,
+    markAbandonedFromRequestedAt,
+    unmarkAbandonedFromRequestedAt,
   } satisfies ProjectionTurnRepositoryShape;
 });
 

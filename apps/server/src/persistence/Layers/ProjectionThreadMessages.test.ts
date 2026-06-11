@@ -111,4 +111,179 @@ layer("ProjectionThreadMessageRepository", (it) => {
       assert.deepEqual(rows[0]?.attachments, []);
     }),
   );
+
+  // ADR-0002 conversation-rewind anchor. The live write path creates the row on
+  // a streaming `assistant.delta` (uuid-null), then stamps the turn-final uuid on
+  // `assistant.complete`. COALESCE must let the non-null uuid win and never let a
+  // subsequent uuid-less upsert null it back out.
+  it.effect("persists providerMessageUuid via COALESCE (non-null wins, never nulled)", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectionThreadMessageRepository;
+      const threadId = ThreadId.make("thread-uuid-anchor");
+      const messageId = MessageId.make("message-uuid-anchor");
+      const createdAt = "2026-02-28T20:00:00.000Z";
+
+      // Streaming delta: row born with no anchor uuid.
+      yield* repository.upsert({
+        messageId,
+        threadId,
+        turnId: null,
+        role: "assistant",
+        text: "partial",
+        isStreaming: true,
+        createdAt,
+        updatedAt: "2026-02-28T20:00:01.000Z",
+      });
+
+      let row = yield* repository.getByMessageId({ messageId });
+      assert.equal(row._tag, "Some");
+      if (row._tag === "Some") {
+        assert.equal(row.value.providerMessageUuid, undefined);
+      }
+
+      // Completion stamps the turn-final uuid.
+      yield* repository.upsert({
+        messageId,
+        threadId,
+        turnId: null,
+        role: "assistant",
+        text: "",
+        providerMessageUuid: "claude-uuid-123",
+        isStreaming: false,
+        createdAt,
+        updatedAt: "2026-02-28T20:00:02.000Z",
+      });
+
+      row = yield* repository.getByMessageId({ messageId });
+      assert.equal(row._tag, "Some");
+      if (row._tag === "Some") {
+        assert.equal(row.value.providerMessageUuid, "claude-uuid-123");
+      }
+
+      // A later uuid-less upsert must NOT clear the persisted anchor.
+      yield* repository.upsert({
+        messageId,
+        threadId,
+        turnId: null,
+        role: "assistant",
+        text: "edited",
+        isStreaming: false,
+        createdAt,
+        updatedAt: "2026-02-28T20:00:03.000Z",
+      });
+
+      row = yield* repository.getByMessageId({ messageId });
+      assert.equal(row._tag, "Some");
+      if (row._tag === "Some") {
+        assert.equal(row.value.providerMessageUuid, "claude-uuid-123");
+        assert.equal(row.value.text, "edited");
+      }
+    }),
+  );
+
+  // ADR-0002 non-destructive conversation rewind. The mark path must FLIP the
+  // `abandoned` flag on the rewound prompt and everything forward of it — never
+  // delete rows — and report the count of newly hidden rows.
+  it.effect("markAbandonedFromCreatedAt flips forward rows without deleting them", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectionThreadMessageRepository;
+      const threadId = ThreadId.make("thread-rewind-mark");
+
+      const seed = (suffix: string, role: "user" | "assistant", createdAt: string) =>
+        repository.upsert({
+          messageId: MessageId.make(`message-${suffix}`),
+          threadId,
+          turnId: null,
+          role,
+          text: suffix,
+          isStreaming: false,
+          createdAt,
+          updatedAt: createdAt,
+        });
+
+      yield* seed("a-user", "user", "2026-03-01T10:00:00.000Z");
+      yield* seed("a-assistant", "assistant", "2026-03-01T10:00:01.000Z");
+      yield* seed("b-user", "user", "2026-03-01T10:00:02.000Z"); // rewind target
+      yield* seed("b-assistant", "assistant", "2026-03-01T10:00:03.000Z");
+      yield* seed("c-user", "user", "2026-03-01T10:00:04.000Z");
+
+      const flipped = yield* repository.markAbandonedFromCreatedAt({
+        threadId,
+        fromCreatedAt: "2026-03-01T10:00:02.000Z",
+      });
+      // b-user (the target prompt), b-assistant, c-user.
+      assert.equal(flipped, 3);
+
+      // Non-destructive: every row is still present in the unfiltered repo read.
+      const rows = yield* repository.listByThreadId({ threadId });
+      assert.equal(rows.length, 5);
+
+      const abandonedIds = rows
+        .filter((row) => row.abandoned === true)
+        .map((row) => String(row.messageId));
+      assert.deepEqual(abandonedIds.toSorted(), [
+        "message-b-assistant",
+        "message-b-user",
+        "message-c-user",
+      ]);
+
+      // A repeated rewind to the same point flips nothing new (idempotent count).
+      const flippedAgain = yield* repository.markAbandonedFromCreatedAt({
+        threadId,
+        fromCreatedAt: "2026-03-01T10:00:02.000Z",
+      });
+      assert.equal(flippedAgain, 0);
+    }),
+  );
+
+  // Cancel an un-sent rewind (ADR-0002): the exact inverse of the mark — un-hide
+  // the rows a rewind had marked abandoned so the active timeline restores.
+  it.effect("unmarkAbandonedFromCreatedAt restores rows a rewind had hidden", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectionThreadMessageRepository;
+      const threadId = ThreadId.make("thread-rewind-unmark");
+
+      const seed = (suffix: string, role: "user" | "assistant", createdAt: string) =>
+        repository.upsert({
+          messageId: MessageId.make(`message-${suffix}`),
+          threadId,
+          turnId: null,
+          role,
+          text: suffix,
+          isStreaming: false,
+          createdAt,
+          updatedAt: createdAt,
+        });
+
+      yield* seed("a-user", "user", "2026-03-01T10:00:00.000Z");
+      yield* seed("a-assistant", "assistant", "2026-03-01T10:00:01.000Z");
+      yield* seed("b-user", "user", "2026-03-01T10:00:02.000Z"); // rewind target
+      yield* seed("b-assistant", "assistant", "2026-03-01T10:00:03.000Z");
+
+      // Rewind: hide the target prompt and everything forward of it.
+      yield* repository.markAbandonedFromCreatedAt({
+        threadId,
+        fromCreatedAt: "2026-03-01T10:00:02.000Z",
+      });
+
+      // Cancel: un-hide exactly those rows.
+      const restored = yield* repository.unmarkAbandonedFromCreatedAt({
+        threadId,
+        fromCreatedAt: "2026-03-01T10:00:02.000Z",
+      });
+      assert.equal(restored, 2); // b-user, b-assistant.
+
+      const rows = yield* repository.listByThreadId({ threadId });
+      assert.equal(rows.length, 4);
+      const abandoned = rows.filter((row) => row.abandoned === true);
+      assert.equal(abandoned.length, 0);
+
+      // Idempotent: a second cancel un-hides nothing new.
+      const restoredAgain = yield* repository.unmarkAbandonedFromCreatedAt({
+        threadId,
+        fromCreatedAt: "2026-03-01T10:00:02.000Z",
+      });
+      assert.equal(restoredAgain, 0);
+    }),
+  );
 });

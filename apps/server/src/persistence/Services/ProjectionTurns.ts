@@ -48,6 +48,9 @@ export const ProjectionTurn = Schema.Struct({
   checkpointRef: Schema.NullOr(CheckpointRef),
   checkpointStatus: Schema.NullOr(OrchestrationCheckpointStatus),
   checkpointFiles: Schema.Array(OrchestrationCheckpointFile),
+  // Conversation-rewind "hide, don't delete" flag (ADR-0002): true once a
+  // rewind marks this turn as forward-of-the-anchor. Optional/defaults false.
+  abandoned: Schema.optional(Schema.Boolean),
 });
 export type ProjectionTurn = typeof ProjectionTurn.Type;
 
@@ -98,6 +101,14 @@ export const DeleteProjectionTurnsByThreadInput = Schema.Struct({
   threadId: ThreadId,
 });
 export type DeleteProjectionTurnsByThreadInput = typeof DeleteProjectionTurnsByThreadInput.Type;
+
+export const MarkProjectionTurnsAbandonedInput = Schema.Struct({
+  threadId: ThreadId,
+  // Inclusive lower bound on `requested_at`: every turn requested at or after
+  // the rewound prompt is marked abandoned.
+  fromRequestedAt: IsoDateTime,
+});
+export type MarkProjectionTurnsAbandonedInput = typeof MarkProjectionTurnsAbandonedInput.Type;
 
 export const ClearCheckpointTurnConflictInput = Schema.Struct({
   threadId: ThreadId,
@@ -162,6 +173,26 @@ export interface ProjectionTurnRepositoryShape {
   readonly deleteByThreadId: (
     input: DeleteProjectionTurnsByThreadInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  /**
+   * Non-destructive conversation rewind (ADR-0002): flip `abandoned = 1` on
+   * every turn row requested at or after `fromRequestedAt`. Rows are never
+   * deleted. Returns the number of concrete (`turn_id IS NOT NULL`) turns
+   * flipped — the rewind's reported turn count.
+   */
+  readonly markAbandonedFromRequestedAt: (
+    input: MarkProjectionTurnsAbandonedInput,
+  ) => Effect.Effect<number, ProjectionRepositoryError>;
+
+  /**
+   * Cancel an un-sent conversation rewind (ADR-0002): the exact inverse of
+   * `markAbandonedFromRequestedAt` — flip `abandoned = 0` on every turn requested
+   * at or after `fromRequestedAt` that a prior rewind had hidden. Returns the
+   * number of concrete (`turn_id IS NOT NULL`) turns un-hidden.
+   */
+  readonly unmarkAbandonedFromRequestedAt: (
+    input: MarkProjectionTurnsAbandonedInput,
+  ) => Effect.Effect<number, ProjectionRepositoryError>;
 }
 
 export class ProjectionTurnRepository extends Context.Service<

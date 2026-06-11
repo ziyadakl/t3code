@@ -1050,3 +1050,157 @@ describe("incremental orchestration updates", () => {
     expect(threadsOf(next)[0]?.latestTurn?.sourceProposedPlan).toBeUndefined();
   });
 });
+
+describe("thread.conversation-rewound", () => {
+  function makeRewindThread(): Thread {
+    return makeThread({
+      messages: [
+        {
+          id: MessageId.make("message-0"),
+          role: "user",
+          text: "first prompt",
+          turnId: TurnId.make("turn-1"),
+          createdAt: "2026-02-13T00:01:00.000Z",
+          streaming: false,
+        },
+        {
+          id: MessageId.make("message-1"),
+          role: "assistant",
+          text: "first reply",
+          turnId: TurnId.make("turn-1"),
+          createdAt: "2026-02-13T00:01:30.000Z",
+          streaming: false,
+        },
+        {
+          // Rewind target — this prompt and everything after it must drop.
+          id: MessageId.make("message-2"),
+          role: "user",
+          text: "second prompt",
+          turnId: TurnId.make("turn-2"),
+          createdAt: "2026-02-13T00:02:00.000Z",
+          streaming: false,
+        },
+        {
+          id: MessageId.make("message-3"),
+          role: "assistant",
+          text: "second reply",
+          turnId: TurnId.make("turn-2"),
+          createdAt: "2026-02-13T00:02:30.000Z",
+          streaming: false,
+        },
+      ],
+      activities: [
+        {
+          id: EventId.make("activity-before"),
+          tone: "info",
+          kind: "step",
+          summary: "before cut",
+          payload: {},
+          turnId: TurnId.make("turn-1"),
+          createdAt: "2026-02-13T00:01:45.000Z",
+        },
+        {
+          id: EventId.make("activity-after"),
+          tone: "info",
+          kind: "step",
+          summary: "after cut",
+          payload: {},
+          turnId: TurnId.make("turn-2"),
+          createdAt: "2026-02-13T00:02:15.000Z",
+        },
+      ],
+      proposedPlans: [
+        {
+          id: "plan-before",
+          turnId: TurnId.make("turn-1"),
+          planMarkdown: "before",
+          implementedAt: null,
+          implementationThreadId: null,
+          createdAt: "2026-02-13T00:01:50.000Z",
+          updatedAt: "2026-02-13T00:01:50.000Z",
+        },
+        {
+          id: "plan-after",
+          turnId: TurnId.make("turn-2"),
+          planMarkdown: "after",
+          implementedAt: null,
+          implementationThreadId: null,
+          createdAt: "2026-02-13T00:02:20.000Z",
+          updatedAt: "2026-02-13T00:02:20.000Z",
+        },
+      ],
+      turnDiffSummaries: [
+        {
+          turnId: TurnId.make("turn-1"),
+          completedAt: "2026-02-13T00:01:55.000Z",
+          status: "ready",
+          checkpointTurnCount: 1,
+          checkpointRef: CheckpointRef.make("checkpoint-1"),
+          assistantMessageId: MessageId.make("message-1"),
+          files: [],
+        },
+        {
+          turnId: TurnId.make("turn-2"),
+          completedAt: "2026-02-13T00:02:55.000Z",
+          status: "ready",
+          checkpointTurnCount: 2,
+          checkpointRef: CheckpointRef.make("checkpoint-2"),
+          assistantMessageId: MessageId.make("message-3"),
+          files: [],
+        },
+      ],
+    });
+  }
+
+  it("drops the target prompt and every forward row, keeping earlier ones", () => {
+    const state = makeState(makeRewindThread());
+
+    const next = applyOrchestrationEvent(
+      state,
+      makeEvent("thread.conversation-rewound", {
+        threadId: ThreadId.make("thread-1"),
+        messageId: MessageId.make("message-2"),
+        turnCount: 1,
+      }),
+      localEnvironmentId,
+    );
+
+    const thread = threadsOf(next)[0];
+    // Messages strictly before the target's createdAt are retained; the target
+    // prompt and the forward assistant reply are gone.
+    expect(thread?.messages.map((message) => message.id)).toEqual([
+      MessageId.make("message-0"),
+      MessageId.make("message-1"),
+    ]);
+    // Forward activity and proposed plan dropped; earlier ones retained.
+    expect(thread?.activities.map((activity) => activity.id)).toEqual([
+      EventId.make("activity-before"),
+    ]);
+    expect(thread?.proposedPlans.map((plan) => plan.id)).toEqual(["plan-before"]);
+    // Forward checkpoint dropped; latestTurn now points at the last retained one.
+    expect(thread?.turnDiffSummaries.map((summary) => summary.turnId)).toEqual([
+      TurnId.make("turn-1"),
+    ]);
+    expect(thread?.latestTurn?.turnId).toBe(TurnId.make("turn-1"));
+  });
+
+  it("is a no-op when the target message is not in the local list", () => {
+    const state = makeState(makeRewindThread());
+
+    const next = applyOrchestrationEvent(
+      state,
+      makeEvent("thread.conversation-rewound", {
+        threadId: ThreadId.make("thread-1"),
+        messageId: MessageId.make("message-missing"),
+        turnCount: 1,
+      }),
+      localEnvironmentId,
+    );
+
+    const thread = threadsOf(next)[0];
+    expect(thread?.messages).toHaveLength(4);
+    expect(thread?.turnDiffSummaries).toHaveLength(2);
+    expect(thread?.activities).toHaveLength(2);
+    expect(thread?.proposedPlans).toHaveLength(2);
+  });
+});

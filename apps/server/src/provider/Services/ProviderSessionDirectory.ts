@@ -1,4 +1,5 @@
 import type {
+  ProjectId,
   ProviderInstanceId,
   ProviderDriverKind,
   ProviderSessionRuntimeStatus,
@@ -59,6 +60,20 @@ export interface ProviderSessionDirectoryShape {
   >;
 
   readonly listBindings: () => Effect.Effect<
+    ReadonlyArray<ProviderRuntimeBindingWithMetadata>,
+    ProviderSessionDirectoryPersistenceError
+  >;
+
+  /**
+   * List bindings scoped to a single project (the resume picker's path).
+   *
+   * Same shape as `listBindings`, but the persistence query joins through
+   * `projection_threads` so only the current project's bindings are read and
+   * parsed — not every project's.
+   */
+  readonly listBindingsByProjectId: (
+    projectId: ProjectId,
+  ) => Effect.Effect<
     ReadonlyArray<ProviderRuntimeBindingWithMetadata>,
     ProviderSessionDirectoryPersistenceError
   >;

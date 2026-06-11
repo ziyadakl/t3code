@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+#
+# Auto-deploy the fork server to the VPS after a commit that changed app code.
+#
+# Wired via `git config core.hooksPath .githooks` (see scripts/install-git-hooks.sh).
+# Design goals:
+#   - NEVER fail the commit (always exit 0; a broken deploy must not block git).
+#   - Only deploy when the commit actually touched the bundle (apps/server, apps/web,
+#     packages/) — doc/memory/plan commits are silent no-ops.
+#   - Run detached so `git commit` returns instantly; the ~2-min build+deploy runs
+#     in the background and logs to .git/t3-deploy.log.
+#   - Be toggleable: `git config t3.autoDeploy false` disables it.
+#
+# Set T3_AUTO_DEPLOY_DRYRUN=1 to print the decision (and the command it would run)
+# without launching anything.
+
+# Resolve repo root; bail quietly if we somehow can't.
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+cd "$ROOT" || exit 0
+
+DRY="${T3_AUTO_DEPLOY_DRYRUN:-}"
+note() { printf '%s\n' "$*"; }
+
+# 1. Toggle: default ON; only "false" disables.
+if [[ "$(git config --bool t3.autoDeploy 2>/dev/null)" == "false" ]]; then
+  [[ -n "$DRY" ]] && note "[auto-deploy] skip (disabled via git config t3.autoDeploy=false)"
+  exit 0
+fi
+
+# 2. Path gate: did this commit touch bundle-affecting code?
+if ! git diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null \
+     | grep -Eq '^(apps/server/|apps/web/|packages/)'; then
+  [[ -n "$DRY" ]] && note "[auto-deploy] skip (commit touched no bundle paths: apps/server, apps/web, packages)"
+  exit 0
+fi
+
+# 3. Locate mise (bun is not on the bare hook PATH).
+MISE="$(command -v mise 2>/dev/null || true)"
+[[ -z "$MISE" && -x /opt/homebrew/bin/mise ]] && MISE=/opt/homebrew/bin/mise
+[[ -z "$MISE" && -x /usr/local/bin/mise ]] && MISE=/usr/local/bin/mise
+if [[ -z "$MISE" ]]; then
+  note "[auto-deploy] mise not found on PATH — skipping. Run 'bun run deploy' manually."
+  exit 0
+fi
+
+DEPLOY_CMD="$MISE exec -- bun run deploy"
+
+if [[ -n "$DRY" ]]; then
+  note "[auto-deploy] would deploy — bundle paths changed."
+  note "[auto-deploy] command: $DEPLOY_CMD  (logs -> .git/t3-deploy.log)"
+  exit 0
+fi
+
+# 4. Concurrency guard: non-blocking lock (atomic mkdir). If a deploy is already
+#    running, skip — the user can re-run `bun run deploy` or the next commit re-fires.
+LOCK="$ROOT/.git/t3-deploy.lock"
+LOG="$ROOT/.git/t3-deploy.log"
+if ! mkdir "$LOCK" 2>/dev/null; then
+  note "🚀 auto-deploy: a deploy is already running — this commit will be picked up by re-running 'bun run deploy' if needed."
+  exit 0
+fi
+
+# 5. Launch detached. The subshell releases the lock when the deploy finishes.
+#    SSH key is inherited from the committing shell's SSH_AUTH_SOCK.
+{
+  printf '\n===== auto-deploy %s (commit %s) =====\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$(git rev-parse --short HEAD)"
+  $DEPLOY_CMD
+  printf '===== auto-deploy exit %s =====\n' "$?"
+  rmdir "$LOCK" 2>/dev/null || true
+} >>"$LOG" 2>&1 &
+disown 2>/dev/null || true
+
+note "🚀 auto-deploy started in background → tail -f .git/t3-deploy.log  (disable: bun run deploy:auto:off)"
+exit 0

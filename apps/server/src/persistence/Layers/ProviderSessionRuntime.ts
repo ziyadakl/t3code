@@ -1,4 +1,4 @@
-import { ThreadId } from "@t3tools/contracts";
+import { ProjectId, ThreadId } from "@t3tools/contracts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import * as Effect from "effect/Effect";
@@ -29,6 +29,10 @@ const decodeRuntime = Schema.decodeUnknownEffect(ProviderSessionRuntime);
 
 const GetRuntimeRequestSchema = Schema.Struct({
   threadId: ThreadId,
+});
+
+const ListByProjectIdRequestSchema = Schema.Struct({
+  projectId: ProjectId,
 });
 
 const DeleteRuntimeRequestSchema = GetRuntimeRequestSchema;
@@ -122,6 +126,28 @@ const makeProviderSessionRuntimeRepository = Effect.gen(function* () {
       `,
   });
 
+  const listRuntimeRowsByProjectId = SqlSchema.findAll({
+    Request: ListByProjectIdRequestSchema,
+    Result: ProviderSessionRuntimeDbRowSchema,
+    execute: ({ projectId }) =>
+      sql`
+        SELECT
+          psr.thread_id AS "threadId",
+          psr.provider_name AS "providerName",
+          psr.provider_instance_id AS "providerInstanceId",
+          psr.adapter_key AS "adapterKey",
+          psr.runtime_mode AS "runtimeMode",
+          psr.status,
+          psr.last_seen_at AS "lastSeenAt",
+          psr.resume_cursor_json AS "resumeCursor",
+          psr.runtime_payload_json AS "runtimePayload"
+        FROM provider_session_runtime psr
+        JOIN projection_threads pt ON pt.thread_id = psr.thread_id
+        WHERE pt.project_id = ${projectId}
+        ORDER BY psr.last_seen_at ASC, psr.thread_id ASC
+      `,
+  });
+
   const deleteRuntimeByThreadId = SqlSchema.void({
     Request: DeleteRuntimeRequestSchema,
     execute: ({ threadId }) =>
@@ -182,7 +208,31 @@ const makeProviderSessionRuntimeRepository = Effect.gen(function* () {
                 toPersistenceDecodeError("ProviderSessionRuntimeRepository.list:rowToRuntime"),
               ),
             ),
-          { concurrency: "unbounded" },
+          { concurrency: 16 },
+        ),
+      ),
+    );
+
+  const listByProjectId: ProviderSessionRuntimeRepositoryShape["listByProjectId"] = (input) =>
+    listRuntimeRowsByProjectId(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProviderSessionRuntimeRepository.listByProjectId:query",
+          "ProviderSessionRuntimeRepository.listByProjectId:decodeRows",
+        ),
+      ),
+      Effect.flatMap((rows) =>
+        Effect.forEach(
+          rows,
+          (row) =>
+            decodeRuntime(row).pipe(
+              Effect.mapError(
+                toPersistenceDecodeError(
+                  "ProviderSessionRuntimeRepository.listByProjectId:rowToRuntime",
+                ),
+              ),
+            ),
+          { concurrency: 16 },
         ),
       ),
     );
@@ -198,6 +248,7 @@ const makeProviderSessionRuntimeRepository = Effect.gen(function* () {
     upsert,
     getByThreadId,
     list,
+    listByProjectId,
     deleteByThreadId,
   } satisfies ProviderSessionRuntimeRepositoryShape;
 });
