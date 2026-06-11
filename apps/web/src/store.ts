@@ -1624,6 +1624,72 @@ function applyEnvironmentOrchestrationEvent(
         };
       });
 
+    case "thread.conversation-rewound":
+      return updateThreadState(state, event.payload.threadId, (thread) => {
+        // Non-destructive rewind (ADR-0002). The server marks the rewound prompt
+        // and everything after it `abandoned`; mirror that hide on the client by
+        // cutting at the target message's `createdAt`. The rewound prompt itself
+        // leaves the timeline (it is pre-filled into the composer), so we keep
+        // strictly-earlier rows: `createdAt < cut`. The payload carries no
+        // checkpoint list, so this is a createdAt cut, not a turn-retain like
+        // `thread.reverted`.
+        const target = thread.messages.find(
+          (message) => message.id === event.payload.messageId,
+        );
+        if (target === undefined) {
+          // Defensive no-op: target not in the local list (e.g. trimmed by the
+          // MAX_THREAD_MESSAGES cap). Leave the thread untouched.
+          return thread;
+        }
+        const cut = target.createdAt;
+        const messages = thread.messages
+          .filter((message) => message.createdAt < cut)
+          .slice(-MAX_THREAD_MESSAGES);
+        // Checkpoints/turns carry only `completedAt`; under the linear-conversation
+        // invariant a turn that completed before the cut was also requested before
+        // it, so `completedAt < cut` mirrors the server's `requested_at < cut`.
+        const turnDiffSummaries = thread.turnDiffSummaries
+          .filter((entry) => entry.completedAt < cut)
+          .toSorted(
+            (left, right) =>
+              (left.checkpointTurnCount ?? Number.MAX_SAFE_INTEGER) -
+              (right.checkpointTurnCount ?? Number.MAX_SAFE_INTEGER),
+          )
+          .slice(-MAX_THREAD_CHECKPOINTS);
+        // The server projection only flips `abandoned` on messages + turns for a
+        // rewind; it has no rewound case for plans/activities. We still cut them
+        // by `createdAt < cut` here (spec-directed) so the forward timeline UI is
+        // consistent — forward plans/activities belong to now-abandoned turns.
+        const proposedPlans = thread.proposedPlans
+          .filter((plan) => plan.createdAt < cut)
+          .slice(-MAX_THREAD_PROPOSED_PLANS);
+        const activities = thread.activities.filter((activity) => activity.createdAt < cut);
+        const latestCheckpoint = turnDiffSummaries.at(-1) ?? null;
+
+        return {
+          ...thread,
+          turnDiffSummaries,
+          messages,
+          proposedPlans,
+          activities,
+          pendingSourceProposedPlan: undefined,
+          latestTurn:
+            latestCheckpoint === null
+              ? null
+              : {
+                  turnId: latestCheckpoint.turnId,
+                  state: checkpointStatusToLatestTurnState(
+                    (latestCheckpoint.status ?? "ready") as "ready" | "missing" | "error",
+                  ),
+                  requestedAt: latestCheckpoint.completedAt,
+                  startedAt: latestCheckpoint.completedAt,
+                  completedAt: latestCheckpoint.completedAt,
+                  assistantMessageId: latestCheckpoint.assistantMessageId ?? null,
+                },
+          updatedAt: event.occurredAt,
+        };
+      });
+
     case "thread.activity-appended":
       return updateThreadState(state, event.payload.threadId, (thread) => {
         const activities = [

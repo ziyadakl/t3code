@@ -453,6 +453,73 @@ export function applyThreadDetailEvent(
       };
     }
 
+    // ── Conversation rewind (ADR-0002, non-destructive) ─────────────
+    case "thread.conversation-rewound": {
+      // The server marks the rewound prompt and everything after it
+      // `abandoned`. Mirror that hide here by cutting at the target message's
+      // `createdAt`: keep strictly-earlier rows (`createdAt < cut`). The rewound
+      // prompt itself leaves the timeline (pre-filled into the composer). The
+      // payload carries no checkpoint list, so this is a createdAt cut rather
+      // than a turn-retain like `thread.reverted`.
+      const target = thread.messages.find((message) => message.id === event.payload.messageId);
+      if (target === undefined) {
+        // Defensive no-op: target not in the local list.
+        return { kind: "unchanged" };
+      }
+      const cut = target.createdAt;
+      const messages = pipe(
+        thread.messages,
+        Arr.filter((message) => message.createdAt < cut),
+        Arr.takeRight(limits.maxMessages),
+      );
+      // Checkpoints carry only `completedAt`; under the linear-conversation
+      // invariant `completedAt < cut` mirrors the server's `requested_at < cut`.
+      const checkpoints = pipe(
+        thread.checkpoints,
+        Arr.filter((entry) => entry.completedAt < cut),
+        Arr.sort(checkpointOrder),
+        Arr.takeRight(limits.maxCheckpoints),
+      );
+      // The server projection only flips `abandoned` on messages + turns for a
+      // rewind (no rewound case for plans/activities). We still cut them by
+      // `createdAt < cut` (spec-directed) so the forward timeline stays consistent.
+      const proposedPlans = pipe(
+        thread.proposedPlans,
+        Arr.filter((plan) => plan.createdAt < cut),
+        Arr.takeRight(limits.maxProposedPlans),
+      );
+      const activities = pipe(
+        thread.activities,
+        Arr.filter((activity) => activity.createdAt < cut),
+      );
+      const latestCheckpoint = checkpoints.at(-1) ?? null;
+
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          checkpoints,
+          messages,
+          proposedPlans,
+          activities,
+          latestTurn:
+            latestCheckpoint === null
+              ? null
+              : {
+                  turnId: latestCheckpoint.turnId,
+                  state: checkpointStatusToTurnState(
+                    latestCheckpoint.status as "ready" | "missing" | "error",
+                  ),
+                  requestedAt: latestCheckpoint.completedAt,
+                  startedAt: latestCheckpoint.completedAt,
+                  completedAt: latestCheckpoint.completedAt,
+                  assistantMessageId: latestCheckpoint.assistantMessageId ?? null,
+                },
+          updatedAt: event.occurredAt,
+        },
+      };
+    }
+
     // ── Activities ──────────────────────────────────────────────────
     case "thread.activity-appended": {
       const activities = pipe(
