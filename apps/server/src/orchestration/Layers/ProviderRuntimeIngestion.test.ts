@@ -35,6 +35,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
 import {
   ProviderService,
   type ProviderServiceShape,
@@ -47,6 +48,7 @@ import { ProviderRuntimeIngestionLive } from "./ProviderRuntimeIngestion.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
+import { ProjectionThreadMessageRepository } from "../../persistence/Services/ProjectionThreadMessages.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -191,7 +193,10 @@ async function waitForThread(
 
 describe("ProviderRuntimeIngestion", () => {
   let runtime: ManagedRuntime.ManagedRuntime<
-    OrchestrationEngineService | ProviderRuntimeIngestionService | ProjectionSnapshotQuery,
+    | OrchestrationEngineService
+    | ProviderRuntimeIngestionService
+    | ProjectionSnapshotQuery
+    | ProjectionThreadMessageRepository,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -236,6 +241,7 @@ describe("ProviderRuntimeIngestion", () => {
     const layer = ProviderRuntimeIngestionLive.pipe(
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(projectionSnapshotLayer),
+      Layer.provideMerge(ProjectionThreadMessageRepositoryLive),
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
       Layer.provideMerge(makeTestServerSettingsLayer(options?.serverSettings)),
@@ -309,12 +315,18 @@ describe("ProviderRuntimeIngestion", () => {
       updatedAt: createdAt,
     });
 
+    const messageRepo = await runtime.runPromise(
+      Effect.service(ProjectionThreadMessageRepository),
+    );
+
     return {
       engine,
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
       emit: provider.emit,
       setProviderSession: provider.setSession,
       drain,
+      listMessages: (threadId: ThreadId = asThreadId("thread-1")) =>
+        Effect.runPromise(messageRepo.listByThreadId({ threadId })),
     };
   }
 
@@ -717,6 +729,74 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(message?.text).toBe("hello world");
     expect(message?.streaming).toBe(false);
+  });
+
+  it("stamps the turn-final assistant provider uuid (rewind anchor) onto the persisted message", async () => {
+    // Reproduces the conversation-rewind anchor bug (ADR-0002): on a live
+    // streaming turn the assistant message is finalized AND forgotten at
+    // `item.completed`, which fires before `turn.completed` arrives carrying the
+    // real `assistantMessageUuid`. The uuid must still land on the persisted row
+    // (the rewind anchor reads `provider_message_uuid`); the read model omits the
+    // field, so we assert against the projection repository directly.
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const anchorUuid = "11111111-2222-3333-4444-555555555555";
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-uuid-turn-started"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-uuid"),
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-uuid-delta"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-uuid"),
+      itemId: asItemId("item-uuid"),
+      payload: { streamKind: "assistant_text", delta: "Got it" },
+    });
+    // Finalizes AND forgets the assistant message id — before the uuid arrives.
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-uuid-item"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-uuid"),
+      itemId: asItemId("item-uuid"),
+      payload: { itemType: "assistant_message", status: "completed" },
+    });
+    // Canonical turn.completed carrying the uuid (payload defined → bypasses the
+    // legacy normalizer, exactly like the real ClaudeAdapter emit).
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-uuid-turn-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-uuid"),
+      payload: { state: "completed", assistantMessageUuid: anchorUuid },
+    });
+
+    await waitForThread(
+      harness.readModel,
+      (entry) =>
+        entry.messages.some(
+          (message: ProviderRuntimeTestMessage) =>
+            message.id === "assistant:item-uuid" && !message.streaming,
+        ) && entry.session?.status === "ready",
+    );
+    await harness.drain();
+
+    const messages = await harness.listMessages();
+    const assistant = messages.find((row) => row.messageId === "assistant:item-uuid");
+    expect(assistant).toBeDefined();
+    expect(assistant?.providerMessageUuid).toBe(anchorUuid);
   });
 
   it("uses assistant item completion detail when no assistant deltas were streamed", async () => {

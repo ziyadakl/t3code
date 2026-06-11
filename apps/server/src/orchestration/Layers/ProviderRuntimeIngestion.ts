@@ -107,6 +107,26 @@ function hasAssistantMessageForTurn(
   return false;
 }
 
+// The turn-final assistant message id, derived from the projection (ascending
+// creation order). Used at `turn.completed` to stamp the rewind-anchor uuid:
+// the streaming `item.completed` finalizes AND forgets the in-memory message id
+// before `turn.completed` arrives with the uuid, so the projection — which
+// survives the forget — is the only reliable source for the anchor row.
+function findLastAssistantMessageIdForTurn(
+  messages: ReadonlyArray<OrchestrationMessage>,
+  turnId: TurnId,
+): MessageId | undefined {
+  let lastId: MessageId | undefined;
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (!message || message.role !== "assistant" || message.turnId !== turnId) {
+      continue;
+    }
+    lastId = message.id;
+  }
+  return lastId;
+}
+
 function findMessageById(
   messages: ReadonlyArray<OrchestrationMessage>,
   messageId: MessageId,
@@ -1545,6 +1565,31 @@ const make = Effect.gen(function* () {
               }),
             { concurrency: 1 },
           ).pipe(Effect.asVoid);
+
+          // On a live streaming turn the assistant message is finalized AND
+          // forgotten at `item.completed` (which fires before this
+          // `turn.completed`), so `assistantMessageIds` above is empty and the
+          // loop never stamps the rewind-anchor uuid. Derive the turn-final
+          // assistant row from the projection — which survives the forget — and
+          // stamp the uuid onto it directly. The projection COALESCEs the uuid
+          // onto the existing row, leaving its text untouched (ADR-0002).
+          if (assistantMessageUuid !== undefined) {
+            const turnFinalAssistantMessageId = findLastAssistantMessageIdForTurn(messages, turnId);
+            if (
+              turnFinalAssistantMessageId !== undefined &&
+              !assistantMessageIds.includes(turnFinalAssistantMessageId)
+            ) {
+              yield* orchestrationEngine.dispatch({
+                type: "thread.message.assistant.complete",
+                commandId: yield* providerCommandId(event, "assistant-uuid-stamp"),
+                threadId: thread.id,
+                messageId: turnFinalAssistantMessageId,
+                turnId,
+                providerMessageUuid: assistantMessageUuid,
+                createdAt: now,
+              });
+            }
+          }
           yield* clearAssistantMessageIdsForTurn(thread.id, turnId);
           yield* clearAssistantSegmentStateForTurn(thread.id, turnId);
 
