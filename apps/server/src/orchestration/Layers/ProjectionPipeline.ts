@@ -863,6 +863,26 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
         }
 
+        // Non-destructive conversation rewind (ADR-0002). Unlike `thread.reverted`
+        // (which deletes forward rows above), this flips `abandoned = 1` in place
+        // on the rewound prompt and every message after it, so the active timeline
+        // hides them while the rows are retained. The reactor (WS-2) resolves the
+        // anchor and emits this event; here we resolve the cut timestamp from the
+        // target prompt and mark forward rows.
+        case "thread.conversation-rewound": {
+          const targetMessage = yield* projectionThreadMessageRepository.getByMessageId({
+            messageId: event.payload.messageId,
+          });
+          if (Option.isNone(targetMessage)) {
+            return;
+          }
+          yield* projectionThreadMessageRepository.markAbandonedFromCreatedAt({
+            threadId: event.payload.threadId,
+            fromCreatedAt: targetMessage.value.createdAt,
+          });
+          return;
+        }
+
         default:
           return;
       }
@@ -1237,6 +1257,23 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
                   }),
             { concurrency: 1 },
           ).pipe(Effect.asVoid);
+          return;
+        }
+
+        // Non-destructive conversation rewind (ADR-0002): flip `abandoned = 1` on
+        // every turn requested at or after the rewound prompt, mirroring the
+        // message flip above. Turns are never deleted here.
+        case "thread.conversation-rewound": {
+          const targetMessage = yield* projectionThreadMessageRepository.getByMessageId({
+            messageId: event.payload.messageId,
+          });
+          if (Option.isNone(targetMessage)) {
+            return;
+          }
+          yield* projectionTurnRepository.markAbandonedFromRequestedAt({
+            threadId: event.payload.threadId,
+            fromRequestedAt: targetMessage.value.createdAt,
+          });
           return;
         }
 

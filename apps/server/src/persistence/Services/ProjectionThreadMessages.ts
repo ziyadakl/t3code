@@ -31,11 +31,25 @@ export const ProjectionThreadMessage = Schema.Struct({
   // Claude provider message uuid — the conversation-rewind anchor. Nullable:
   // user messages, mid-turn assistant segments, and legacy rows have none.
   providerMessageUuid: Schema.optional(Schema.NullOr(Schema.String)),
+  // Conversation-rewind "hide, don't delete" flag (ADR-0002). True once a
+  // rewind marks this row as forward-of-the-anchor; the active timeline read
+  // path filters these out while the row itself is retained. Optional/defaults
+  // false for callers that never touch it.
+  abandoned: Schema.optional(Schema.Boolean),
   isStreaming: Schema.Boolean,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
 export type ProjectionThreadMessage = typeof ProjectionThreadMessage.Type;
+
+export const MarkProjectionThreadMessagesAbandonedInput = Schema.Struct({
+  threadId: ThreadId,
+  // Inclusive lower bound: every message at or after this creation timestamp is
+  // marked abandoned (the rewound prompt and everything forward of it).
+  fromCreatedAt: IsoDateTime,
+});
+export type MarkProjectionThreadMessagesAbandonedInput =
+  typeof MarkProjectionThreadMessagesAbandonedInput.Type;
 
 export const ListProjectionThreadMessagesInput = Schema.Struct({
   threadId: ThreadId,
@@ -87,6 +101,16 @@ export interface ProjectionThreadMessageRepositoryShape {
   readonly deleteByThreadId: (
     input: DeleteProjectionThreadMessagesInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  /**
+   * Non-destructive conversation rewind (ADR-0002): flip `abandoned = 1` on
+   * every message row at or after `fromCreatedAt` for a thread. Rows are never
+   * deleted — the active timeline read path filters them, the event log /
+   * transcript retain them. Returns the number of rows flipped.
+   */
+  readonly markAbandonedFromCreatedAt: (
+    input: MarkProjectionThreadMessagesAbandonedInput,
+  ) => Effect.Effect<number, ProjectionRepositoryError>;
 }
 
 /**

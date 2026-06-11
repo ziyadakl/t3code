@@ -807,6 +807,20 @@ const ThreadRevertCompleteCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+// Server-only bridge command (ADR-0002): the rewind reactor (WS-2) dispatches
+// this once it has resolved the anchor + set the cursor marker; the decider
+// turns it into the terminal `thread.conversation-rewound` event (mirrors the
+// `thread.revert.complete` → `thread.reverted` pattern). Never sent by clients.
+const ThreadConversationRewindCompleteCommand = Schema.Struct({
+  type: Schema.Literal("thread.conversation-rewind.complete"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  anchorProviderMessageUuid: Schema.optional(Schema.String),
+  turnCount: NonNegativeInt,
+  createdAt: IsoDateTime,
+});
+
 const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
   ThreadMessageAssistantDeltaCommand,
@@ -816,6 +830,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadTurnDiffCompleteCommand,
   ThreadActivityAppendCommand,
   ThreadRevertCompleteCommand,
+  ThreadConversationRewindCompleteCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 

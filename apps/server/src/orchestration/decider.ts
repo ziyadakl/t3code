@@ -812,6 +812,35 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    // Server-only bridge (ADR-0002): the rewind reactor (WS-2) dispatches
+    // `thread.conversation-rewind.complete` after it has resolved the anchor and
+    // set the cursor marker; this turns it into the terminal event the
+    // ProjectionPipeline applies as a non-destructive "mark abandoned".
+    case "thread.conversation-rewind.complete": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.conversation-rewound",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          ...(command.anchorProviderMessageUuid !== undefined
+            ? { anchorProviderMessageUuid: command.anchorProviderMessageUuid }
+            : {}),
+          turnCount: command.turnCount,
+        },
+      };
+    }
+
     case "thread.activity.append": {
       yield* requireThread({
         readModel,

@@ -180,4 +180,59 @@ layer("ProjectionThreadMessageRepository", (it) => {
       }
     }),
   );
+
+  // ADR-0002 non-destructive conversation rewind. The mark path must FLIP the
+  // `abandoned` flag on the rewound prompt and everything forward of it — never
+  // delete rows — and report the count of newly hidden rows.
+  it.effect("markAbandonedFromCreatedAt flips forward rows without deleting them", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectionThreadMessageRepository;
+      const threadId = ThreadId.make("thread-rewind-mark");
+
+      const seed = (suffix: string, role: "user" | "assistant", createdAt: string) =>
+        repository.upsert({
+          messageId: MessageId.make(`message-${suffix}`),
+          threadId,
+          turnId: null,
+          role,
+          text: suffix,
+          isStreaming: false,
+          createdAt,
+          updatedAt: createdAt,
+        });
+
+      yield* seed("a-user", "user", "2026-03-01T10:00:00.000Z");
+      yield* seed("a-assistant", "assistant", "2026-03-01T10:00:01.000Z");
+      yield* seed("b-user", "user", "2026-03-01T10:00:02.000Z"); // rewind target
+      yield* seed("b-assistant", "assistant", "2026-03-01T10:00:03.000Z");
+      yield* seed("c-user", "user", "2026-03-01T10:00:04.000Z");
+
+      const flipped = yield* repository.markAbandonedFromCreatedAt({
+        threadId,
+        fromCreatedAt: "2026-03-01T10:00:02.000Z",
+      });
+      // b-user (the target prompt), b-assistant, c-user.
+      assert.equal(flipped, 3);
+
+      // Non-destructive: every row is still present in the unfiltered repo read.
+      const rows = yield* repository.listByThreadId({ threadId });
+      assert.equal(rows.length, 5);
+
+      const abandonedIds = rows
+        .filter((row) => row.abandoned === true)
+        .map((row) => String(row.messageId));
+      assert.deepEqual(abandonedIds.toSorted(), [
+        "message-b-assistant",
+        "message-b-user",
+        "message-c-user",
+      ]);
+
+      // A repeated rewind to the same point flips nothing new (idempotent count).
+      const flippedAgain = yield* repository.markAbandonedFromCreatedAt({
+        threadId,
+        fromCreatedAt: "2026-03-01T10:00:02.000Z",
+      });
+      assert.equal(flippedAgain, 0);
+    }),
+  );
 });

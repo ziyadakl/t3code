@@ -10,6 +10,7 @@ import { ChatAttachment } from "@t3tools/contracts";
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
   GetProjectionThreadMessageInput,
+  MarkProjectionThreadMessagesAbandonedInput,
   ProjectionThreadMessageRepository,
   type ProjectionThreadMessageRepositoryShape,
   DeleteProjectionThreadMessagesInput,
@@ -22,8 +23,11 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
     isStreaming: Schema.Number,
     attachments: Schema.NullOr(Schema.fromJsonString(Schema.Array(ChatAttachment))),
     providerMessageUuid: Schema.NullOr(Schema.String),
+    abandoned: Schema.Number,
   }),
 );
+
+const MarkedMessageIdRowSchema = Schema.Struct({ messageId: Schema.String });
 
 function toProjectionThreadMessage(
   row: Schema.Schema.Type<typeof ProjectionThreadMessageDbRowSchema>,
@@ -35,6 +39,7 @@ function toProjectionThreadMessage(
     role: row.role,
     text: row.text,
     isStreaming: row.isStreaming === 1,
+    abandoned: row.abandoned === 1,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     ...(row.attachments !== null ? { attachments: row.attachments } : {}),
@@ -59,6 +64,11 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
       // last non-null = the rewind anchor.
       const nextProviderMessageUuid =
         row.providerMessageUuid !== undefined ? row.providerMessageUuid : null;
+      // Conversation-rewind flag is owned by the dedicated mark/UPDATE path, not
+      // by upserts. A normal upsert must never clear an already-set abandoned
+      // flag (e.g. a late streaming delta on a rewound row), so preserve the
+      // existing value on conflict and default new rows to 0.
+      const nextAbandoned = row.abandoned === true ? 1 : null;
       return sql`
         INSERT INTO projection_thread_messages (
           message_id,
@@ -68,6 +78,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           text,
           attachments_json,
           provider_message_uuid,
+          abandoned,
           is_streaming,
           created_at,
           updated_at
@@ -94,6 +105,15 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
               WHERE message_id = ${row.messageId}
             )
           ),
+          COALESCE(
+            ${nextAbandoned},
+            (
+              SELECT abandoned
+              FROM projection_thread_messages
+              WHERE message_id = ${row.messageId}
+            ),
+            0
+          ),
           ${row.isStreaming ? 1 : 0},
           ${row.createdAt},
           ${row.updatedAt}
@@ -111,6 +131,10 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           provider_message_uuid = COALESCE(
             excluded.provider_message_uuid,
             projection_thread_messages.provider_message_uuid
+          ),
+          abandoned = COALESCE(
+            ${nextAbandoned},
+            projection_thread_messages.abandoned
           ),
           is_streaming = excluded.is_streaming,
           created_at = excluded.created_at,
@@ -132,6 +156,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           text,
           attachments_json AS "attachments",
           provider_message_uuid AS "providerMessageUuid",
+          abandoned,
           is_streaming AS "isStreaming",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
@@ -154,6 +179,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           text,
           attachments_json AS "attachments",
           provider_message_uuid AS "providerMessageUuid",
+          abandoned,
           is_streaming AS "isStreaming",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
@@ -169,6 +195,23 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
       sql`
         DELETE FROM projection_thread_messages
         WHERE thread_id = ${threadId}
+      `,
+  });
+
+  // Non-destructive rewind: flip the flag in place and RETURN the flipped ids so
+  // callers get an accurate count. Already-abandoned rows are excluded so a
+  // repeated rewind to the same point reports 0 newly hidden rows.
+  const markProjectionThreadMessageRowsAbandoned = SqlSchema.findAll({
+    Request: MarkProjectionThreadMessagesAbandonedInput,
+    Result: MarkedMessageIdRowSchema,
+    execute: ({ threadId, fromCreatedAt }) =>
+      sql`
+        UPDATE projection_thread_messages
+        SET abandoned = 1
+        WHERE thread_id = ${threadId}
+          AND abandoned = 0
+          AND created_at >= ${fromCreatedAt}
+        RETURNING message_id AS "messageId"
       `,
   });
 
@@ -200,11 +243,23 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
       ),
     );
 
+  const markAbandonedFromCreatedAt: ProjectionThreadMessageRepositoryShape["markAbandonedFromCreatedAt"] =
+    (input) =>
+      markProjectionThreadMessageRowsAbandoned(input).pipe(
+        Effect.mapError(
+          toPersistenceSqlError(
+            "ProjectionThreadMessageRepository.markAbandonedFromCreatedAt:query",
+          ),
+        ),
+        Effect.map((rows) => rows.length),
+      );
+
   return {
     upsert,
     getByMessageId,
     listByThreadId,
     deleteByThreadId,
+    markAbandonedFromCreatedAt,
   } satisfies ProjectionThreadMessageRepositoryShape;
 });
 
