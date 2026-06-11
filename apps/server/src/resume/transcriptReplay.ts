@@ -171,6 +171,9 @@ export function buildReplayCommands(
         threadId: ctx.threadId,
         messageId,
         text: formatCommandInvocation(text) ?? text,
+        // Persist the Claude transcript uuid so an imported chat can be rewound
+        // to this prompt (ADR-0002).
+        providerMessageUuid: entry.uuid,
         createdAt,
       });
     } else if (entry.type === "assistant") {
@@ -183,6 +186,8 @@ export function buildReplayCommands(
         threadId: ctx.threadId,
         messageId,
         delta: text,
+        // The rewind anchor uuid for this assistant message (ADR-0002).
+        providerMessageUuid: entry.uuid,
         createdAt: delta.createdAt,
       });
       const complete = take();

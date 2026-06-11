@@ -21,6 +21,7 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
   Struct.assign({
     isStreaming: Schema.Number,
     attachments: Schema.NullOr(Schema.fromJsonString(Schema.Array(ChatAttachment))),
+    providerMessageUuid: Schema.NullOr(Schema.String),
   }),
 );
 
@@ -37,6 +38,9 @@ function toProjectionThreadMessage(
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     ...(row.attachments !== null ? { attachments: row.attachments } : {}),
+    ...(row.providerMessageUuid !== null
+      ? { providerMessageUuid: row.providerMessageUuid }
+      : {}),
   };
 }
 
@@ -48,6 +52,13 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
     execute: (row) => {
       const nextAttachmentsJson =
         row.attachments !== undefined ? JSON.stringify(row.attachments) : null;
+      // Nullable anchor uuid. The streaming `assistant.delta` writes this row
+      // first with a null uuid; the later `assistant.complete` carries the real
+      // (turn-final) uuid. COALESCE makes a non-null value win and never lets a
+      // subsequent null overwrite it — mirroring attachments_json above so the
+      // last non-null = the rewind anchor.
+      const nextProviderMessageUuid =
+        row.providerMessageUuid !== undefined ? row.providerMessageUuid : null;
       return sql`
         INSERT INTO projection_thread_messages (
           message_id,
@@ -56,6 +67,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           role,
           text,
           attachments_json,
+          provider_message_uuid,
           is_streaming,
           created_at,
           updated_at
@@ -74,6 +86,14 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
               WHERE message_id = ${row.messageId}
             )
           ),
+          COALESCE(
+            ${nextProviderMessageUuid},
+            (
+              SELECT provider_message_uuid
+              FROM projection_thread_messages
+              WHERE message_id = ${row.messageId}
+            )
+          ),
           ${row.isStreaming ? 1 : 0},
           ${row.createdAt},
           ${row.updatedAt}
@@ -87,6 +107,10 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           attachments_json = COALESCE(
             excluded.attachments_json,
             projection_thread_messages.attachments_json
+          ),
+          provider_message_uuid = COALESCE(
+            excluded.provider_message_uuid,
+            projection_thread_messages.provider_message_uuid
           ),
           is_streaming = excluded.is_streaming,
           created_at = excluded.created_at,
@@ -107,6 +131,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           role,
           text,
           attachments_json AS "attachments",
+          provider_message_uuid AS "providerMessageUuid",
           is_streaming AS "isStreaming",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
@@ -128,6 +153,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           role,
           text,
           attachments_json AS "attachments",
+          provider_message_uuid AS "providerMessageUuid",
           is_streaming AS "isStreaming",
           created_at AS "createdAt",
           updated_at AS "updatedAt"

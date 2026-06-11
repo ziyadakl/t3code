@@ -905,6 +905,10 @@ const make = Effect.gen(function* () {
     finalDeltaCommandTag: string;
     fallbackText?: string;
     hasProjectedMessage?: boolean;
+    // Turn-final Claude assistant message uuid (the conversation-rewind anchor,
+    // ADR-0002). Stamped onto the completion command; the projection persists it
+    // via COALESCE so the row born uuid-null on the streaming delta gets it now.
+    providerMessageUuid?: string;
   }) =>
     Effect.gen(function* () {
       const bufferedText = yield* takeBufferedAssistantText(input.messageId);
@@ -935,6 +939,9 @@ const make = Effect.gen(function* () {
           threadId: input.threadId,
           messageId: input.messageId,
           ...(input.turnId ? { turnId: input.turnId } : {}),
+          ...(input.providerMessageUuid !== undefined
+            ? { providerMessageUuid: input.providerMessageUuid }
+            : {}),
           createdAt: input.createdAt,
         });
       }
@@ -1507,7 +1514,18 @@ const make = Effect.gen(function* () {
         const proposedPlans = detailedThread?.proposedPlans ?? [];
         const turnId = toTurnId(event.turnId);
         if (turnId) {
-          const assistantMessageIds = yield* getAssistantMessageIdsForTurn(thread.id, turnId);
+          const assistantMessageIdSet = yield* getAssistantMessageIdsForTurn(thread.id, turnId);
+          const assistantMessageIds = [...assistantMessageIdSet];
+          // The turn-final assistant uuid (the conversation-rewind anchor,
+          // ADR-0002) is singular; stamp it only on the LAST assistant message of
+          // the turn (insertion order) — that is the row a rewind ever anchors
+          // to. Mid-turn tool-split segments correctly stay uuid-null.
+          const assistantMessageUuid =
+            event.type === "turn.completed" ? event.payload.assistantMessageUuid : undefined;
+          const lastAssistantMessageId =
+            assistantMessageIds.length > 0
+              ? assistantMessageIds[assistantMessageIds.length - 1]
+              : undefined;
           yield* Effect.forEach(
             assistantMessageIds,
             (assistantMessageId) =>
@@ -1520,6 +1538,10 @@ const make = Effect.gen(function* () {
                 commandTag: "assistant-complete-finalize",
                 finalDeltaCommandTag: "assistant-delta-finalize-fallback",
                 hasProjectedMessage: findMessageById(messages, assistantMessageId) !== undefined,
+                ...(assistantMessageUuid !== undefined &&
+                assistantMessageId === lastAssistantMessageId
+                  ? { providerMessageUuid: assistantMessageUuid }
+                  : {}),
               }),
             { concurrency: 1 },
           ).pipe(Effect.asVoid);

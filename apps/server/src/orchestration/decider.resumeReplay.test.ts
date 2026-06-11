@@ -105,4 +105,83 @@ it.layer(NodeServices.layer)("decider resume-replay", (it) => {
       }
     }),
   );
+
+  // ADR-0002: the conversation-rewind anchor uuid must flow command -> payload
+  // for the assistant completion (the live write path stamps it here).
+  it.effect("threads providerMessageUuid through assistant.complete to message-sent", () =>
+    Effect.gen(function* () {
+      const readModel = yield* seedThread;
+
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.message.assistant.complete",
+          commandId: asCommandId("cmd-assistant-complete"),
+          threadId: ThreadId.make("thread-replay"),
+          messageId: MessageId.make("msg-replay-asst"),
+          providerMessageUuid: "claude-uuid-abc",
+          createdAt: now,
+        },
+        readModel,
+      });
+
+      const events = Array.isArray(result) ? result : [result];
+      const event = events[0];
+      if (event?.type === "thread.message-sent") {
+        expect(event.payload.role).toBe("assistant");
+        expect(event.payload.providerMessageUuid).toBe("claude-uuid-abc");
+      } else {
+        throw new Error(`expected a thread.message-sent event, got ${event?.type}`);
+      }
+    }),
+  );
+
+  // ADR-0002 scaffolding: the two new client commands decode to their requested
+  // events so the union stays exhaustive and Phase 1 builds on frozen types.
+  it.effect("maps thread.conversation.rewind to a conversation-rewind-requested event", () =>
+    Effect.gen(function* () {
+      const readModel = yield* seedThread;
+
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.conversation.rewind",
+          commandId: asCommandId("cmd-rewind"),
+          threadId: ThreadId.make("thread-replay"),
+          messageId: MessageId.make("msg-replay-target"),
+          createdAt: now,
+        },
+        readModel,
+      });
+
+      const events = Array.isArray(result) ? result : [result];
+      const event = events[0];
+      expect(event?.type).toBe("thread.conversation-rewind-requested");
+      if (event?.type === "thread.conversation-rewind-requested") {
+        expect(event.payload.messageId).toBe("msg-replay-target");
+      }
+    }),
+  );
+
+  it.effect("maps thread.files.restore to a files-restore-requested event", () =>
+    Effect.gen(function* () {
+      const readModel = yield* seedThread;
+
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.files.restore",
+          commandId: asCommandId("cmd-files-restore"),
+          threadId: ThreadId.make("thread-replay"),
+          turnCount: 3,
+          createdAt: now,
+        },
+        readModel,
+      });
+
+      const events = Array.isArray(result) ? result : [result];
+      const event = events[0];
+      expect(event?.type).toBe("thread.files-restore-requested");
+      if (event?.type === "thread.files-restore-requested") {
+        expect(event.payload.turnCount).toBe(3);
+      }
+    }),
+  );
 });

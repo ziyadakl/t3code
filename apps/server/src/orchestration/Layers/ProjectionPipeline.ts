@@ -817,6 +817,12 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             role: event.payload.role,
             text: nextText,
             ...(nextAttachments !== undefined ? { attachments: [...nextAttachments] } : {}),
+            // Conversation-rewind anchor (ADR-0002). Persisted via COALESCE in the
+            // repo, so a later uuid-bearing event (assistant.complete) sets it and
+            // an earlier uuid-less streaming delta never nulls it out.
+            ...(event.payload.providerMessageUuid !== undefined
+              ? { providerMessageUuid: event.payload.providerMessageUuid }
+              : {}),
             isStreaming: event.payload.streaming,
             createdAt: previousMessage?.createdAt ?? event.payload.createdAt,
             updatedAt: event.payload.updatedAt,

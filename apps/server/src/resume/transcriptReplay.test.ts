@@ -25,6 +25,8 @@ describe("buildReplayCommands", () => {
       // deterministic id + monotonic timestamp for idempotent, ordered replay
       expect(command.commandId).toBe(`server:resume-replay:${ctx.sessionId}:0`);
       expect(command.createdAt).toBe("2026-01-01T00:00:00.000Z");
+      // ADR-0002: the Claude transcript uuid is the rewind anchor.
+      expect(command.providerMessageUuid).toBe("u1");
     }
   });
 
@@ -48,6 +50,8 @@ describe("buildReplayCommands", () => {
     if (delta?.type === "thread.message.assistant.delta") {
       expect(delta.delta).toBe("done, added it");
       expect(delta.messageId).toBe("resume:a1");
+      // ADR-0002: the assistant message carries its rewind-anchor uuid.
+      expect(delta.providerMessageUuid).toBe("a1");
     }
     if (complete?.type === "thread.message.assistant.complete") {
       // same messageId so complete finalizes the message delta created

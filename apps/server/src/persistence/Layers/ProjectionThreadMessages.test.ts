@@ -111,4 +111,73 @@ layer("ProjectionThreadMessageRepository", (it) => {
       assert.deepEqual(rows[0]?.attachments, []);
     }),
   );
+
+  // ADR-0002 conversation-rewind anchor. The live write path creates the row on
+  // a streaming `assistant.delta` (uuid-null), then stamps the turn-final uuid on
+  // `assistant.complete`. COALESCE must let the non-null uuid win and never let a
+  // subsequent uuid-less upsert null it back out.
+  it.effect("persists providerMessageUuid via COALESCE (non-null wins, never nulled)", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectionThreadMessageRepository;
+      const threadId = ThreadId.make("thread-uuid-anchor");
+      const messageId = MessageId.make("message-uuid-anchor");
+      const createdAt = "2026-02-28T20:00:00.000Z";
+
+      // Streaming delta: row born with no anchor uuid.
+      yield* repository.upsert({
+        messageId,
+        threadId,
+        turnId: null,
+        role: "assistant",
+        text: "partial",
+        isStreaming: true,
+        createdAt,
+        updatedAt: "2026-02-28T20:00:01.000Z",
+      });
+
+      let row = yield* repository.getByMessageId({ messageId });
+      assert.equal(row._tag, "Some");
+      if (row._tag === "Some") {
+        assert.equal(row.value.providerMessageUuid, undefined);
+      }
+
+      // Completion stamps the turn-final uuid.
+      yield* repository.upsert({
+        messageId,
+        threadId,
+        turnId: null,
+        role: "assistant",
+        text: "",
+        providerMessageUuid: "claude-uuid-123",
+        isStreaming: false,
+        createdAt,
+        updatedAt: "2026-02-28T20:00:02.000Z",
+      });
+
+      row = yield* repository.getByMessageId({ messageId });
+      assert.equal(row._tag, "Some");
+      if (row._tag === "Some") {
+        assert.equal(row.value.providerMessageUuid, "claude-uuid-123");
+      }
+
+      // A later uuid-less upsert must NOT clear the persisted anchor.
+      yield* repository.upsert({
+        messageId,
+        threadId,
+        turnId: null,
+        role: "assistant",
+        text: "edited",
+        isStreaming: false,
+        createdAt,
+        updatedAt: "2026-02-28T20:00:03.000Z",
+      });
+
+      row = yield* repository.getByMessageId({ messageId });
+      assert.equal(row._tag, "Some");
+      if (row._tag === "Some") {
+        assert.equal(row.value.providerMessageUuid, "claude-uuid-123");
+        assert.equal(row.value.text, "edited");
+      }
+    }),
+  );
 });
