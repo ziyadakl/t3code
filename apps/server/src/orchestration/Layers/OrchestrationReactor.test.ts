@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
+import { RewindReactor } from "../Services/RewindReactor.ts";
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
 import { OrchestrationReactor } from "../Services/OrchestrationReactor.ts";
 import { ResumeSeedReactor } from "../../resume/ResumeSeedReactor.ts";
@@ -56,6 +57,15 @@ describe("OrchestrationReactor", () => {
           }),
         ),
         Layer.provideMerge(
+          Layer.succeed(RewindReactor, {
+            start: () => {
+              started.push("rewind-reactor");
+              return Effect.void;
+            },
+            drain: Effect.void,
+          }),
+        ),
+        Layer.provideMerge(
           Layer.succeed(ThreadDeletionReactor, {
             start: () => {
               started.push("thread-deletion-reactor");
@@ -83,6 +93,7 @@ describe("OrchestrationReactor", () => {
       "provider-runtime-ingestion",
       "provider-command-reactor",
       "checkpoint-reactor",
+      "rewind-reactor",
       "thread-deletion-reactor",
       "resume-seed-reactor",
     ]);

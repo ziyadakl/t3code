@@ -8,6 +8,7 @@ import {
 import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
+import { RewindReactor } from "../Services/RewindReactor.ts";
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
 import { ResumeSeedReactor } from "../../resume/ResumeSeedReactor.ts";
 
@@ -15,6 +16,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
   const providerRuntimeIngestion = yield* ProviderRuntimeIngestionService;
   const providerCommandReactor = yield* ProviderCommandReactor;
   const checkpointReactor = yield* CheckpointReactor;
+  const rewindReactor = yield* RewindReactor;
   const threadDeletionReactor = yield* ThreadDeletionReactor;
   const resumeSeedReactor = yield* ResumeSeedReactor;
 
@@ -22,6 +24,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
     yield* providerRuntimeIngestion.start();
     yield* providerCommandReactor.start();
     yield* checkpointReactor.start();
+    yield* rewindReactor.start();
     yield* threadDeletionReactor.start();
     yield* resumeSeedReactor.start();
   });

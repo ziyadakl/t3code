@@ -29,6 +29,8 @@ import { OrchestrationCommandReceiptRepositoryLive } from "../src/persistence/La
 import { OrchestrationEventStoreLive } from "../src/persistence/Layers/OrchestrationEventStore.ts";
 import { ProjectionCheckpointRepositoryLive } from "../src/persistence/Layers/ProjectionCheckpoints.ts";
 import { ProjectionPendingApprovalRepositoryLive } from "../src/persistence/Layers/ProjectionPendingApprovals.ts";
+import { ProjectionThreadMessageRepositoryLive } from "../src/persistence/Layers/ProjectionThreadMessages.ts";
+import { ProjectionTurnRepositoryLive } from "../src/persistence/Layers/ProjectionTurns.ts";
 import { ProviderSessionRuntimeRepositoryLive } from "../src/persistence/Layers/ProviderSessionRuntime.ts";
 import { makeSqlitePersistenceLive } from "../src/persistence/Layers/Sqlite.ts";
 import { ProjectionCheckpointRepository } from "../src/persistence/Services/ProjectionCheckpoints.ts";
@@ -52,6 +54,7 @@ import { OrchestrationProjectionPipelineLive } from "../src/orchestration/Layers
 import { OrchestrationProjectionSnapshotQueryLive } from "../src/orchestration/Layers/ProjectionSnapshotQuery.ts";
 import { RuntimeReceiptBusTest } from "../src/orchestration/Layers/RuntimeReceiptBus.ts";
 import { OrchestrationReactorLive } from "../src/orchestration/Layers/OrchestrationReactor.ts";
+import { RewindReactorLive } from "../src/orchestration/Layers/RewindReactor.ts";
 import { ProviderCommandReactorLive } from "../src/orchestration/Layers/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionLive } from "../src/orchestration/Layers/ProviderRuntimeIngestion.ts";
 import {
@@ -355,10 +358,25 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(WorkspacePathsLive),
       Layer.provideMerge(VcsProcess.layer),
     );
+    const rewindReactorLayer = RewindReactorLive.pipe(
+      Layer.provideMerge(runtimeServicesLayer),
+      Layer.provideMerge(providerSessionDirectoryLayer),
+      Layer.provideMerge(ProjectionThreadMessageRepositoryLive),
+      Layer.provideMerge(ProjectionTurnRepositoryLive),
+      Layer.provideMerge(
+        WorkspaceEntriesLive.pipe(
+          Layer.provide(WorkspacePathsLive),
+          Layer.provideMerge(VcsDriverRegistry.layer),
+          Layer.provide(NodeServices.layer),
+        ),
+      ),
+      Layer.provideMerge(VcsProcess.layer),
+    );
     const orchestrationReactorLayer = OrchestrationReactorLive.pipe(
       Layer.provideMerge(runtimeIngestionLayer),
       Layer.provideMerge(providerCommandReactorLayer),
       Layer.provideMerge(checkpointReactorLayer),
+      Layer.provideMerge(rewindReactorLayer),
       Layer.provideMerge(
         Layer.succeed(ThreadDeletionReactor, {
           start: () => Effect.void,
