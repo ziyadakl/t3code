@@ -33,12 +33,23 @@ _Avoid_: listing t3-originated or sub-agent sessions in the picker by default.
 **Session origin**:
 Where a Provider session was started: the **terminal** (the user's own Claude CLI) or **t3** (the app drove Claude itself). The picker shows terminal-origin sessions; t3-origin ones are already Threads and are hidden by default. The two are distinguishable on disk.
 
+**Project**:
+The t3 aggregate that groups Threads by a workspace root (a folder). Holds a `workspaceRoot`, model defaults, and scripts. Identified by a UUID; deletion is soft (`deletedAt`). (The Threads inside a Project are the **conversations** this context is otherwise about.)
+
+**Archived thread / Archived project** (added 2026-06-11 → see [ADR-0003](docs/adr/0003-project-archiving.md)):
+**Archiving** is a *reversible hide* — set a nullable `archivedAt` timestamp; the row is filtered out of the active sidebar feed but **never deleted**. It exists for both aggregates: a **Thread** can be archived (pre-existing) and now a **Project** can be archived. Archiving a Project hides the Project node and all its Threads from the sidebar without touching any Thread's own archive state (**no cascade**); unarchiving restores it with its conversations intact.
+_Avoid_: conflating **archive** (reversible, data retained) with **delete** (`deletedAt`, permanent — clears the conversation history). They are distinct lifecycle states.
+
+**Empty project** (for deletion):
+A Project the server's `project.delete` invariant treats as deletable without `force`. The invariant counts a Thread as still occupying the Project while its `deletedAt IS NULL` — so **archived (but not deleted) Threads still make a Project non-empty**. A Project whose Threads are all archived therefore *looks* empty in the sidebar (archived Threads are feed-hidden) yet is **not** empty for deletion; "Delete permanently" detects that rejection and retries with `force`.
+
 ## Relationships
 
 - A **Thread** is backed by exactly one **Provider session** at a time, via a **Resume cursor**.
 - A **Provider session** physically lives in one **Project bucket**, keyed by the **working directory** it ran in.
 - Resuming a **Provider session** only works from *its own* **Project bucket** — i.e. the same working directory. Different directory ⇒ "No conversation found." (verified 2026-06-03)
 - A **Thread** runs in its **Worktree** if it has one, otherwise the project's repo root.
+- A **Thread** belongs to one **Project**. Both share the same lifecycle states: **active** (`archivedAt` null, `deletedAt` null) → shown; **archived** (`archivedAt` set) → reversibly hidden; **deleted** (`deletedAt` set) → permanent. Archiving a **Project** hides it and its Threads from the active feed without changing any Thread's own state (no cascade); re-adding an archived Project's folder offers to **restore** (unarchive) it rather than create a duplicate.
 
 ## Flagged ambiguities
 
