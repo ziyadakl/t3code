@@ -259,7 +259,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.create": {
-      yield* requireProject({
+      yield* requireProjectNotArchived({
         readModel,
         command,
         projectId: command.projectId,
