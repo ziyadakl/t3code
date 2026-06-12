@@ -161,6 +161,7 @@ import { useThreadSelectionStore } from "../threadSelectionStore";
 import { useCommandPaletteStore } from "../commandPaletteStore";
 import {
   getSidebarThreadIdsToPrewarm,
+  isProjectNotEmptyForceError,
   resolveAdjacentThreadId,
   isContextMenuPointerDown,
   resolveProjectStatusIndicator,
@@ -1328,10 +1329,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           stackedThreadToast({
             type: "warning",
             title: "Project is not empty",
-            description: "Delete all threads in this project before removing it.",
+            description: "Deleting it permanently clears its threads and conversation history.",
             actionVariant: "destructive",
             actionProps: {
-              children: "Delete anyway",
+              children: "Delete permanently",
               onClick: () => {
                 void (async () => {
                   toastManager.close(warningToastId);
@@ -1346,7 +1347,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                   const confirmed = await api.dialogs.confirm(
                     latestProjectThreads.length > 0
                       ? [
-                          `Remove project "${member.name}" and delete its ${latestProjectThreads.length} thread${
+                          `Delete project "${member.name}" permanently and delete its ${latestProjectThreads.length} thread${
                             latestProjectThreads.length === 1 ? "" : "s"
                           }?`,
                           `Path: ${member.cwd}`,
@@ -1354,16 +1355,15 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                             ? [`Environment: ${member.environmentLabel}`]
                             : []),
                           "This permanently clears conversation history for those threads.",
-                          "This removes only this project entry.",
                           "This action cannot be undone.",
                         ].join("\n")
                       : [
-                          `Remove project "${member.name}"?`,
+                          `Delete project "${member.name}" permanently?`,
                           `Path: ${member.cwd}`,
                           ...(member.environmentLabel
                             ? [`Environment: ${member.environmentLabel}`]
                             : []),
-                          "This removes only this project entry.",
+                          "This action cannot be undone.",
                         ].join("\n"),
                   );
                   if (!confirmed) {
@@ -1395,10 +1395,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       }
 
       const message = [
-        `Remove project "${member.name}"?`,
+        `Delete project "${member.name}" permanently?`,
         `Path: ${member.cwd}`,
         ...(member.environmentLabel ? [`Environment: ${member.environmentLabel}`] : []),
-        "This removes only this project entry.",
+        "This action cannot be undone.",
       ].join("\n");
       const confirmed = await api.dialogs.confirm(message);
       if (!confirmed) {
@@ -1408,6 +1408,48 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       try {
         await removeProject(member);
       } catch (error) {
+        // The sidebar feed hides archived threads, so a project whose remaining
+        // threads are all archived looks empty here and we take this non-force
+        // path. The server still counts archived threads as active and rejects a
+        // non-force delete. When that happens, offer a force retry instead of
+        // surfacing a raw error toast.
+        if (isProjectNotEmptyForceError(error)) {
+          const forceConfirmed = await api.dialogs.confirm(
+            [
+              `Delete project "${member.name}" permanently?`,
+              `Path: ${member.cwd}`,
+              ...(member.environmentLabel ? [`Environment: ${member.environmentLabel}`] : []),
+              "This project still has hidden or archived chats.",
+              "Deleting it will permanently clear those chats and their conversation history.",
+              "This action cannot be undone.",
+            ].join("\n"),
+          );
+          if (!forceConfirmed) {
+            return;
+          }
+          try {
+            await removeProject(member, { force: true });
+          } catch (forceError) {
+            const forceMessage =
+              forceError instanceof Error
+                ? forceError.message
+                : "Unknown error removing project.";
+            console.error("Failed to remove project", {
+              projectId: member.id,
+              environmentId: member.environmentId,
+              error: forceError,
+            });
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: `Failed to remove "${member.name}"`,
+                description: forceMessage,
+              }),
+            );
+          }
+          return;
+        }
+
         const message = error instanceof Error ? error.message : "Unknown error removing project.";
         console.error("Failed to remove project", {
           projectId: member.id,

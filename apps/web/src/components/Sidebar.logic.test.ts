@@ -11,6 +11,7 @@ import {
   getProjectSortTimestamp,
   hasUnseenCompletion,
   isContextMenuPointerDown,
+  isProjectNotEmptyForceError,
   orderItemsByPreferredIds,
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadSeedContext,
@@ -968,5 +969,40 @@ describe("sortProjectsForSidebar", () => {
     );
 
     expect(timestamp).toBe(Date.parse("2026-03-09T10:10:00.000Z"));
+  });
+});
+
+describe("isProjectNotEmptyForceError", () => {
+  it("matches the rendered force=true invariant message", () => {
+    const error = new Error(
+      "Orchestration command invariant failed (project.delete): Project 'project-1' is not empty and cannot be deleted without force=true.",
+    );
+
+    expect(isProjectNotEmptyForceError(error)).toBe(true);
+  });
+
+  it("matches on the 'is not empty' substring alone", () => {
+    expect(isProjectNotEmptyForceError(new Error("Project 'p' is not empty."))).toBe(true);
+  });
+
+  it("matches a plain Error whose message survives without the typed tag", () => {
+    // The structured OrchestrationCommandInvariantError does not cross the RPC
+    // boundary; classification must work off the message of whatever Error
+    // arrives, not a specific subclass/_tag.
+    const plain = new Error("cannot be deleted without force=true");
+
+    expect(isProjectNotEmptyForceError(plain)).toBe(true);
+  });
+
+  it("does not match unrelated errors", () => {
+    expect(isProjectNotEmptyForceError(new Error("Project API unavailable."))).toBe(false);
+    expect(isProjectNotEmptyForceError(new Error("Network request failed"))).toBe(false);
+  });
+
+  it("does not match non-Error or empty values", () => {
+    expect(isProjectNotEmptyForceError(undefined)).toBe(false);
+    expect(isProjectNotEmptyForceError(null)).toBe(false);
+    expect(isProjectNotEmptyForceError("is not empty")).toBe(false);
+    expect(isProjectNotEmptyForceError(new Error(""))).toBe(false);
   });
 });

@@ -539,3 +539,23 @@ export function sortProjectsForSidebar<
     return left.name.localeCompare(right.name) || left.id.localeCompare(right.id);
   });
 }
+
+// A `project.delete` dispatched without `force` is rejected by the server's
+// delete invariant when the project still has any non-deleted threads —
+// including archived ones, which the sidebar feed hides. The structured
+// `OrchestrationCommandInvariantError` (commandType/detail) does NOT survive the
+// RPC boundary: it is flattened into an `OrchestrationDispatchCommandError`
+// carrying only the rendered `message`. So we classify on the message string,
+// which is the only signal that reliably arrives client-side. We intentionally
+// do not gate on the error `_tag` — if the error ever arrives as a plain `Error`
+// (deserialization edge), a tag gate would silently fall back to the raw-error
+// toast and reintroduce the original bug.
+export function isProjectNotEmptyForceError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message;
+  return (
+    message.includes("cannot be deleted without force=true") || message.includes("is not empty")
+  );
+}
