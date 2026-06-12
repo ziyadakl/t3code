@@ -46,6 +46,7 @@ import {
   useSavedEnvironmentRuntimeStore,
 } from "../environments/runtime";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { useProjectActions } from "../hooks/useProjectActions";
 import { useSettings } from "../hooks/useSettings";
 import { readLocalApi } from "../localApi";
 import {
@@ -404,6 +405,7 @@ function OpenCommandPaletteDialog() {
   const settings = useSettings();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
+  const { unarchiveProject } = useProjectActions();
   const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
   const threads = useStore(useShallow(selectSidebarThreadsAcrossEnvironments));
   const keybindings = useServerKeybindings();
@@ -1103,14 +1105,12 @@ function OpenCommandPaletteDialog() {
       const cwd = resolveProjectPathForDispatch(rawCwd, currentProjectCwdForBrowse);
       if (cwd.length === 0) return;
 
-      const existing = findProjectByPath(
-        projects.filter((project) => project.environmentId === browseEnvironmentId),
-        cwd,
-      );
-      if (existing) {
+      // Navigate to a project that exists in the active feed: open its latest
+      // thread if present, otherwise start a fresh thread for it.
+      const navigateToActiveProject = async (projectId: ProjectId): Promise<void> => {
         const latestThread = getLatestThreadForProject(
-          threads.filter((thread) => thread.environmentId === existing.environmentId),
-          existing.id,
+          threads.filter((thread) => thread.environmentId === browseEnvironmentId),
+          projectId,
           settings.sidebarThreadSortOrder,
         );
         if (latestThread) {
@@ -1121,12 +1121,56 @@ function OpenCommandPaletteDialog() {
             ),
           });
         } else {
-          await handleNewThread(scopeProjectRef(existing.environmentId, existing.id), {
+          await handleNewThread(scopeProjectRef(browseEnvironmentId, projectId), {
             envMode: settings.defaultThreadEnvMode,
           }).catch(() => undefined);
         }
         setOpen(false);
+      };
+
+      const existing = findProjectByPath(
+        projects.filter((project) => project.environmentId === browseEnvironmentId),
+        cwd,
+      );
+      if (existing) {
+        await navigateToActiveProject(existing.id);
         return;
+      }
+
+      // No active project at this path. The path may belong to a previously
+      // archived project — offer to restore it before creating a new one.
+      const archived = await api.orchestration
+        .getArchivedProjectByWorkspaceRoot({ workspaceRoot: cwd })
+        .catch(() => null);
+      if (archived) {
+        const localApi = readLocalApi();
+        const confirmed = localApi
+          ? await localApi.dialogs.confirm(
+              [
+                `Project "${archived.title}" at this path was archived. Restore it?`,
+                `Path: ${cwd}`,
+              ].join("\n"),
+            )
+          : false;
+        if (confirmed) {
+          try {
+            await unarchiveProject(scopeProjectRef(browseEnvironmentId, archived.id));
+            // The restored project re-enters the active feed via the shell
+            // stream and is not yet in the local store here, so this falls to
+            // the new-thread path (same graceful behavior as project.create).
+            await navigateToActiveProject(archived.id);
+          } catch (error) {
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Failed to restore project",
+                description: error instanceof Error ? error.message : "An error occurred.",
+              }),
+            );
+          }
+          return;
+        }
+        // User declined the restore: fall through and create a fresh project.
       }
 
       try {
@@ -1169,6 +1213,7 @@ function OpenCommandPaletteDialog() {
       settings.defaultThreadEnvMode,
       settings.sidebarThreadSortOrder,
       threads,
+      unarchiveProject,
     ],
   );
 
