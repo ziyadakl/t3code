@@ -757,6 +757,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         FROM projection_projects
         WHERE project_id = ${projectId}
           AND deleted_at IS NULL
+          -- "Active by id": archived projects are excluded just like deleted
+          -- ones, so this resolves to None while a project sits in the archive
+          -- (mirrors getActiveThreadRowById). The unarchive path reads through
+          -- this only after the read model has restored archived_at to NULL, so
+          -- the project.unarchived shell-upsert in ws.ts still resolves it.
           AND archived_at IS NULL
         LIMIT 1
       `,

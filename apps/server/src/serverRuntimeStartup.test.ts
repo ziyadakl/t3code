@@ -232,6 +232,71 @@ it.effect("resolveAutoBootstrapWelcomeTargets creates a project and thread when 
   }),
 );
 
+it.effect(
+  "resolveAutoBootstrapWelcomeTargets restores an archived project for the same cwd instead of duplicating it",
+  () =>
+    Effect.gen(function* () {
+      const archivedProjectId = ProjectId.make("project-startup-archived");
+      const archivedThreadId = ThreadId.make("thread-startup-archived");
+      const dispatchCalls = yield* Ref.make<ReadonlyArray<string>>([]);
+
+      const targets = yield* resolveAutoBootstrapWelcomeTargets.pipe(
+        Effect.provideService(ServerConfig, {
+          cwd: "/tmp/startup-project",
+          autoBootstrapProjectFromCwd: true,
+        } as never),
+        Effect.provideService(ProjectionSnapshotQuery, {
+          getCommandReadModel: () => Effect.die("unused"),
+          getSnapshot: () => Effect.die("unused"),
+          getShellSnapshot: () => Effect.die("unused"),
+          getArchivedShellSnapshot: () => Effect.die("unused"),
+          getArchivedProjectsSnapshot: () => Effect.die("unused"),
+          // No active project for this cwd, but an archived one exists.
+          getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
+          getArchivedProjectByWorkspaceRoot: () =>
+            Effect.succeed(
+              Option.some({
+                id: archivedProjectId,
+                title: "Archived Startup Project",
+                workspaceRoot: "/tmp/startup-project",
+                defaultModelSelection: getAutoBootstrapDefaultModelSelection(),
+                scripts: [],
+                createdAt: "2026-01-01T00:00:00.000Z",
+                updatedAt: "2026-01-01T00:00:00.000Z",
+                archivedAt: "2026-02-01T00:00:00.000Z",
+                deletedAt: null,
+              }),
+            ),
+          getSnapshotSequence: () => Effect.die("unused"),
+          getCounts: () => Effect.die("unused"),
+          getProjectShellById: () => Effect.die("unused"),
+          getFirstActiveThreadIdByProjectId: () =>
+            Effect.succeed(Option.some(archivedThreadId)),
+          getThreadCheckpointContext: () => Effect.succeed(Option.none()),
+          getFullThreadDiffContext: () => Effect.succeed(Option.none()),
+          getThreadShellById: () => Effect.die("unused"),
+          getThreadDetailById: () => Effect.die("unused"),
+        }),
+        Effect.provideService(OrchestrationEngineService, {
+          readEvents: () => Stream.empty,
+          dispatch: (command) =>
+            Ref.update(dispatchCalls, (calls) => [...calls, command.type]).pipe(
+              Effect.as({ sequence: 1 }),
+            ),
+          streamDomainEvents: Stream.empty,
+        } satisfies OrchestrationEngineShape),
+        Effect.provide(NodeServices.layer),
+      );
+
+      // Restored, not duplicated: the bootstrap reuses the archived project's
+      // own id (an unarchive) rather than minting a fresh id (a create).
+      assert.strictEqual(targets.bootstrapProjectId, archivedProjectId);
+      assert.strictEqual(targets.bootstrapThreadId, archivedThreadId);
+      // Exactly one dispatch, and it is unarchive — never project.create.
+      assert.deepStrictEqual(yield* Ref.get(dispatchCalls), ["project.unarchive"]);
+    }),
+);
+
 it.effect("resolveAutoBootstrapWelcomeTargets preserves typed UUID generation failures", () =>
   Effect.gen(function* () {
     const crypto = yield* Crypto.Crypto;
