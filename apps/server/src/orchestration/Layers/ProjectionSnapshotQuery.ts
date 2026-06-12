@@ -236,6 +236,7 @@ function mapProjectShellRow(
     scripts: row.scripts,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+    archivedAt: row.archivedAt,
   };
 }
 
@@ -309,9 +310,32 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           scripts_json AS "scripts",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
+          archived_at AS "archivedAt",
           deleted_at AS "deletedAt"
         FROM projection_projects
         ORDER BY created_at ASC, project_id ASC
+      `,
+  });
+
+  const listArchivedProjectRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionProjectDbRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          project_id AS "projectId",
+          title,
+          workspace_root AS "workspaceRoot",
+          default_model_selection_json AS "defaultModelSelection",
+          scripts_json AS "scripts",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt",
+          archived_at AS "archivedAt",
+          deleted_at AS "deletedAt"
+        FROM projection_projects
+        WHERE deleted_at IS NULL
+          AND archived_at IS NOT NULL
+        ORDER BY archived_at DESC, project_id DESC
       `,
   });
 
@@ -369,6 +393,13 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         FROM projection_threads
         WHERE deleted_at IS NULL
           AND archived_at IS NULL
+          AND EXISTS (
+            SELECT 1
+            FROM projection_projects
+            WHERE projection_projects.project_id = projection_threads.project_id
+              AND projection_projects.deleted_at IS NULL
+              AND projection_projects.archived_at IS NULL
+          )
         ORDER BY project_id ASC, created_at ASC, thread_id ASC
       `,
   });
@@ -673,11 +704,37 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           scripts_json AS "scripts",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
+          archived_at AS "archivedAt",
           deleted_at AS "deletedAt"
         FROM projection_projects
         WHERE workspace_root = ${workspaceRoot}
           AND deleted_at IS NULL
+          AND archived_at IS NULL
         ORDER BY created_at ASC, project_id ASC
+        LIMIT 1
+      `,
+  });
+
+  const getArchivedProjectRowByWorkspaceRoot = SqlSchema.findOneOption({
+    Request: WorkspaceRootLookupInput,
+    Result: ProjectionProjectLookupRowSchema,
+    execute: ({ workspaceRoot }) =>
+      sql`
+        SELECT
+          project_id AS "projectId",
+          title,
+          workspace_root AS "workspaceRoot",
+          default_model_selection_json AS "defaultModelSelection",
+          scripts_json AS "scripts",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt",
+          archived_at AS "archivedAt",
+          deleted_at AS "deletedAt"
+        FROM projection_projects
+        WHERE workspace_root = ${workspaceRoot}
+          AND deleted_at IS NULL
+          AND archived_at IS NOT NULL
+        ORDER BY archived_at DESC, project_id DESC
         LIMIT 1
       `,
   });
@@ -695,10 +752,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           scripts_json AS "scripts",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
+          archived_at AS "archivedAt",
           deleted_at AS "deletedAt"
         FROM projection_projects
         WHERE project_id = ${projectId}
           AND deleted_at IS NULL
+          AND archived_at IS NULL
         LIMIT 1
       `,
   });
@@ -1179,6 +1238,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 scripts: row.scripts,
                 createdAt: row.createdAt,
                 updatedAt: row.updatedAt,
+                archivedAt: row.archivedAt,
                 deletedAt: row.deletedAt,
               }));
 
@@ -1301,6 +1361,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   scripts: row.scripts,
                   createdAt: row.createdAt,
                   updatedAt: row.updatedAt,
+                  archivedAt: row.archivedAt,
                   deletedAt: row.deletedAt,
                 });
               }
@@ -1501,7 +1562,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             const snapshot = {
               snapshotSequence: computeSnapshotSequence(stateRows),
               projects: Arr.filterMap(projectRows, (row) =>
-                row.deletedAt === null
+                row.deletedAt === null && row.archivedAt === null
                   ? Result.succeed(
                       mapProjectShellRow(row, repositoryIdentities.get(row.projectId) ?? null),
                     )
@@ -1685,6 +1746,71 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         }),
       );
 
+  const getArchivedProjectsSnapshot: ProjectionSnapshotQueryShape["getArchivedProjectsSnapshot"] =
+    () =>
+      sql
+        .withTransaction(
+          Effect.all([
+            listArchivedProjectRows(undefined).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getArchivedProjectsSnapshot:listProjects:query",
+                  "ProjectionSnapshotQuery.getArchivedProjectsSnapshot:listProjects:decodeRows",
+                ),
+              ),
+            ),
+            listProjectionStateRows(undefined).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getArchivedProjectsSnapshot:listProjectionState:query",
+                  "ProjectionSnapshotQuery.getArchivedProjectsSnapshot:listProjectionState:decodeRows",
+                ),
+              ),
+            ),
+          ]),
+        )
+        .pipe(
+          Effect.flatMap(([projectRows, stateRows]) =>
+            Effect.gen(function* () {
+              let updatedAt: string | null = null;
+              for (const row of projectRows) {
+                updatedAt = maxIso(updatedAt, row.updatedAt);
+              }
+              for (const row of stateRows) {
+                updatedAt = maxIso(updatedAt, row.updatedAt);
+              }
+
+              const repositoryIdentities =
+                yield* resolveRepositoryIdentitiesForProjects(projectRows);
+
+              const snapshot = {
+                snapshotSequence: computeSnapshotSequence(stateRows),
+                projects: projectRows.map((row) =>
+                  mapProjectShellRow(row, repositoryIdentities.get(row.projectId) ?? null),
+                ),
+                threads: [],
+                updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
+              };
+
+              return yield* decodeShellSnapshot(snapshot).pipe(
+                Effect.mapError(
+                  toPersistenceDecodeError(
+                    "ProjectionSnapshotQuery.getArchivedProjectsSnapshot:decodeShellSnapshot",
+                  ),
+                ),
+              );
+            }),
+          ),
+          Effect.mapError((error) => {
+            if (isPersistenceError(error)) {
+              return error;
+            }
+            return toPersistenceSqlError(
+              "ProjectionSnapshotQuery.getArchivedProjectsSnapshot:query",
+            )(error);
+          }),
+        );
+
   const getSnapshotSequence: ProjectionSnapshotQueryShape["getSnapshotSequence"] = () =>
     listProjectionStateRows(undefined).pipe(
       Effect.mapError(
@@ -1737,6 +1863,38 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                     scripts: option.value.scripts,
                     createdAt: option.value.createdAt,
                     updatedAt: option.value.updatedAt,
+                    archivedAt: option.value.archivedAt,
+                    deletedAt: option.value.deletedAt,
+                  } satisfies OrchestrationProject),
+                ),
+              ),
+        ),
+      );
+
+  const getArchivedProjectByWorkspaceRoot: ProjectionSnapshotQueryShape["getArchivedProjectByWorkspaceRoot"] =
+    (workspaceRoot) =>
+      getArchivedProjectRowByWorkspaceRoot({ workspaceRoot }).pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProjectionSnapshotQuery.getArchivedProjectByWorkspaceRoot:query",
+            "ProjectionSnapshotQuery.getArchivedProjectByWorkspaceRoot:decodeRow",
+          ),
+        ),
+        Effect.flatMap((option) =>
+          Option.isNone(option)
+            ? Effect.succeed(Option.none<OrchestrationProject>())
+            : repositoryIdentityResolver.resolve(option.value.workspaceRoot).pipe(
+                Effect.map((repositoryIdentity) =>
+                  Option.some({
+                    id: option.value.projectId,
+                    title: option.value.title,
+                    workspaceRoot: option.value.workspaceRoot,
+                    repositoryIdentity,
+                    defaultModelSelection: option.value.defaultModelSelection,
+                    scripts: option.value.scripts,
+                    createdAt: option.value.createdAt,
+                    updatedAt: option.value.updatedAt,
+                    archivedAt: option.value.archivedAt,
                     deletedAt: option.value.deletedAt,
                   } satisfies OrchestrationProject),
                 ),
@@ -2048,9 +2206,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getSnapshot,
     getShellSnapshot,
     getArchivedShellSnapshot,
+    getArchivedProjectsSnapshot,
     getSnapshotSequence,
     getCounts,
     getActiveProjectByWorkspaceRoot,
+    getArchivedProjectByWorkspaceRoot,
     getProjectShellById,
     getFirstActiveThreadIdByProjectId,
     getThreadCheckpointContext,

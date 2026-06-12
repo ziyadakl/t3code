@@ -94,6 +94,19 @@ export interface ProjectionSnapshotQueryShape {
   >;
 
   /**
+   * Read archived project shell summaries for the archived-projects settings
+   * panel.
+   *
+   * This query is separate from the main shell snapshot so archived projects
+   * are never bootstrapped into normal navigation state. The returned snapshot
+   * carries only archived project shells; its `threads` list is always empty.
+   */
+  readonly getArchivedProjectsSnapshot: () => Effect.Effect<
+    OrchestrationShellSnapshot,
+    ProjectionRepositoryError
+  >;
+
+  /**
    * Read the latest projection snapshot sequence without hydrating read-model
    * entities.
    */
@@ -111,6 +124,16 @@ export interface ProjectionSnapshotQueryShape {
    * Read the active project for an exact workspace root match.
    */
   readonly getActiveProjectByWorkspaceRoot: (
+    workspaceRoot: string,
+  ) => Effect.Effect<Option.Option<OrchestrationProject>, ProjectionRepositoryError>;
+
+  /**
+   * Read the archived (not deleted) project for an exact workspace root match.
+   *
+   * Used to detect that a re-added folder corresponds to a previously archived
+   * project so it can be restored instead of recreated.
+   */
+  readonly getArchivedProjectByWorkspaceRoot: (
     workspaceRoot: string,
   ) => Effect.Effect<Option.Option<OrchestrationProject>, ProjectionRepositoryError>;
 

@@ -126,6 +126,7 @@ describe("OrchestrationEngine", () => {
           scripts: [],
           createdAt: "2026-03-03T00:00:00.000Z",
           updatedAt: "2026-03-03T00:00:01.000Z",
+          archivedAt: null,
           deletedAt: null,
         },
       ],
@@ -190,10 +191,18 @@ describe("OrchestrationEngine", () => {
               threads: [],
               updatedAt: projectionSnapshot.updatedAt,
             }),
+          getArchivedProjectsSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: projectionSnapshot.snapshotSequence,
+              projects: [],
+              threads: [],
+              updatedAt: projectionSnapshot.updatedAt,
+            }),
           getSnapshotSequence: () =>
             Effect.succeed({ snapshotSequence: projectionSnapshot.snapshotSequence }),
           getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 1 }),
           getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
+          getArchivedProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
           getProjectShellById: () => Effect.succeed(Option.none()),
           getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
           getThreadCheckpointContext: () => Effect.succeed(Option.none()),
@@ -352,6 +361,66 @@ describe("OrchestrationEngine", () => {
     expect(
       (await system.readModel()).threads.find((thread) => thread.id === "thread-archive")
         ?.archivedAt,
+    ).toBeNull();
+
+    await system.dispose();
+  });
+
+  it("archives and unarchives projects through orchestration commands", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-project-archive-only-create"),
+        projectId: asProjectId("project-archive-only"),
+        title: "Project Archive Only",
+        workspaceRoot: "/tmp/project-archive-only",
+        defaultModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        createdAt,
+      }),
+    );
+
+    await system.run(
+      engine.dispatch({
+        type: "project.archive",
+        commandId: CommandId.make("cmd-project-archive"),
+        projectId: asProjectId("project-archive-only"),
+      }),
+    );
+    expect(
+      (await system.readModel()).projects.find(
+        (project) => project.id === "project-archive-only",
+      )?.archivedAt,
+    ).not.toBeNull();
+
+    // Archiving an already-archived project is rejected by the invariant.
+    await expect(
+      system.run(
+        engine.dispatch({
+          type: "project.archive",
+          commandId: CommandId.make("cmd-project-archive-retry"),
+          projectId: asProjectId("project-archive-only"),
+        }),
+      ),
+    ).rejects.toThrow("already archived");
+
+    await system.run(
+      engine.dispatch({
+        type: "project.unarchive",
+        commandId: CommandId.make("cmd-project-unarchive"),
+        projectId: asProjectId("project-archive-only"),
+      }),
+    );
+    expect(
+      (await system.readModel()).projects.find(
+        (project) => project.id === "project-archive-only",
+      )?.archivedAt,
     ).toBeNull();
 
     await system.dispose();

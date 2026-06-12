@@ -15,6 +15,8 @@ import {
   findThreadById,
   listThreadsByProjectId,
   requireNonNegativeInteger,
+  requireProjectArchived,
+  requireProjectNotArchived,
   requireThread,
   requireThreadAbsent,
 } from "./commandInvariants.ts";
@@ -36,6 +38,7 @@ const readModel: OrchestrationReadModel = {
       scripts: [],
       createdAt: now,
       updatedAt: now,
+      archivedAt: null,
       deletedAt: null,
     },
     {
@@ -49,6 +52,7 @@ const readModel: OrchestrationReadModel = {
       scripts: [],
       createdAt: now,
       updatedAt: now,
+      archivedAt: null,
       deletedAt: null,
     },
   ],
@@ -195,6 +199,68 @@ describe("commandInvariants", () => {
         }),
       ),
     ).rejects.toThrow("already exists");
+  });
+
+  it("guards project archive state", async () => {
+    const archiveReadModel: OrchestrationReadModel = {
+      ...readModel,
+      projects: readModel.projects.map((project) =>
+        project.id === ProjectId.make("project-b")
+          ? { ...project, archivedAt: now }
+          : project,
+      ),
+    };
+
+    const archiveCommand: OrchestrationCommand = {
+      type: "project.archive",
+      commandId: CommandId.make("cmd-project-archive"),
+      projectId: ProjectId.make("project-a"),
+    };
+    const unarchiveCommand: OrchestrationCommand = {
+      type: "project.unarchive",
+      commandId: CommandId.make("cmd-project-unarchive"),
+      projectId: ProjectId.make("project-b"),
+    };
+
+    // An active project can be archived; an already-archived one cannot.
+    const activeProject = await Effect.runPromise(
+      requireProjectNotArchived({
+        readModel: archiveReadModel,
+        command: archiveCommand,
+        projectId: ProjectId.make("project-a"),
+      }),
+    );
+    expect(activeProject.id).toBe(ProjectId.make("project-a"));
+
+    await expect(
+      Effect.runPromise(
+        requireProjectNotArchived({
+          readModel: archiveReadModel,
+          command: { ...archiveCommand, projectId: ProjectId.make("project-b") },
+          projectId: ProjectId.make("project-b"),
+        }),
+      ),
+    ).rejects.toThrow("already archived");
+
+    // An archived project can be unarchived; an active one cannot.
+    const archivedProject = await Effect.runPromise(
+      requireProjectArchived({
+        readModel: archiveReadModel,
+        command: unarchiveCommand,
+        projectId: ProjectId.make("project-b"),
+      }),
+    );
+    expect(archivedProject.id).toBe(ProjectId.make("project-b"));
+
+    await expect(
+      Effect.runPromise(
+        requireProjectArchived({
+          readModel: archiveReadModel,
+          command: { ...unarchiveCommand, projectId: ProjectId.make("project-a") },
+          projectId: ProjectId.make("project-a"),
+        }),
+      ),
+    ).rejects.toThrow("is not archived");
   });
 
   it("requires non-negative integers", async () => {

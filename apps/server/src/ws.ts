@@ -494,6 +494,7 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
         switch (event.type) {
           case "project.created":
           case "project.meta-updated":
+          case "project.unarchived":
             return projectionSnapshotQuery.getProjectShellById(event.payload.projectId).pipe(
               Effect.map((project) =>
                 Option.map(project, (nextProject) => ({
@@ -505,6 +506,7 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
               Effect.catch(() => Effect.succeed(Option.none())),
             );
           case "project.deleted":
+          case "project.archived":
             return Effect.succeed(
               Option.some({
                 kind: "project-removed" as const,

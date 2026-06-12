@@ -84,9 +84,12 @@ describe("CheckpointDiffQueryLive", () => {
             Effect.die("CheckpointDiffQuery should not request the orchestration shell snapshot"),
           getArchivedShellSnapshot: () =>
             Effect.die("CheckpointDiffQuery should not request archived shell snapshots"),
+          getArchivedProjectsSnapshot: () =>
+            Effect.die("CheckpointDiffQuery should not request archived project snapshots"),
           getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
           getCounts: () => Effect.succeed({ projectCount: 0, threadCount: 0 }),
           getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
+          getArchivedProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
           getProjectShellById: () => Effect.succeed(Option.none()),
           getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
           getThreadCheckpointContext: () =>
@@ -191,9 +194,12 @@ describe("CheckpointDiffQueryLive", () => {
             Effect.die("CheckpointDiffQuery should not request the orchestration shell snapshot"),
           getArchivedShellSnapshot: () =>
             Effect.die("CheckpointDiffQuery should not request archived shell snapshots"),
+          getArchivedProjectsSnapshot: () =>
+            Effect.die("CheckpointDiffQuery should not request archived project snapshots"),
           getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
           getCounts: () => Effect.succeed({ projectCount: 0, threadCount: 0 }),
           getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
+          getArchivedProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
           getProjectShellById: () => Effect.succeed(Option.none()),
           getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
           getThreadCheckpointContext: () => Effect.succeed(Option.some(threadCheckpointContext)),
@@ -273,9 +279,12 @@ describe("CheckpointDiffQueryLive", () => {
             Effect.die("CheckpointDiffQuery should not request the orchestration shell snapshot"),
           getArchivedShellSnapshot: () =>
             Effect.die("CheckpointDiffQuery should not request archived shell snapshots"),
+          getArchivedProjectsSnapshot: () =>
+            Effect.die("CheckpointDiffQuery should not request archived project snapshots"),
           getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
           getCounts: () => Effect.succeed({ projectCount: 0, threadCount: 0 }),
           getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
+          getArchivedProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
           getProjectShellById: () => Effect.succeed(Option.none()),
           getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
           getThreadCheckpointContext: () => Effect.succeed(Option.some(threadCheckpointContext)),
@@ -340,9 +349,12 @@ describe("CheckpointDiffQueryLive", () => {
             Effect.die("CheckpointDiffQuery should not request the orchestration shell snapshot"),
           getArchivedShellSnapshot: () =>
             Effect.die("CheckpointDiffQuery should not request archived shell snapshots"),
+          getArchivedProjectsSnapshot: () =>
+            Effect.die("CheckpointDiffQuery should not request archived project snapshots"),
           getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
           getCounts: () => Effect.succeed({ projectCount: 0, threadCount: 0 }),
           getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
+          getArchivedProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
           getProjectShellById: () => Effect.succeed(Option.none()),
           getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
           getThreadCheckpointContext: () => Effect.succeed(Option.some(threadCheckpointContext)),
@@ -392,9 +404,12 @@ describe("CheckpointDiffQueryLive", () => {
             Effect.die("CheckpointDiffQuery should not request the orchestration shell snapshot"),
           getArchivedShellSnapshot: () =>
             Effect.die("CheckpointDiffQuery should not request archived shell snapshots"),
+          getArchivedProjectsSnapshot: () =>
+            Effect.die("CheckpointDiffQuery should not request archived project snapshots"),
           getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
           getCounts: () => Effect.succeed({ projectCount: 0, threadCount: 0 }),
           getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
+          getArchivedProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
           getProjectShellById: () => Effect.succeed(Option.none()),
           getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
           getThreadCheckpointContext: () => Effect.succeed(Option.none()),

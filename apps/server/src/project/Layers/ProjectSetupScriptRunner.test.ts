@@ -17,6 +17,7 @@ const makeProject = (scripts: OrchestrationProject["scripts"]): OrchestrationPro
   scripts,
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
+  archivedAt: null,
   deletedAt: null,
 });
 
@@ -26,12 +27,14 @@ const makeProjectionSnapshotQueryLayer = (project: OrchestrationProject) =>
     getSnapshot: () => Effect.die("unused"),
     getShellSnapshot: () => Effect.die("unused"),
     getArchivedShellSnapshot: () => Effect.die("unused"),
+    getArchivedProjectsSnapshot: () => Effect.die("unused"),
     getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
     getCounts: () => Effect.die("unused"),
     getActiveProjectByWorkspaceRoot: (workspaceRoot) =>
       Effect.succeed(
         workspaceRoot === project.workspaceRoot ? Option.some(project) : Option.none(),
       ),
+    getArchivedProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
     getProjectShellById: (projectId) =>
       Effect.succeed(projectId === project.id ? Option.some(project) : Option.none()),
     getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),

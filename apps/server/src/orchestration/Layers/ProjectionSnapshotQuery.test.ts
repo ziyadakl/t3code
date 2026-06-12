@@ -278,6 +278,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           ],
           createdAt: "2026-02-24T00:00:00.000Z",
           updatedAt: "2026-02-24T00:00:01.000Z",
+          archivedAt: null,
           deletedAt: null,
         },
       ]);
@@ -389,6 +390,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           ],
           createdAt: "2026-02-24T00:00:00.000Z",
           updatedAt: "2026-02-24T00:00:01.000Z",
+          archivedAt: null,
         },
       ]);
       assert.deepEqual(shellSnapshot.threads, [
@@ -1498,6 +1500,86 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         readonly count: number;
       }>`SELECT COUNT(*) AS count FROM projection_thread_messages WHERE thread_id = 'thread-1'`;
       assert.equal(allRows[0]?.count, 3);
+    }),
+  );
+
+  it.effect("excludes archived projects (and their threads) from the active shell feed", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_state`;
+
+      // One active project and one archived project, each with one
+      // non-deleted, non-archived thread.
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, default_model_selection_json,
+          scripts_json, created_at, updated_at, archived_at, deleted_at
+        ) VALUES
+          ('project-active', 'Active', '/tmp/active', NULL, '[]',
+           '2026-02-24T00:00:00.000Z', '2026-02-24T00:00:01.000Z', NULL, NULL),
+          ('project-archived', 'Archived', '/tmp/archived', NULL, '[]',
+           '2026-02-24T00:00:00.000Z', '2026-02-24T00:00:01.000Z',
+           '2026-02-24T00:00:02.000Z', NULL)
+      `;
+
+      const insertThread = (threadId: string, projectId: string) => sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, runtime_mode,
+          interaction_mode, branch, worktree_path, latest_turn_id,
+          latest_user_message_at, pending_approval_count,
+          pending_user_input_count, has_actionable_proposed_plan,
+          created_at, updated_at, archived_at, deleted_at
+        ) VALUES (
+          ${threadId}, ${projectId}, ${threadId},
+          '{"provider":"codex","model":"gpt-5-codex"}', 'full-access',
+          'default', NULL, NULL, NULL, NULL, 0, 0, 0,
+          '2026-02-24T00:00:02.000Z', '2026-02-24T00:00:03.000Z', NULL, NULL
+        )
+      `;
+      yield* insertThread("thread-active", "project-active");
+      yield* insertThread("thread-archived-project", "project-archived");
+
+      let sequence = 1;
+      for (const projector of Object.values(ORCHESTRATION_PROJECTOR_NAMES)) {
+        yield* sql`
+          INSERT INTO projection_state (projector, last_applied_sequence, updated_at)
+          VALUES (${projector}, ${sequence}, '2026-02-24T00:00:09.000Z')
+        `;
+        sequence += 1;
+      }
+
+      // Active shell feed: only the active project and its thread; the
+      // archived project's thread must NOT orphan into the feed.
+      const shell = yield* snapshotQuery.getShellSnapshot();
+      assert.deepEqual(
+        shell.projects.map((project) => project.id),
+        [asProjectId("project-active")],
+      );
+      assert.deepEqual(
+        shell.threads.map((thread) => thread.id),
+        [ThreadId.make("thread-active")],
+      );
+
+      // Archived-projects snapshot: only the archived project, no threads.
+      const archived = yield* snapshotQuery.getArchivedProjectsSnapshot();
+      assert.deepEqual(
+        archived.projects.map((project) => project.id),
+        [asProjectId("project-archived")],
+      );
+      assert.equal(archived.projects[0]?.archivedAt, "2026-02-24T00:00:02.000Z");
+      assert.deepEqual(archived.threads, []);
+
+      // Workspace-root lookups: active excludes archived; archived finds it.
+      const activeLookup =
+        yield* snapshotQuery.getActiveProjectByWorkspaceRoot("/tmp/archived");
+      assert.equal(activeLookup._tag, "None");
+      const archivedLookup =
+        yield* snapshotQuery.getArchivedProjectByWorkspaceRoot("/tmp/archived");
+      assert.equal(archivedLookup._tag, "Some");
     }),
   );
 });

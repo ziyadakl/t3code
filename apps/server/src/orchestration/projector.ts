@@ -11,9 +11,11 @@ import * as Schema from "effect/Schema";
 import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "./Errors.ts";
 import {
   MessageSentPayloadSchema,
+  ProjectArchivedPayload,
   ProjectCreatedPayload,
   ProjectDeletedPayload,
   ProjectMetaUpdatedPayload,
+  ProjectUnarchivedPayload,
   ThreadActivityAppendedPayload,
   ThreadArchivedPayload,
   ThreadCreatedPayload,
@@ -187,6 +189,7 @@ export function projectEvent(
             scripts: payload.scripts,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
+            archivedAt: null,
             deletedAt: null,
           };
 
@@ -234,6 +237,38 @@ export function projectEvent(
                   ...project,
                   deletedAt: payload.deletedAt,
                   updatedAt: payload.deletedAt,
+                }
+              : project,
+          ),
+        })),
+      );
+
+    case "project.archived":
+      return decodeForEvent(ProjectArchivedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          projects: nextBase.projects.map((project) =>
+            project.id === payload.projectId
+              ? {
+                  ...project,
+                  archivedAt: payload.archivedAt,
+                  updatedAt: payload.updatedAt,
+                }
+              : project,
+          ),
+        })),
+      );
+
+    case "project.unarchived":
+      return decodeForEvent(ProjectUnarchivedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          projects: nextBase.projects.map((project) =>
+            project.id === payload.projectId
+              ? {
+                  ...project,
+                  archivedAt: null,
+                  updatedAt: payload.updatedAt,
                 }
               : project,
           ),

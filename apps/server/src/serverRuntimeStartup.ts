@@ -190,19 +190,36 @@ export const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
       let nextProjectDefaultModelSelection: ModelSelection;
 
       if (Option.isNone(existingProject)) {
-        const createdAt = DateTime.formatIso(yield* DateTime.now);
-        nextProjectId = ProjectId.make(yield* randomUUID);
-        const bootstrapProjectTitle = path.basename(serverConfig.cwd) || "project";
-        nextProjectDefaultModelSelection = getAutoBootstrapDefaultModelSelection();
-        yield* orchestrationEngine.dispatch({
-          type: "project.create",
-          commandId: CommandId.make(yield* randomUUID),
-          projectId: nextProjectId,
-          title: bootstrapProjectTitle,
-          workspaceRoot: serverConfig.cwd,
-          defaultModelSelection: nextProjectDefaultModelSelection,
-          createdAt,
-        });
+        // The active lookup excludes archived projects, so a previously
+        // archived project for this workspace root would otherwise be
+        // duplicated. Restore (unarchive) it instead of creating a new one.
+        const archivedProject = yield* projectionReadModelQuery.getArchivedProjectByWorkspaceRoot(
+          serverConfig.cwd,
+        );
+        if (Option.isSome(archivedProject)) {
+          nextProjectId = archivedProject.value.id;
+          nextProjectDefaultModelSelection =
+            archivedProject.value.defaultModelSelection ?? getAutoBootstrapDefaultModelSelection();
+          yield* orchestrationEngine.dispatch({
+            type: "project.unarchive",
+            commandId: CommandId.make(yield* randomUUID),
+            projectId: nextProjectId,
+          });
+        } else {
+          const createdAt = DateTime.formatIso(yield* DateTime.now);
+          nextProjectId = ProjectId.make(yield* randomUUID);
+          const bootstrapProjectTitle = path.basename(serverConfig.cwd) || "project";
+          nextProjectDefaultModelSelection = getAutoBootstrapDefaultModelSelection();
+          yield* orchestrationEngine.dispatch({
+            type: "project.create",
+            commandId: CommandId.make(yield* randomUUID),
+            projectId: nextProjectId,
+            title: bootstrapProjectTitle,
+            workspaceRoot: serverConfig.cwd,
+            defaultModelSelection: nextProjectDefaultModelSelection,
+            createdAt,
+          });
+        }
       } else {
         nextProjectId = existingProject.value.id;
         nextProjectDefaultModelSelection =

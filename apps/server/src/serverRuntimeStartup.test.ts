@@ -88,6 +88,8 @@ it.effect("launchStartupHeartbeat does not block the caller while counts are loa
           getSnapshot: () => Effect.die("unused"),
           getShellSnapshot: () => Effect.die("unused"),
           getArchivedShellSnapshot: () => Effect.die("unused"),
+          getArchivedProjectsSnapshot: () => Effect.die("unused"),
+          getArchivedProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
           getSnapshotSequence: () => Effect.die("unused"),
           getCounts: () =>
             Deferred.await(releaseCounts).pipe(
@@ -144,6 +146,8 @@ it.effect("resolveAutoBootstrapWelcomeTargets returns existing project and threa
         getSnapshot: () => Effect.die("unused"),
         getShellSnapshot: () => Effect.die("unused"),
         getArchivedShellSnapshot: () => Effect.die("unused"),
+        getArchivedProjectsSnapshot: () => Effect.die("unused"),
+        getArchivedProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
         getSnapshotSequence: () => Effect.die("unused"),
         getCounts: () => Effect.die("unused"),
         getActiveProjectByWorkspaceRoot: () =>
@@ -156,6 +160,7 @@ it.effect("resolveAutoBootstrapWelcomeTargets returns existing project and threa
               scripts: [],
               createdAt: "2026-01-01T00:00:00.000Z",
               updatedAt: "2026-01-01T00:00:00.000Z",
+              archivedAt: null,
               deletedAt: null,
             }),
           ),
@@ -198,6 +203,8 @@ it.effect("resolveAutoBootstrapWelcomeTargets creates a project and thread when 
         getSnapshot: () => Effect.die("unused"),
         getShellSnapshot: () => Effect.die("unused"),
         getArchivedShellSnapshot: () => Effect.die("unused"),
+        getArchivedProjectsSnapshot: () => Effect.die("unused"),
+        getArchivedProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
         getSnapshotSequence: () => Effect.die("unused"),
         getCounts: () => Effect.die("unused"),
         getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
@@ -246,6 +253,8 @@ it.effect("resolveAutoBootstrapWelcomeTargets preserves typed UUID generation fa
         getSnapshot: () => Effect.die("unused"),
         getShellSnapshot: () => Effect.die("unused"),
         getArchivedShellSnapshot: () => Effect.die("unused"),
+        getArchivedProjectsSnapshot: () => Effect.die("unused"),
+        getArchivedProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
         getSnapshotSequence: () => Effect.die("unused"),
         getCounts: () => Effect.die("unused"),
         getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
