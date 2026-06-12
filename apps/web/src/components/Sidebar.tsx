@@ -160,6 +160,7 @@ import {
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { useCommandPaletteStore } from "../commandPaletteStore";
 import {
+  buildThreadRenameCommand,
   getSidebarThreadIdsToPrewarm,
   isProjectNotEmptyForceError,
   resolveAdjacentThreadId,
@@ -312,6 +313,7 @@ interface SidebarThreadRowProps {
     originalTitle: string,
   ) => Promise<void>;
   cancelRename: () => void;
+  onStartRename: (threadKey: string, currentTitle: string) => void;
   attemptArchiveThread: (threadRef: ScopedThreadRef) => Promise<void>;
   openPrLink: (event: React.MouseEvent<HTMLElement>, prUrl: string) => void;
 }
@@ -337,6 +339,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     clearSelection,
     commitRename,
     cancelRename,
+    onStartRename,
     attemptArchiveThread,
     openPrLink,
     thread,
@@ -426,6 +429,15 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       navigateToThread(threadRef);
     },
     [navigateToThread, threadRef],
+  );
+  const handleTitleDoubleClick = useCallback(
+    (event: React.MouseEvent<HTMLSpanElement>) => {
+      // Stop the double-click from bubbling to the row (selection/multi-select);
+      // the preceding single click still navigates, which is acceptable here.
+      event.stopPropagation();
+      onStartRename(threadKey, thread.title);
+    },
+    [onStartRename, threadKey, thread.title],
   );
   const handleRowContextMenu = useCallback(
     (event: React.MouseEvent) => {
@@ -597,6 +609,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                   <span
                     className="min-w-0 flex-1 truncate text-xs"
                     data-testid={`thread-title-${thread.id}`}
+                    onDoubleClick={handleTitleDoubleClick}
                   >
                     {thread.title}
                   </span>
@@ -762,6 +775,7 @@ interface SidebarProjectThreadListProps {
     originalTitle: string,
   ) => Promise<void>;
   cancelRename: () => void;
+  onStartRename: (threadKey: string, currentTitle: string) => void;
   attemptArchiveThread: (threadRef: ScopedThreadRef) => Promise<void>;
   openPrLink: (event: React.MouseEvent<HTMLElement>, prUrl: string) => void;
   expandThreadListForProject: (projectKey: string) => void;
@@ -801,6 +815,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
     clearSelection,
     commitRename,
     cancelRename,
+    onStartRename,
     attemptArchiveThread,
     openPrLink,
     expandThreadListForProject,
@@ -851,6 +866,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
               clearSelection={clearSelection}
               commitRename={commitRename}
               cancelRename={cancelRename}
+              onStartRename={onStartRename}
               attemptArchiveThread={attemptArchiveThread}
               openPrLink={openPrLink}
             />
@@ -1813,6 +1829,19 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     renamingInputRef.current = null;
   }, []);
 
+  // Begin an inline rename for a thread. Both entry points (the right-click
+  // context menu and double-clicking the title) funnel through here so the
+  // rename state — key, seeded title, and committed-ref — is always set
+  // together; setting only the key would open the input with a stale title.
+  const startRename = useCallback(
+    (threadKey: string, currentTitle: string) => {
+      setRenamingThreadKey(threadKey);
+      setRenamingTitle(currentTitle);
+      renamingCommittedRef.current = false;
+    },
+    [setRenamingTitle],
+  );
+
   const commitRename = useCallback(
     async (threadRef: ScopedThreadRef, newTitle: string, originalTitle: string) => {
       const threadKey = scopedThreadKey(threadRef);
@@ -1843,12 +1872,13 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         return;
       }
       try {
-        await api.orchestration.dispatchCommand({
-          type: "thread.meta.update",
-          commandId: newCommandId(),
-          threadId: threadRef.threadId,
-          title: trimmed,
-        });
+        await api.orchestration.dispatchCommand(
+          buildThreadRenameCommand({
+            commandId: newCommandId(),
+            threadId: threadRef.threadId,
+            title: trimmed,
+          }),
+        );
       } catch (error) {
         toastManager.add(
           stackedThreadToast({
@@ -1972,9 +2002,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       );
 
       if (clicked === "rename") {
-        setRenamingThreadKey(threadKey);
-        setRenamingTitle(thread.title);
-        renamingCommittedRef.current = false;
+        startRename(threadKey, thread.title);
         return;
       }
 
@@ -2022,6 +2050,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       markThreadUnread,
       memberProjectByScopedKey,
       project.cwd,
+      startRename,
     ],
   );
 
@@ -2151,6 +2180,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         clearSelection={clearSelection}
         commitRename={commitRename}
         cancelRename={cancelRename}
+        onStartRename={startRename}
         attemptArchiveThread={attemptArchiveThread}
         openPrLink={openPrLink}
         expandThreadListForProject={expandThreadListForProject}

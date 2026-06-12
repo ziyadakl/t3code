@@ -3473,6 +3473,7 @@ export default function ChatView(props: ChatViewProps) {
           commandId: newCommandId(),
           threadId: threadIdForSend,
           title,
+          titleSource: "auto",
         });
       }
 

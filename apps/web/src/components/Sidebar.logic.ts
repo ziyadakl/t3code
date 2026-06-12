@@ -1,4 +1,8 @@
 import * as React from "react";
+import type {
+  DispatchableClientOrchestrationCommand,
+  ThreadId,
+} from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import {
   getThreadSortTimestamp,
@@ -558,4 +562,28 @@ export function isProjectNotEmptyForceError(error: unknown): boolean {
   return (
     message.includes("cannot be deleted without force=true") || message.includes("is not empty")
   );
+}
+
+type ThreadMetaUpdateCommand = Extract<
+  DispatchableClientOrchestrationCommand,
+  { type: "thread.meta.update" }
+>;
+
+// Builds the `thread.meta.update` command for a deliberate user rename, tagged
+// `titleSource: "user"` so the server's SessionTitleReactor writes the new title
+// through to the underlying Claude CLI session. `titleSource` is an optional
+// contract field, so typecheck alone can't guarantee it is present — this helper
+// is the single, unit-tested seam that locks the tag onto every user rename.
+export function buildThreadRenameCommand(input: {
+  commandId: ThreadMetaUpdateCommand["commandId"];
+  threadId: ThreadId;
+  title: ThreadMetaUpdateCommand["title"];
+}): ThreadMetaUpdateCommand {
+  return {
+    type: "thread.meta.update",
+    commandId: input.commandId,
+    threadId: input.threadId,
+    title: input.title,
+    titleSource: "user",
+  };
 }

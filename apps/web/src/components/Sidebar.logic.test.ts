@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProviderDriverKind } from "@t3tools/contracts";
 
 import {
+  buildThreadRenameCommand,
   createThreadJumpHintVisibilityController,
   getSidebarThreadIdsToPrewarm,
   getVisibleSidebarThreadIds,
@@ -23,6 +24,7 @@ import {
   THREAD_JUMP_HINT_SHOW_DELAY_MS,
 } from "./Sidebar.logic";
 import {
+  CommandId,
   EnvironmentId,
   OrchestrationLatestTurn,
   ProjectId,
@@ -1004,5 +1006,25 @@ describe("isProjectNotEmptyForceError", () => {
     expect(isProjectNotEmptyForceError(null)).toBe(false);
     expect(isProjectNotEmptyForceError("is not empty")).toBe(false);
     expect(isProjectNotEmptyForceError(new Error(""))).toBe(false);
+  });
+});
+
+describe("buildThreadRenameCommand", () => {
+  it("tags a deliberate user rename with titleSource 'user' so the server writes it through to the Claude session", () => {
+    const command = buildThreadRenameCommand({
+      commandId: CommandId.make("11111111-1111-1111-1111-111111111111"),
+      threadId: ThreadId.make("thread-1"),
+      title: "Renamed by hand",
+    });
+
+    expect(command).toMatchObject({
+      type: "thread.meta.update",
+      commandId: "11111111-1111-1111-1111-111111111111",
+      threadId: "thread-1",
+      title: "Renamed by hand",
+      // The whole feature hinges on this tag, and titleSource is an optional
+      // contract field that typecheck cannot enforce — assert it explicitly.
+      titleSource: "user",
+    });
   });
 });
