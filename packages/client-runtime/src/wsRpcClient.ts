@@ -157,6 +157,12 @@ export interface WsRpcClient {
     readonly getArchivedShellSnapshot: RpcUnaryNoArgMethod<
       typeof ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot
     >;
+    readonly getArchivedProjectsSnapshot: RpcUnaryNoArgMethod<
+      typeof ORCHESTRATION_WS_METHODS.getArchivedProjectsSnapshot
+    >;
+    readonly getArchivedProjectByWorkspaceRoot: RpcUnaryMethod<
+      typeof ORCHESTRATION_WS_METHODS.getArchivedProjectByWorkspaceRoot
+    >;
     readonly subscribeShell: RpcStreamMethod<typeof ORCHESTRATION_WS_METHODS.subscribeShell>;
     readonly subscribeThread: RpcInputStreamMethod<typeof ORCHESTRATION_WS_METHODS.subscribeThread>;
   };
@@ -335,6 +341,14 @@ export function createWsRpcClient(
       getArchivedShellSnapshot: () =>
         transport.request((client) =>
           client[ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot]({}),
+        ),
+      getArchivedProjectsSnapshot: () =>
+        transport.request((client) =>
+          client[ORCHESTRATION_WS_METHODS.getArchivedProjectsSnapshot]({}),
+        ),
+      getArchivedProjectByWorkspaceRoot: (input) =>
+        transport.request((client) =>
+          client[ORCHESTRATION_WS_METHODS.getArchivedProjectByWorkspaceRoot](input),
         ),
       subscribeShell: (listener, options) =>
         transport.subscribe(

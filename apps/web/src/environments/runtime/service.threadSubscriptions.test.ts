@@ -83,6 +83,8 @@ vi.mock("@t3tools/client-runtime", async (importOriginal) => {
       getTurnDiff: vi.fn(),
       getFullThreadDiff: vi.fn(),
       getArchivedShellSnapshot: vi.fn(),
+      getArchivedProjectsSnapshot: vi.fn(),
+      getArchivedProjectByWorkspaceRoot: vi.fn(),
       subscribeShell: vi.fn(() => () => undefined),
       subscribeThread: mockSubscribeThread,
     },

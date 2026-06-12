@@ -100,6 +100,7 @@ function makeState(thread: Thread): AppState {
     },
     createdAt: "2026-02-13T00:00:00.000Z",
     updatedAt: "2026-02-13T00:00:00.000Z",
+    archivedAt: null,
     scripts: [],
   };
   const threadIdsByProjectId: EnvironmentState["threadIdsByProjectId"] = {
@@ -503,6 +504,7 @@ describe("incremental orchestration updates", () => {
           },
           createdAt: "2026-02-27T00:00:00.000Z",
           updatedAt: "2026-02-27T00:00:00.000Z",
+          archivedAt: null,
           scripts: [],
         },
       },
@@ -558,6 +560,7 @@ describe("incremental orchestration updates", () => {
           },
           createdAt: "2026-02-27T00:00:00.000Z",
           updatedAt: "2026-02-27T00:00:00.000Z",
+          archivedAt: null,
           scripts: [],
         },
         [recreatedProjectId]: {
@@ -571,6 +574,7 @@ describe("incremental orchestration updates", () => {
           },
           createdAt: "2026-02-27T00:00:00.000Z",
           updatedAt: "2026-02-27T00:00:00.000Z",
+          archivedAt: null,
           scripts: [],
         },
       },

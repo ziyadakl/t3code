@@ -60,6 +60,7 @@ import type {
   OrchestrationGetFullThreadDiffResult,
   OrchestrationGetTurnDiffInput,
   OrchestrationGetTurnDiffResult,
+  OrchestrationProject,
   OrchestrationShellSnapshot,
   OrchestrationShellStreamItem,
   OrchestrationSubscribeThreadInput,
@@ -573,6 +574,10 @@ export interface EnvironmentApi {
       input: OrchestrationGetFullThreadDiffInput,
     ) => Promise<OrchestrationGetFullThreadDiffResult>;
     getArchivedShellSnapshot: () => Promise<OrchestrationShellSnapshot>;
+    getArchivedProjectsSnapshot: () => Promise<OrchestrationShellSnapshot>;
+    getArchivedProjectByWorkspaceRoot: (input: {
+      workspaceRoot: string;
+    }) => Promise<OrchestrationProject | null>;
     subscribeShell: (
       callback: (event: OrchestrationShellStreamItem) => void,
       options?: {

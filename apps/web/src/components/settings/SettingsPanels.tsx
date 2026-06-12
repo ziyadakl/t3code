@@ -33,6 +33,7 @@ import { buildHostedChannelSelectionUrl, type HostedAppChannel } from "../../hos
 import { useTheme } from "../../hooks/useTheme";
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
+import { useProjectActions } from "../../hooks/useProjectActions";
 import {
   setDesktopUpdateStateQueryData,
   useDesktopUpdateState,
@@ -49,6 +50,9 @@ import { ensureLocalApi, readLocalApi } from "../../localApi";
 import { useShallow } from "zustand/react/shallow";
 import { selectProjectsAcrossEnvironments, useStore } from "../../store";
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
+import { useArchivedProjectSnapshots } from "../../lib/archivedProjectsState";
+import { readEnvironmentApi } from "../../environmentApi";
+import { newCommandId } from "../../lib/utils";
 import { formatRelativeTime, formatRelativeTimeLabel } from "../../timestampFormat";
 import { Button } from "../ui/button";
 import { DraftInput } from "../ui/draft-input";
@@ -1521,6 +1525,171 @@ export function ArchivedThreadsPanel() {
             ))}
           </SettingsSection>
         ))
+      )}
+    </SettingsPageContainer>
+  );
+}
+
+export function ArchivedProjectsPanel() {
+  const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
+  const { unarchiveProject } = useProjectActions();
+  const environmentIds = useMemo(
+    () => [...new Set(projects.map((project) => project.environmentId))],
+    [projects],
+  );
+  const {
+    snapshots: archivedSnapshots,
+    error: archiveError,
+    isLoading: isLoadingArchive,
+    refresh: refreshArchivedProjects,
+  } = useArchivedProjectSnapshots(environmentIds);
+
+  const archivedProjects = useMemo(
+    () =>
+      archivedSnapshots
+        .flatMap(({ environmentId, snapshot }) =>
+          snapshot.projects.map((project) => ({
+            id: project.id,
+            environmentId,
+            name: project.title,
+            cwd: project.workspaceRoot,
+            archivedAt: project.archivedAt,
+            createdAt: project.createdAt,
+          })),
+        )
+        .toSorted((left, right) => {
+          const leftKey = left.archivedAt ?? left.createdAt;
+          const rightKey = right.archivedAt ?? right.createdAt;
+          return rightKey.localeCompare(leftKey) || right.id.localeCompare(left.id);
+        }),
+    [archivedSnapshots],
+  );
+
+  const handleDeletePermanently = useCallback(
+    async (project: (typeof archivedProjects)[number]) => {
+      const localApi = readLocalApi();
+      if (localApi) {
+        const confirmed = await localApi.dialogs.confirm(
+          [
+            `Delete project "${project.name}" permanently?`,
+            `Path: ${project.cwd}`,
+            "This permanently clears conversation history for its threads.",
+            "This action cannot be undone.",
+          ].join("\n"),
+        );
+        if (!confirmed) {
+          return;
+        }
+      }
+      const api = readEnvironmentApi(project.environmentId);
+      if (!api) return;
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "project.delete",
+          commandId: newCommandId(),
+          projectId: project.id,
+          force: true,
+        });
+        refreshArchivedProjects();
+      } catch (error) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to delete project",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      }
+    },
+    [refreshArchivedProjects],
+  );
+
+  return (
+    <SettingsPageContainer>
+      {archivedProjects.length === 0 ? (
+        <SettingsSection title="Archived projects">
+          <SettingsRow
+            title={
+              <span className="inline-flex items-center gap-2">
+                {isLoadingArchive ? (
+                  <LoaderIcon className="size-3.5 animate-spin text-muted-foreground" />
+                ) : (
+                  <ArchiveIcon className="size-3.5 text-muted-foreground" />
+                )}
+                {isLoadingArchive
+                  ? "Loading archived projects"
+                  : archiveError
+                    ? "Could not load archived projects"
+                    : "No archived projects"}
+              </span>
+            }
+            description={
+              isLoadingArchive
+                ? "Checking connected environments."
+                : (archiveError ?? "Archived projects will appear here.")
+            }
+          />
+        </SettingsSection>
+      ) : (
+        <SettingsSection title="Archived projects">
+          {archivedProjects.map((project) => (
+            <SettingsRow
+              key={`${project.environmentId}:${project.id}`}
+              title={
+                <span className="inline-flex items-center gap-2">
+                  <ProjectFavicon environmentId={project.environmentId} cwd={project.cwd} />
+                  {project.name}
+                </span>
+              }
+              description={
+                <>
+                  Archived {formatRelativeTimeLabel(project.archivedAt ?? project.createdAt)}
+                  {" · Created "}
+                  {formatRelativeTimeLabel(project.createdAt)}
+                </>
+              }
+              control={
+                <div className="flex shrink-0 items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 shrink-0 cursor-pointer gap-1.5 px-2.5"
+                    onClick={() =>
+                      void unarchiveProject({
+                        environmentId: project.environmentId,
+                        projectId: project.id,
+                      })
+                        .then(() => refreshArchivedProjects())
+                        .catch((error) => {
+                          toastManager.add(
+                            stackedThreadToast({
+                              type: "error",
+                              title: "Failed to unarchive project",
+                              description:
+                                error instanceof Error ? error.message : "An error occurred.",
+                            }),
+                          );
+                        })
+                    }
+                  >
+                    <ArchiveX className="size-3.5" />
+                    <span>Unarchive</span>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 shrink-0 cursor-pointer gap-1.5 px-2.5 text-destructive hover:text-destructive"
+                    onClick={() => void handleDeletePermanently(project)}
+                  >
+                    <span>Delete permanently</span>
+                  </Button>
+                </div>
+              }
+            />
+          ))}
+        </SettingsSection>
       )}
     </SettingsPageContainer>
   );

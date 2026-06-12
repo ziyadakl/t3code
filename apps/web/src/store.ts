@@ -232,6 +232,7 @@ function mapProject(
       : null,
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,
+    archivedAt: project.archivedAt ?? null,
     scripts: mapProjectScripts(project.scripts),
   };
 }
@@ -1174,6 +1175,7 @@ function applyEnvironmentOrchestrationEvent(
           scripts: event.payload.scripts,
           createdAt: event.payload.createdAt,
           updatedAt: event.payload.updatedAt,
+          archivedAt: null,
           deletedAt: null,
         },
         environmentId,

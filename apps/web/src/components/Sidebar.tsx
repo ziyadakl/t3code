@@ -93,6 +93,7 @@ import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { retainThreadDetailSubscription } from "../environments/runtime/service";
 
 import { useThreadActions } from "../hooks/useThreadActions";
+import { useProjectActions } from "../hooks/useProjectActions";
 import {
   buildThreadRouteParams,
   resolveThreadRouteRef,
@@ -944,6 +945,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   );
   const projectGroupingSettings = useSettings(selectProjectGroupingSettings);
   const { updateSettings } = useUpdateSettings();
+  const { archiveProject } = useProjectActions();
   const sidebarThreadPreviewCount = useSettings<SidebarThreadPreviewCount>(
     (settings) => settings.sidebarThreadPreviewCount,
   );
@@ -1434,7 +1436,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
 
         const actionHandlers = new Map<string, () => Promise<void> | void>();
         const makeLeaf = (
-          action: "rename" | "grouping" | "copy-path" | "delete",
+          action: "rename" | "grouping" | "copy-path" | "archive" | "delete",
           member: SidebarProjectGroupMember,
           options?: {
             destructive?: boolean;
@@ -1453,6 +1455,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
               case "copy-path":
                 copyPathToClipboard(member.cwd, { path: member.cwd });
                 return;
+              case "archive":
+                return archiveProject(scopeProjectRef(member.environmentId, member.id));
               case "delete":
                 return handleRemoveProject(member);
             }
@@ -1467,7 +1471,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         };
 
         const buildTargetedItem = (
-          action: "rename" | "grouping" | "copy-path" | "delete",
+          action: "rename" | "grouping" | "copy-path" | "archive" | "delete",
           label: string,
           options?: {
             destructive?: boolean;
@@ -1502,7 +1506,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             buildTargetedItem("rename", "Rename project"),
             buildTargetedItem("grouping", "Project grouping…"),
             buildTargetedItem("copy-path", "Copy Project Path"),
-            buildTargetedItem("delete", "Remove project", {
+            buildTargetedItem("archive", "Archive project"),
+            buildTargetedItem("delete", "Delete permanently", {
               destructive: true,
             }),
           ],
@@ -1520,6 +1525,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       })();
     },
     [
+      archiveProject,
       copyPathToClipboard,
       handleRemoveProject,
       openProjectGroupingDialog,

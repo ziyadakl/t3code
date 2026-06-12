@@ -3,6 +3,7 @@ import {
   ArchiveIcon,
   ArrowLeftIcon,
   BotIcon,
+  FolderArchiveIcon,
   GitBranchIcon,
   KeyboardIcon,
   Link2Icon,
@@ -27,7 +28,8 @@ export type SettingsSectionPath =
   | "/settings/providers"
   | "/settings/source-control"
   | "/settings/connections"
-  | "/settings/archived";
+  | "/settings/archived"
+  | "/settings/archived-projects";
 
 export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
   label: string;
@@ -39,7 +41,8 @@ export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
   { label: "Providers", to: "/settings/providers", icon: BotIcon },
   { label: "Source Control", to: "/settings/source-control", icon: GitBranchIcon },
   { label: "Connections", to: "/settings/connections", icon: Link2Icon },
-  { label: "Archive", to: "/settings/archived", icon: ArchiveIcon },
+  { label: "Archived threads", to: "/settings/archived", icon: ArchiveIcon },
+  { label: "Archived projects", to: "/settings/archived-projects", icon: FolderArchiveIcon },
 ];
 
 export function SettingsSidebarNav({ pathname }: { pathname: string }) {

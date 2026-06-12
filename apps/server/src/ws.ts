@@ -180,6 +180,8 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [ORCHESTRATION_WS_METHODS.replayEvents, AuthOrchestrationReadScope],
   [ORCHESTRATION_WS_METHODS.subscribeShell, AuthOrchestrationReadScope],
   [ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot, AuthOrchestrationReadScope],
+  [ORCHESTRATION_WS_METHODS.getArchivedProjectsSnapshot, AuthOrchestrationReadScope],
+  [ORCHESTRATION_WS_METHODS.getArchivedProjectByWorkspaceRoot, AuthOrchestrationReadScope],
   [ORCHESTRATION_WS_METHODS.subscribeThread, AuthOrchestrationReadScope],
   [WS_METHODS.serverGetConfig, AuthOrchestrationReadScope],
   [WS_METHODS.serverRefreshProviders, AuthOrchestrationOperateScope],
@@ -971,6 +973,46 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
                   }),
               ),
             ),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [ORCHESTRATION_WS_METHODS.getArchivedProjectsSnapshot]: (_input) =>
+          observeRpcEffect(
+            ORCHESTRATION_WS_METHODS.getArchivedProjectsSnapshot,
+            projectionSnapshotQuery.getArchivedProjectsSnapshot().pipe(
+              Effect.tapError((cause) =>
+                Effect.logError("orchestration archived projects snapshot load failed", { cause }),
+              ),
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationGetSnapshotError({
+                    message: "Failed to load archived orchestration projects snapshot",
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [ORCHESTRATION_WS_METHODS.getArchivedProjectByWorkspaceRoot]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_WS_METHODS.getArchivedProjectByWorkspaceRoot,
+            projectionSnapshotQuery
+              .getArchivedProjectByWorkspaceRoot(input.workspaceRoot)
+              .pipe(
+                Effect.map(Option.getOrNull),
+                Effect.tapError((cause) =>
+                  Effect.logError(
+                    "orchestration archived project by workspace root load failed",
+                    { cause },
+                  ),
+                ),
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationGetSnapshotError({
+                      message: "Failed to load archived orchestration project by workspace root",
+                      cause,
+                    }),
+                ),
+              ),
             { "rpc.aggregate": "orchestration" },
           ),
         [ORCHESTRATION_WS_METHODS.subscribeThread]: (input) =>

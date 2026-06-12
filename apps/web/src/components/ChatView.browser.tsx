@@ -256,6 +256,12 @@ function createMockEnvironmentApi(input: {
       getArchivedShellSnapshot: (() => {
         throw new Error("Not implemented in browser test.");
       }) as EnvironmentApi["orchestration"]["getArchivedShellSnapshot"],
+      getArchivedProjectsSnapshot: (() => {
+        throw new Error("Not implemented in browser test.");
+      }) as EnvironmentApi["orchestration"]["getArchivedProjectsSnapshot"],
+      getArchivedProjectByWorkspaceRoot: (() => {
+        throw new Error("Not implemented in browser test.");
+      }) as EnvironmentApi["orchestration"]["getArchivedProjectByWorkspaceRoot"],
       subscribeShell: (() => () => undefined) as EnvironmentApi["orchestration"]["subscribeShell"],
       subscribeThread: (() => () =>
         undefined) as EnvironmentApi["orchestration"]["subscribeThread"],
@@ -373,6 +379,7 @@ function createSnapshotForTargetUser(options: {
         scripts: [],
         createdAt: NOW_ISO,
         updatedAt: NOW_ISO,
+        archivedAt: null,
         deletedAt: null,
       },
     ],
@@ -856,6 +863,7 @@ function createSnapshotWithSecondaryProject(options?: {
         scripts: [],
         createdAt: NOW_ISO,
         updatedAt: NOW_ISO,
+        archivedAt: null,
         deletedAt: null,
       },
     ],
