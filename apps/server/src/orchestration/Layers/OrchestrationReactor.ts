@@ -11,6 +11,7 @@ import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeInge
 import { RewindReactor } from "../Services/RewindReactor.ts";
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
 import { ResumeSeedReactor } from "../../resume/ResumeSeedReactor.ts";
+import { SessionTitleReactor } from "../../resume/SessionTitleReactor.ts";
 
 export const makeOrchestrationReactor = Effect.gen(function* () {
   const providerRuntimeIngestion = yield* ProviderRuntimeIngestionService;
@@ -19,6 +20,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
   const rewindReactor = yield* RewindReactor;
   const threadDeletionReactor = yield* ThreadDeletionReactor;
   const resumeSeedReactor = yield* ResumeSeedReactor;
+  const sessionTitleReactor = yield* SessionTitleReactor;
 
   const start: OrchestrationReactorShape["start"] = Effect.fn("start")(function* () {
     yield* providerRuntimeIngestion.start();
@@ -27,6 +29,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
     yield* rewindReactor.start();
     yield* threadDeletionReactor.start();
     yield* resumeSeedReactor.start();
+    yield* sessionTitleReactor.start();
   });
 
   return {

@@ -46,6 +46,7 @@ import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.
 import { RewindReactorLive } from "./orchestration/Layers/RewindReactor.ts";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
 import { ResumeSeedReactorLive } from "./resume/ResumeSeedReactor.ts";
+import { SessionTitleReactorLive } from "./resume/SessionTitleReactor.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
 import { ServerSettingsLive } from "./serverSettings.ts";
 import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver.ts";
@@ -138,6 +139,7 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(RewindReactorLive),
   Layer.provideMerge(ThreadDeletionReactorLive),
   Layer.provideMerge(ResumeSeedReactorLive),
+  Layer.provideMerge(SessionTitleReactorLive),
   Layer.provideMerge(RuntimeReceiptBusLive),
 );
 

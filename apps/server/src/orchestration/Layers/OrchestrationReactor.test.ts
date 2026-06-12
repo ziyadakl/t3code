@@ -12,6 +12,7 @@ import { RewindReactor } from "../Services/RewindReactor.ts";
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
 import { OrchestrationReactor } from "../Services/OrchestrationReactor.ts";
 import { ResumeSeedReactor } from "../../resume/ResumeSeedReactor.ts";
+import { SessionTitleReactor } from "../../resume/SessionTitleReactor.ts";
 import { makeOrchestrationReactor } from "./OrchestrationReactor.ts";
 
 describe("OrchestrationReactor", () => {
@@ -82,6 +83,14 @@ describe("OrchestrationReactor", () => {
             },
           }),
         ),
+        Layer.provideMerge(
+          Layer.succeed(SessionTitleReactor, {
+            start: () => {
+              started.push("session-title-reactor");
+              return Effect.void;
+            },
+          }),
+        ),
       ),
     );
 
@@ -96,6 +105,7 @@ describe("OrchestrationReactor", () => {
       "rewind-reactor",
       "thread-deletion-reactor",
       "resume-seed-reactor",
+      "session-title-reactor",
     ]);
 
     await Effect.runPromise(Scope.close(scope, Exit.void));
