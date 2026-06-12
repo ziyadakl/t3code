@@ -1827,6 +1827,17 @@ export function selectProjectsAcrossEnvironments(state: AppState): Project[] {
   );
 }
 
+/**
+ * All connected environment ids, independent of whether they currently have any
+ * active projects. Archived-snapshot panels must query every environment — a
+ * project (or its threads) can be archived while the environment has no active
+ * project left, in which case deriving the id set from active projects would
+ * silently skip that environment.
+ */
+export function selectEnvironmentIds(state: AppState): EnvironmentId[] {
+  return getEnvironmentEntries(state).map(([environmentId]) => environmentId);
+}
+
 export function selectThreadsAcrossEnvironments(state: AppState): Thread[] {
   return getEnvironmentEntries(state).flatMap(([, environmentState]) =>
     getThreads(environmentState),

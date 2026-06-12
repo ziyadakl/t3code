@@ -48,7 +48,7 @@ import {
 } from "../../providerInstances";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
 import { useShallow } from "zustand/react/shallow";
-import { selectProjectsAcrossEnvironments, useStore } from "../../store";
+import { selectEnvironmentIds, useStore } from "../../store";
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
 import { useArchivedProjectSnapshots } from "../../lib/archivedProjectsState";
 import { readEnvironmentApi } from "../../environmentApi";
@@ -1343,12 +1343,10 @@ export function ProviderSettingsPanel() {
 }
 
 export function ArchivedThreadsPanel() {
-  const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
   const { unarchiveThread, confirmAndDeleteThread } = useThreadActions();
-  const environmentIds = useMemo(
-    () => [...new Set(projects.map((project) => project.environmentId))],
-    [projects],
-  );
+  // Query every connected environment, not just those with active projects —
+  // an environment whose only project is archived still has archived threads.
+  const environmentIds = useStore(useShallow(selectEnvironmentIds));
   const {
     snapshots: archivedSnapshots,
     error: archiveError,
@@ -1531,12 +1529,12 @@ export function ArchivedThreadsPanel() {
 }
 
 export function ArchivedProjectsPanel() {
-  const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
   const { unarchiveProject } = useProjectActions();
-  const environmentIds = useMemo(
-    () => [...new Set(projects.map((project) => project.environmentId))],
-    [projects],
-  );
+  // Query every connected environment, not just those with active projects:
+  // archived projects are feed-excluded, so an environment whose only project
+  // was just archived would otherwise drop out of the id set and the panel
+  // would show "No archived projects" (unrecoverable from here).
+  const environmentIds = useStore(useShallow(selectEnvironmentIds));
   const {
     snapshots: archivedSnapshots,
     error: archiveError,
