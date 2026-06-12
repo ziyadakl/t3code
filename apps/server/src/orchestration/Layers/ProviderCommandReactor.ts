@@ -673,6 +673,7 @@ const make = Effect.gen(function* () {
           commandId: yield* serverCommandId("thread-title-rename"),
           threadId: input.threadId,
           title: generated.title,
+          titleSource: "auto",
         });
       }).pipe(
         Effect.catchCause((cause) =>

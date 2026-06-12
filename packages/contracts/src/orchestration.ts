@@ -540,6 +540,7 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  titleSource: Schema.optional(Schema.Literals(["user", "auto"])),
 });
 
 const ThreadRuntimeModeSetCommand = Schema.Struct({
@@ -1004,6 +1005,7 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  titleSource: Schema.optional(Schema.Literals(["user", "auto"])),
   updatedAt: IsoDateTime,
 });
 
