@@ -159,6 +159,9 @@ vi.mock("@t3tools/client-runtime", async (importOriginal) => {
       status: vi.fn(),
       logs: vi.fn(),
     },
+    sandcastle: {
+      statusAll: vi.fn(),
+    },
   };
   return {
     ...actual,

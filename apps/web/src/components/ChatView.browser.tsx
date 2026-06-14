@@ -246,6 +246,7 @@ function createMockEnvironmentApi(input: {
     review: {} as EnvironmentApi["review"],
     resume: {} as EnvironmentApi["resume"],
     devServer: {} as EnvironmentApi["devServer"],
+    sandcastle: {} as EnvironmentApi["sandcastle"],
     orchestration: {
       dispatchCommand: input.dispatchCommand,
       getTurnDiff: (() => {

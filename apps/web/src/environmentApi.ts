@@ -69,6 +69,9 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): EnvironmentApi {
       status: (input) => rpcClient.devServer.status(input as never),
       logs: (input) => rpcClient.devServer.logs(input as never),
     },
+    sandcastle: {
+      statusAll: (input) => rpcClient.sandcastle.statusAll(input as never),
+    },
   };
 }
 

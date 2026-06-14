@@ -177,6 +177,9 @@ export interface WsRpcClient {
     readonly status: RpcUnaryMethod<typeof WS_METHODS.devServerStatus>;
     readonly logs: RpcUnaryMethod<typeof WS_METHODS.devServerLogs>;
   };
+  readonly sandcastle: {
+    readonly statusAll: RpcUnaryMethod<typeof WS_METHODS.sandcastleStatusAll>;
+  };
 }
 
 export interface CreateWsRpcClientOptions {
@@ -382,6 +385,10 @@ export function createWsRpcClient(
         transport.request((client) => client[WS_METHODS.devServerStatus](input)),
       logs: (input) =>
         transport.request((client) => client[WS_METHODS.devServerLogs](input)),
+    },
+    sandcastle: {
+      statusAll: (input) =>
+        transport.request((client) => client[WS_METHODS.sandcastleStatusAll](input)),
     },
   };
 }
