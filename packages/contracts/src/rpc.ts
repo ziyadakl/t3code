@@ -122,6 +122,10 @@ import {
   WsDevServerStatusRpc,
   WsDevServerLogsRpc,
 } from "./devServer.ts";
+import {
+  SANDCASTLE_WS_METHODS,
+  WsSandcastleStatusAllRpc,
+} from "./sandcastle.ts";
 
 export const WS_METHODS = {
   // Project registry methods
@@ -191,6 +195,9 @@ export const WS_METHODS = {
   devServerStop: DEV_SERVER_WS_METHODS.devServerStop,
   devServerStatus: DEV_SERVER_WS_METHODS.devServerStatus,
   devServerLogs: DEV_SERVER_WS_METHODS.devServerLogs,
+
+  // Sandcastle viewer methods
+  sandcastleStatusAll: SANDCASTLE_WS_METHODS.sandcastleStatusAll,
 
   // Streaming subscriptions
   subscribeVcsStatus: "subscribeVcsStatus",
@@ -606,6 +613,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsDevServerStopRpc,
   WsDevServerStatusRpc,
   WsDevServerLogsRpc,
+  WsSandcastleStatusAllRpc,
   WsTerminalOpenRpc,
   WsTerminalAttachRpc,
   WsTerminalWriteRpc,
