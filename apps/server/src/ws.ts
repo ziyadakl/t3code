@@ -46,7 +46,6 @@ import {
   type TerminalMetadataStreamEvent,
   ResumeError,
   DevServerError,
-  SandcastleError,
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
@@ -1479,9 +1478,7 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
         [WS_METHODS.sandcastleStatusAll]: (input) =>
           observeRpcEffect(
             WS_METHODS.sandcastleStatusAll,
-            sandcastleStatusReader.statusAll(input).pipe(
-              Effect.mapError((cause) => new SandcastleError({ message: cause.message })),
-            ),
+            sandcastleStatusReader.statusAll(input),
             { "rpc.aggregate": "sandcastle" },
           ),
         [WS_METHODS.subscribeTerminalEvents]: (_input) =>

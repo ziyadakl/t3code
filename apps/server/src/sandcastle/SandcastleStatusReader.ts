@@ -14,13 +14,12 @@ import type {
   SandcastleStatusAllResult,
   SandcastleStatusEntry,
 } from "@t3tools/contracts";
-import { SandcastleError } from "@t3tools/contracts";
 import { buildStatusEntry } from "./buildStatusEntry.ts";
 
 export interface SandcastleStatusReaderShape {
   statusAll(
     payload: SandcastleStatusAllPayload,
-  ): Effect.Effect<SandcastleStatusAllResult, SandcastleError>;
+  ): Effect.Effect<SandcastleStatusAllResult>;
 }
 
 export class SandcastleStatusReader extends Context.Service<
@@ -56,7 +55,7 @@ const makeReader = Effect.gen(function* () {
 
   const statusAll = (
     payload: SandcastleStatusAllPayload,
-  ): Effect.Effect<SandcastleStatusAllResult, SandcastleError> =>
+  ): Effect.Effect<SandcastleStatusAllResult> =>
     Effect.gen(function* () {
       const entries = yield* Effect.forEach(payload.cwds, readOne, {
         concurrency: 8,
@@ -66,11 +65,7 @@ const makeReader = Effect.gen(function* () {
         serverNow: DateTime.formatIso(now),
         entries,
       };
-    }).pipe(
-      Effect.catch((cause) =>
-        Effect.fail(new SandcastleError({ message: String(cause) })),
-      ),
-    );
+    });
 
   return { statusAll } satisfies SandcastleStatusReaderShape;
 });

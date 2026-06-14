@@ -122,15 +122,6 @@ export const SandcastleStatusAllResult = Schema.Struct({
 });
 export type SandcastleStatusAllResult = typeof SandcastleStatusAllResult.Type;
 
-// --- error -----------------------------------------------------------------
-
-export class SandcastleError extends Schema.TaggedErrorClass<SandcastleError>()(
-  "SandcastleError",
-  {
-    message: Schema.String,
-  },
-) {}
-
 // --- RPC (unary — no `stream: true`) ---------------------------------------
 
 export const WsSandcastleStatusAllRpc = Rpc.make(
@@ -138,6 +129,6 @@ export const WsSandcastleStatusAllRpc = Rpc.make(
   {
     payload: SandcastleStatusAllPayload,
     success: SandcastleStatusAllResult,
-    error: Schema.Union([SandcastleError, EnvironmentAuthorizationError]),
+    error: EnvironmentAuthorizationError,
   },
 );
