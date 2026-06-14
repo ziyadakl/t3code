@@ -35,6 +35,7 @@ import {
   devServerLogPath,
   waitUntilReady,
   makeHttpProbe,
+  teeProcessOutput,
   type ReadyProbe,
 } from "./DevServerRunner.ts";
 import { DEV_STOP_CMD, DEV_START_CMD } from "./devServerCommands.ts";
@@ -618,4 +619,98 @@ describe("DevServerRunner", () => {
       expect(result.logPath?.startsWith("/tmp/test-logs/")).toBe(true);
     }).pipe(Effect.provide(layer));
   });
+});
+
+// ---------------------------------------------------------------------------
+// teeProcessOutput — the log tee (ordered single-consumer drain + teardown)
+// ---------------------------------------------------------------------------
+
+/**
+ * Minimal onData source: lets a test push data synchronously (as the PTY does)
+ * and observe whether the unsubscribe handle was actually called.
+ */
+function makeDataStub() {
+  const listeners: Array<(data: string) => void> = [];
+  let detached = false;
+  const proc: Pick<PtyProcess, "onData"> = {
+    onData(cb) {
+      listeners.push(cb);
+      return () => {
+        detached = true;
+        const idx = listeners.indexOf(cb);
+        if (idx !== -1) listeners.splice(idx, 1);
+      };
+    },
+  };
+  return {
+    proc,
+    push: (data: string) => {
+      for (const cb of listeners) cb(data);
+    },
+    get detached() {
+      return detached;
+    },
+  };
+}
+
+describe("teeProcessOutput", () => {
+  it.effect("ordering: chunks are written in the order onData received them", () =>
+    Effect.gen(function* () {
+      const src = makeDataStub();
+      const writes: string[] = [];
+      const appendChunk = (_path: string, data: string) =>
+        Effect.sync(() => {
+          writes.push(data);
+        });
+      const runFork = Effect.runForkWith(yield* Effect.context<never>());
+
+      const tee = yield* teeProcessOutput({ proc: src.proc, logPath: "/x.log", appendChunk, runFork });
+      src.push("a");
+      src.push("b");
+      src.push("c");
+      yield* tee.shutdown;
+
+      // Chunks may coalesce, but their concatenation must be "abc" —
+      // never "acb"/"bca"/interleaved (the bug the old per-chunk fork allowed).
+      expect(writes.join("")).toBe("abc");
+    }),
+  );
+
+  it.effect("shutdown detaches the onData listener", () =>
+    Effect.gen(function* () {
+      const src = makeDataStub();
+      const writes: string[] = [];
+      const appendChunk = (_path: string, data: string) =>
+        Effect.sync(() => {
+          writes.push(data);
+        });
+      const runFork = Effect.runForkWith(yield* Effect.context<never>());
+
+      const tee = yield* teeProcessOutput({ proc: src.proc, logPath: "/x.log", appendChunk, runFork });
+      src.push("early");
+      yield* tee.shutdown;
+
+      expect(src.detached).toBe(true);
+      src.push("late"); // listener gone — must not reach the log
+      expect(writes.join("")).toBe("early");
+    }),
+  );
+
+  it.effect("shutdown flushes the buffered tail (no chunk lost)", () =>
+    Effect.gen(function* () {
+      const src = makeDataStub();
+      const writes: string[] = [];
+      const appendChunk = (_path: string, data: string) =>
+        Effect.sync(() => {
+          writes.push(data);
+        });
+      const runFork = Effect.runForkWith(yield* Effect.context<never>());
+
+      const tee = yield* teeProcessOutput({ proc: src.proc, logPath: "/x.log", appendChunk, runFork });
+      src.push("tail");
+      yield* tee.shutdown; // must flush "tail" before resolving
+
+      expect(writes.join("")).toBe("tail");
+    }),
+  );
 });

@@ -11,8 +11,10 @@ import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Queue from "effect/Queue";
 import * as Schedule from "effect/Schedule";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import { HttpClient } from "effect/unstable/http";
@@ -106,6 +108,76 @@ export function waitUntilReady(
     Effect.timeout(opts.totalTimeout ?? READINESS_TOTAL_TIMEOUT),
     Effect.orElseSucceed(() => false),
   );
+}
+
+// ---------------------------------------------------------------------------
+// Log tee
+// ---------------------------------------------------------------------------
+//
+// Mirror a dev server's PTY output to its logfile so it can be `tail -f`-ed and
+// shown in the UI. The PTY's onData callback fires synchronously and in order;
+// the trap to avoid is forking a separate write fiber per chunk (those race and
+// can interleave/reorder on disk). Instead the callback only enqueues, and a
+// SINGLE drain fiber appends chunks in the exact order received. shutdown()
+// detaches the listener and waits for the drain to flush every queued chunk.
+
+/** Sentinel offered to the queue to tell the drain fiber to flush + stop. */
+const TEE_DONE = Symbol("devServer/tee/done");
+
+export interface TeeHandle {
+  /**
+   * Detach the onData listener, then wait for the drain fiber to flush every
+   * already-queued chunk and exit. Safe to run from the process onExit handler.
+   */
+  readonly shutdown: Effect.Effect<void>;
+}
+
+/**
+ * Tee `proc`'s output into the logfile via a single ordered consumer.
+ *
+ * `appendChunk` is injected (rather than calling FileSystem directly) so the
+ * ordering guarantee is unit-testable without a filesystem. `runFork` is the
+ * same `Effect.runForkWith(context)` the runner uses to bridge sync PTY
+ * callbacks into the Effect runtime.
+ */
+export function teeProcessOutput(opts: {
+  readonly proc: Pick<PtyProcess, "onData">;
+  readonly logPath: string;
+  readonly appendChunk: (path: string, data: string) => Effect.Effect<void>;
+  readonly runFork: <A, E>(effect: Effect.Effect<A, E>) => Fiber.Fiber<A, E>;
+}): Effect.Effect<TeeHandle> {
+  return Effect.gen(function* () {
+    const { proc, logPath, appendChunk, runFork } = opts;
+    const queue = yield* Queue.unbounded<string | typeof TEE_DONE>();
+
+    // Sync, order-preserving: the callback only enqueues — no per-chunk fork.
+    const unsubscribe = proc.onData((data) => {
+      Queue.offerUnsafe(queue, data);
+    });
+
+    // Single consumer → appends land in the order they were enqueued.
+    const drainFiber = runFork(
+      Effect.gen(function* () {
+        let running = true;
+        while (running) {
+          const item = yield* Queue.take(queue);
+          if (item === TEE_DONE) {
+            running = false;
+          } else {
+            yield* appendChunk(logPath, item);
+          }
+        }
+      }),
+    );
+
+    const shutdown = Effect.gen(function* () {
+      unsubscribe();
+      yield* Queue.offer(queue, TEE_DONE);
+      yield* Fiber.join(drainFiber);
+    });
+
+    return { shutdown };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -352,16 +424,20 @@ const makeDevServerRunner = Effect.gen(function* () {
         );
 
       // Tee the dev server's output to a logfile so it can be tailed from a
-      // terminal (and, later, shown in the UI). Truncate on each fresh start.
-      // This listener lives for the process lifetime (separate from the
-      // URL-capture listener below, which detaches once the URL is found).
+      // terminal and shown in the UI. Truncate on each fresh start, then mirror
+      // every chunk via teeProcessOutput (a single ordered consumer — see its
+      // doc). The tee is torn down in the onExit handler below.
       const logPath = devServerLogPath(serverConfig.logsDir, cwd);
       yield* fileSystem
         .makeDirectory(`${serverConfig.logsDir}/devserver`, { recursive: true })
         .pipe(Effect.ignore);
       yield* fileSystem.writeFileString(logPath, "").pipe(Effect.ignore);
-      const _unsubscribeLog = proc.onData((data) => {
-        runFork(fileSystem.writeFileString(logPath, data, { flag: "a" }).pipe(Effect.ignore));
+      const tee = yield* teeProcessOutput({
+        proc,
+        logPath,
+        appendChunk: (path, data) =>
+          fileSystem.writeFileString(path, data, { flag: "a" }).pipe(Effect.ignore),
+        runFork,
       });
 
       // Deferred resolves with the first captured URL (or fails on early exit).
@@ -413,6 +489,8 @@ const makeDevServerRunner = Effect.gen(function* () {
             return map;
           }),
         );
+        // Tear down the log tee: detach its listener and flush any queued chunks.
+        runFork(tee.shutdown);
       });
 
       // Race: URL captured vs 60-second timeout.
