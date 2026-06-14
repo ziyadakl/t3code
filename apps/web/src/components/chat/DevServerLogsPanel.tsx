@@ -101,7 +101,7 @@ export function DevServerLogsPanel({
           <div className="flex items-center gap-2">
             {content ? (
               <Button
-                className="gap-1 transition-transform hover:scale-110 active:scale-95"
+                className="gap-1 bg-[color-mix(in_oklab,var(--primary),#000_15%)] [:hover,[data-pressed]]:bg-primary"
                 onClick={copyLogs}
                 size="xs"
                 variant="default"
