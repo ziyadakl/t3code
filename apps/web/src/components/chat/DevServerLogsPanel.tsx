@@ -1,5 +1,6 @@
 import { type EnvironmentId, type ThreadId } from "@t3tools/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { CheckIcon, CopyIcon } from "lucide-react";
 import { RightPanelSheet } from "../RightPanelSheet";
 import { Button } from "../ui/button";
 import { readEnvironmentApi } from "~/environmentApi";
@@ -31,6 +32,7 @@ export function DevServerLogsPanel({
   const [content, setContent] = useState("");
   const [logPath, setLogPath] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [copiedLogs, setCopiedLogs] = useState(false);
   const preRef = useRef<HTMLPreElement>(null);
   // Only auto-scroll if the user is already pinned to the bottom.
   const atBottomRef = useRef(true);
@@ -79,6 +81,18 @@ export function DevServerLogsPanel({
       .catch(() => undefined);
   }, [logPath]);
 
+  // Copy what's currently shown (the logfile tail held in `content`).
+  const copyLogs = useCallback(() => {
+    if (!content) return;
+    void navigator.clipboard
+      ?.writeText(content)
+      .then(() => {
+        setCopiedLogs(true);
+        window.setTimeout(() => setCopiedLogs(false), 1_200);
+      })
+      .catch(() => undefined);
+  }, [content]);
+
   return (
     <RightPanelSheet open onClose={onClose}>
       <div className="flex h-full flex-col gap-2 p-3">
@@ -100,17 +114,30 @@ export function DevServerLogsPanel({
           </div>
         ) : null}
 
-        <pre
-          className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-all rounded-md border border-input p-2 font-mono text-[11px] leading-snug"
-          onScroll={(e) => {
-            const el = e.currentTarget;
-            atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-          }}
-          ref={preRef}
-        >
-          {content ||
-            "No logs yet. Only dev servers started by t3 are logged — use the Globe (or ▾ Restart) to start one."}
-        </pre>
+        <div className="relative min-h-0 flex-1">
+          {content ? (
+            <Button
+              className="absolute top-2 right-2 z-10 gap-1"
+              onClick={copyLogs}
+              size="xs"
+              variant="outline"
+            >
+              {copiedLogs ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
+              {copiedLogs ? "Copied" : "Copy"}
+            </Button>
+          ) : null}
+          <pre
+            className="h-full w-full overflow-auto whitespace-pre-wrap break-all rounded-md border border-input p-2 font-mono text-[11px] leading-snug"
+            onScroll={(e) => {
+              const el = e.currentTarget;
+              atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+            }}
+            ref={preRef}
+          >
+            {content ||
+              "No logs yet. Only dev servers started by t3 are logged — use the Globe (or ▾ Restart) to start one."}
+          </pre>
+        </div>
       </div>
     </RightPanelSheet>
   );
