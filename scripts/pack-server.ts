@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @effect-diagnostics nodeBuiltinImport:off -- procedural build script (not an Effect runtime); mirrors scripts/release-smoke.ts
 /**
  * Build a self-installable npm tarball of the `t3` server package from this
  * fork, with `catalog:` dependencies resolved to concrete versions.
@@ -54,9 +55,9 @@ const original = readFileSync(pkgPath, "utf8");
 writeFileSync(backupPath, original);
 try {
   writeFileSync(pkgPath, `${JSON.stringify(resolved, null, 2)}\n`);
-  console.log(`[pack-server] Resolved package.json for t3@${resolved.version}; running npm pack…`);
+  process.stdout.write(`[pack-server] Resolved package.json for t3@${resolved.version}; running npm pack…\n`);
   execFileSync("npm", ["pack"], { cwd: serverDir, stdio: "inherit" });
-  console.log(`[pack-server] Done → apps/server/t3-${resolved.version}.tgz`);
+  process.stdout.write(`[pack-server] Done → apps/server/t3-${resolved.version}.tgz\n`);
 } finally {
   // Always restore the original (catalog:-based) package.json.
   renameSync(backupPath, pkgPath);
