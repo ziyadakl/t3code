@@ -9,6 +9,7 @@
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import type { DevServerPayload, DevServerStatus } from "@t3tools/contracts";
@@ -16,6 +17,9 @@ import { DevServerError } from "@t3tools/contracts";
 import { projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
 import { PtyAdapter } from "../terminal/Services/PTY.ts";
 import type { PtyProcess } from "../terminal/Services/PTY.ts";
+import { ProcessRunner } from "../processRunner.ts";
+import { ServerConfig } from "../config.ts";
+import { detectListening } from "./detect.ts";
 import { DEV_START_CMD, DEV_STOP_CMD } from "./devServerCommands.ts";
 
 // ---------------------------------------------------------------------------
@@ -130,11 +134,24 @@ export function buildSpawnEnv(payload: DevServerPayload): NodeJS.ProcessEnv {
 
 const makeDevServerRunner = Effect.gen(function* () {
   const ptyAdapter = yield* PtyAdapter;
+  // Services needed for detectListening — yielded here so the context
+  // is always available when we call detect from within status/start.
+  const processRunner = yield* ProcessRunner;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const serverConfig = yield* ServerConfig;
 
   // Capture the current Effect context so we can use Effect.runForkWith from
   // sync callbacks (same pattern as terminal/Layers/Manager.ts:952).
   const context = yield* Effect.context<never>();
   const runFork = Effect.runForkWith(context);
+
+  /** Helper that runs detectListening with the captured services. */
+  const detect = (cwd: string): Effect.Effect<string | null> =>
+    detectListening(cwd).pipe(
+      Effect.provideService(ProcessRunner, processRunner),
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(ServerConfig, serverConfig),
+    );
 
   const stateRef = yield* SynchronizedRef.make<DevServerMap>(new Map());
 
@@ -150,9 +167,17 @@ const makeDevServerRunner = Effect.gen(function* () {
       }
       const map = yield* SynchronizedRef.get(stateRef);
       const entry = map.get(cwd);
-      return entry
-        ? { running: true, url: entry.url }
-        : { running: false, url: null };
+      if (entry) {
+        // Known to this process — return as-is (url may still be null while starting).
+        return { running: true, url: entry.url };
+      }
+
+      // Not in our map — probe for an externally started server.
+      const detectedUrl = yield* detect(cwd);
+      if (detectedUrl !== null) {
+        return { running: true, url: detectedUrl };
+      }
+      return { running: false, url: null };
     });
 
   // ---- start ----------------------------------------------------------------
@@ -192,7 +217,20 @@ const makeDevServerRunner = Effect.gen(function* () {
         });
       }
 
-      // We now hold the reservation for cwd; ANY failure below must release it.
+      // We hold the reservation. Before spawning, check if a server is already
+      // listening externally (e.g. started in a terminal). If so, ADOPT it:
+      // store in map with process: null and return immediately without spawning.
+      const adoptedUrl = yield* detect(cwd);
+      if (adoptedUrl !== null) {
+        yield* SynchronizedRef.update(stateRef, (map) => {
+          const next = new Map(map);
+          next.set(cwd, { url: adoptedUrl, process: null });
+          return next;
+        });
+        return { running: true, url: adoptedUrl } satisfies DevServerStatus;
+      }
+
+      // No external server found — proceed to spawn. ANY failure below must release the reservation.
       const releaseReservation = SynchronizedRef.update(stateRef, (map) => {
         const entry = map.get(cwd);
         // Only delete the unfulfilled reservation (process not yet stored).

@@ -14,13 +14,17 @@
 import { it, describe, expect } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as PlatformError from "effect/PlatformError";
 import type { DevServerPayload } from "@t3tools/contracts";
 import { DevServerError } from "@t3tools/contracts";
 import { PtyAdapter } from "../terminal/Services/PTY.ts";
 import type { PtyProcess, PtySpawnInput } from "../terminal/Services/PTY.ts";
 import type { PtySpawnError } from "../terminal/Services/PTY.ts";
+import { ProcessRunner } from "../processRunner.ts";
+import { ServerConfig } from "../config.ts";
 import {
   DevServerRunner,
   DevServerRunnerLive,
@@ -29,6 +33,7 @@ import {
   resolveCwd,
 } from "./DevServerRunner.ts";
 import { DEV_STOP_CMD, DEV_START_CMD } from "./devServerCommands.ts";
+import { ChildProcessSpawner } from "effect/unstable/process";
 
 // ---------------------------------------------------------------------------
 // Fake PTY infrastructure
@@ -98,6 +103,45 @@ type SpawnFactory = (input: PtySpawnInput) => Effect.Effect<PtyProcess, PtySpawn
 function makeFakePtyLayer(factory: SpawnFactory): Layer.Layer<PtyAdapter> {
   return Layer.succeed(PtyAdapter, PtyAdapter.of({ spawn: factory }));
 }
+
+// ---------------------------------------------------------------------------
+// Fake ProcessRunner / FileSystem / ServerConfig for detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns a fake ProcessRunner that makes `ss` output return no listeners,
+ * so detectListening always resolves to null and the spawn path runs as before.
+ */
+const NoDetectionProcessRunnerLayer = Layer.succeed(
+  ProcessRunner,
+  ProcessRunner.of({
+    run: () =>
+      Effect.succeed({
+        stdout: "",
+        stderr: "",
+        code: ChildProcessSpawner.ExitCode(0),
+        timedOut: false,
+        stdoutTruncated: false,
+        stderrTruncated: false,
+      }),
+  }),
+);
+
+/** Noop FileSystem — detectListening never calls readLink when ss returns empty. */
+const NoopFileSystemLayer = FileSystem.layerNoop({});
+
+/** Minimal ServerConfig for tests (only .host is used by detectListening). */
+const TestServerConfigLayer = Layer.succeed(ServerConfig, { host: undefined } as ServerConfig["Service"]);
+
+/**
+ * Base detection-suppression layer: combine with PtyAdapter for existing tests.
+ * Makes detectListening always return null so spawn tests behave as before.
+ */
+const DetectionNullLayer = Layer.mergeAll(
+  NoDetectionProcessRunnerLayer,
+  NoopFileSystemLayer,
+  TestServerConfigLayer,
+);
 
 // ---------------------------------------------------------------------------
 // Shared test payload
@@ -171,7 +215,12 @@ describe("resolveCwd", () => {
 describe("DevServerRunner", () => {
   it.effect("both-null cwd → DevServerError", () => {
     const layer = DevServerRunnerLive.pipe(
-      Layer.provide(makeFakePtyLayer(() => Effect.die("should not be called") as never)),
+      Layer.provide(
+        Layer.merge(
+          makeFakePtyLayer(() => Effect.die("should not be called") as never),
+          DetectionNullLayer,
+        ),
+      ),
     );
     return Effect.gen(function* () {
       const runner = yield* DevServerRunner;
@@ -185,13 +234,16 @@ describe("DevServerRunner", () => {
     // Stub emits ANSI-wrapped URL synchronously on onData registration
     const layer = DevServerRunnerLive.pipe(
       Layer.provide(
-        makeFakePtyLayer((input) =>
-          Effect.sync(() =>
-            makeStubProcess(input.args ?? [], {
-              kind: "url",
-              url: "http://100.99.237.12:4001",
-            }) as PtyProcess,
+        Layer.merge(
+          makeFakePtyLayer((input) =>
+            Effect.sync(() =>
+              makeStubProcess(input.args ?? [], {
+                kind: "url",
+                url: "http://100.99.237.12:4001",
+              }) as PtyProcess,
+            ),
           ),
+          DetectionNullLayer,
         ),
       ),
     );
@@ -214,14 +266,17 @@ describe("DevServerRunner", () => {
 
     const layer = DevServerRunnerLive.pipe(
       Layer.provide(
-        makeFakePtyLayer((input) =>
-          Effect.sync(() => {
-            spawnCount++;
-            return makeStubProcess(input.args ?? [], {
-              kind: "url",
-              url: "http://localhost:3000",
-            }) as PtyProcess;
-          }),
+        Layer.merge(
+          makeFakePtyLayer((input) =>
+            Effect.sync(() => {
+              spawnCount++;
+              return makeStubProcess(input.args ?? [], {
+                kind: "url",
+                url: "http://localhost:3000",
+              }) as PtyProcess;
+            }),
+          ),
+          DetectionNullLayer,
         ),
       ),
     );
@@ -241,13 +296,16 @@ describe("DevServerRunner", () => {
   it.effect("status reflects running/url after start", () => {
     const layer = DevServerRunnerLive.pipe(
       Layer.provide(
-        makeFakePtyLayer((input) =>
-          Effect.sync(() =>
-            makeStubProcess(input.args ?? [], {
-              kind: "url",
-              url: "http://0.0.0.0:5173",
-            }) as PtyProcess,
+        Layer.merge(
+          makeFakePtyLayer((input) =>
+            Effect.sync(() =>
+              makeStubProcess(input.args ?? [], {
+                kind: "url",
+                url: "http://0.0.0.0:5173",
+              }) as PtyProcess,
+            ),
           ),
+          DetectionNullLayer,
         ),
       ),
     );
@@ -272,20 +330,23 @@ describe("DevServerRunner", () => {
 
     const layer = DevServerRunnerLive.pipe(
       Layer.provide(
-        makeFakePtyLayer((input) =>
-          Effect.sync(() => {
-            const args = input.args ?? [];
-            const cmd = args[1] ?? "";
-            seenCommands.push(cmd);
+        Layer.merge(
+          makeFakePtyLayer((input) =>
+            Effect.sync(() => {
+              const args = input.args ?? [];
+              const cmd = args[1] ?? "";
+              seenCommands.push(cmd);
 
-            if (cmd.includes("pnpm dev")) {
-              // Start command: emit URL synchronously
-              return makeStubProcess(args, { kind: "url", url: "http://localhost:4321" }) as PtyProcess;
-            } else {
-              // Stop command: exit immediately
-              return makeStubProcess(args, { kind: "exit", code: 0 }) as PtyProcess;
-            }
-          }),
+              if (cmd.includes("pnpm dev")) {
+                // Start command: emit URL synchronously
+                return makeStubProcess(args, { kind: "url", url: "http://localhost:4321" }) as PtyProcess;
+              } else {
+                // Stop command: exit immediately
+                return makeStubProcess(args, { kind: "exit", code: 0 }) as PtyProcess;
+              }
+            }),
+          ),
+          DetectionNullLayer,
         ),
       ),
     );
@@ -314,10 +375,13 @@ describe("DevServerRunner", () => {
     // Stub exits immediately (before any URL)
     const layer = DevServerRunnerLive.pipe(
       Layer.provide(
-        makeFakePtyLayer((input) =>
-          Effect.sync(() =>
-            makeStubProcess(input.args ?? [], { kind: "exit", code: 1 }) as PtyProcess,
+        Layer.merge(
+          makeFakePtyLayer((input) =>
+            Effect.sync(() =>
+              makeStubProcess(input.args ?? [], { kind: "exit", code: 1 }) as PtyProcess,
+            ),
           ),
+          DetectionNullLayer,
         ),
       ),
     );
@@ -328,6 +392,107 @@ describe("DevServerRunner", () => {
       const devErr = err as Partial<DevServerError> & { _tag?: string };
       expect(devErr._tag).toBe("DevServerError");
       expect(devErr.reason).toBe("early-exit");
+    }).pipe(Effect.provide(layer));
+  });
+
+  // ---- detection tests -------------------------------------------------------
+
+  it.effect("status: detects an externally started server via detectListening", () => {
+    // Fake ss output: one listener on /project/worktree's pid
+    const ssOutput =
+      "LISTEN 0      511          100.99.237.12:4001      0.0.0.0:*    users:((\"node\",pid=99001,fd=21))";
+
+    const fakeProcessRunner = Layer.succeed(
+      ProcessRunner,
+      ProcessRunner.of({
+        run: () =>
+          Effect.succeed({
+            stdout: ssOutput,
+            stderr: "",
+            code: ChildProcessSpawner.ExitCode(0),
+            timedOut: false,
+            stdoutTruncated: false,
+            stderrTruncated: false,
+          }),
+      }),
+    );
+
+    const fakeFileSystem = FileSystem.layerNoop({
+      readLink: (path) => {
+        if (path === "/proc/99001/cwd") return Effect.succeed("/project/worktree");
+        return Effect.fail(PlatformError.systemError({ _tag: "NotFound", module: "FileSystem", method: "readLink", pathOrDescriptor: path }));
+      },
+    });
+
+    const layer = DevServerRunnerLive.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          makeFakePtyLayer(() => Effect.die("should not be called") as never),
+          fakeProcessRunner,
+          fakeFileSystem,
+          TestServerConfigLayer,
+        ),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      const runner = yield* DevServerRunner;
+      const result = yield* runner.status(basePayload);
+      expect(result.running).toBe(true);
+      expect(result.url).toBe("http://100.99.237.12:4001");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("start: adopts an externally started server without spawning", () => {
+    let spawnCount = 0;
+
+    const ssOutput =
+      "LISTEN 0      511          100.99.237.12:4001      0.0.0.0:*    users:((\"node\",pid=99001,fd=21))";
+
+    const fakeProcessRunner = Layer.succeed(
+      ProcessRunner,
+      ProcessRunner.of({
+        run: () =>
+          Effect.succeed({
+            stdout: ssOutput,
+            stderr: "",
+            code: ChildProcessSpawner.ExitCode(0),
+            timedOut: false,
+            stdoutTruncated: false,
+            stderrTruncated: false,
+          }),
+      }),
+    );
+
+    const fakeFileSystem = FileSystem.layerNoop({
+      readLink: (path) => {
+        if (path === "/proc/99001/cwd") return Effect.succeed("/project/worktree");
+        return Effect.fail(PlatformError.systemError({ _tag: "NotFound", module: "FileSystem", method: "readLink", pathOrDescriptor: path }));
+      },
+    });
+
+    const layer = DevServerRunnerLive.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          makeFakePtyLayer((input) =>
+            Effect.sync(() => {
+              spawnCount++;
+              return makeStubProcess(input.args ?? [], { kind: "url", url: "http://wrong:1" }) as PtyProcess;
+            }),
+          ),
+          fakeProcessRunner,
+          fakeFileSystem,
+          TestServerConfigLayer,
+        ),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      const runner = yield* DevServerRunner;
+      const result = yield* runner.start(basePayload);
+      expect(result.running).toBe(true);
+      expect(result.url).toBe("http://100.99.237.12:4001");
+      expect(spawnCount).toBe(0); // ADOPT: no spawn
     }).pipe(Effect.provide(layer));
   });
 });

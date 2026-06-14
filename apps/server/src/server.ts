@@ -36,6 +36,7 @@ import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import { ProviderInstanceRegistryHydrationLive } from "./provider/Layers/ProviderInstanceRegistryHydration.ts";
 import { TerminalManagerLive } from "./terminal/Layers/Manager.ts";
 import { DevServerRunnerLive } from "./devServer/DevServerRunner.ts";
+import { layer as ProcessRunnerLive } from "./processRunner.ts";
 import * as GitManager from "./git/GitManager.ts";
 import { KeybindingsLive } from "./keybindings.ts";
 import { ServerRuntimeStartup, ServerRuntimeStartupLive } from "./serverRuntimeStartup.ts";
@@ -217,7 +218,12 @@ const CheckpointingLayerLive = Layer.empty.pipe(
 
 const TerminalLayerLive = TerminalManagerLive.pipe(Layer.provide(PtyAdapterLive));
 
-const DevServerRunnerLayerLive = DevServerRunnerLive.pipe(Layer.provide(PtyAdapterLive));
+const DevServerRunnerLayerLive = DevServerRunnerLive.pipe(
+  Layer.provide(PtyAdapterLive),
+  Layer.provide(ProcessRunnerLive),
+  // FileSystem.FileSystem and ServerConfig are provided by PlatformServicesLive
+  // and the CLI layer respectively; they propagate via Layer's dependency resolution.
+);
 
 const WorkspaceEntriesLayerLive = WorkspaceEntriesLive.pipe(
   Layer.provide(WorkspacePathsLive),
