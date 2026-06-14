@@ -32,6 +32,7 @@ import {
   stripAnsi,
   extractUrl,
   resolveCwd,
+  devServerLogPath,
   waitUntilReady,
   makeHttpProbe,
   type ReadyProbe,
@@ -132,8 +133,14 @@ const NoDetectionProcessRunnerLayer = Layer.succeed(
   }),
 );
 
-/** Noop FileSystem — detectListening never calls readLink when ss returns empty. */
-const NoopFileSystemLayer = FileSystem.layerNoop({});
+/**
+ * Noop FileSystem — detectListening never calls readLink when ss returns empty.
+ * makeDirectory/writeFileString are no-ops so start()'s logfile tee doesn't die.
+ */
+const NoopFileSystemLayer = FileSystem.layerNoop({
+  makeDirectory: () => Effect.void,
+  writeFileString: () => Effect.void,
+});
 
 /** Minimal ServerConfig for tests (only .host is used by detectListening). */
 const TestServerConfigLayer = Layer.succeed(ServerConfig, { host: undefined } as ServerConfig["Service"]);
@@ -221,6 +228,19 @@ describe("resolveCwd", () => {
   it.effect("returns null when both are null", () =>
     Effect.sync(() => {
       expect(resolveCwd(nullCwdPayload)).toBeNull();
+    }),
+  );
+});
+
+describe("devServerLogPath", () => {
+  it.effect("builds a stable, cwd-specific path under <logsDir>/devserver", () =>
+    Effect.sync(() => {
+      const p = devServerLogPath("/x/logs", "/home/me/proj");
+      expect(p.startsWith("/x/logs/devserver/")).toBe(true);
+      expect(p.endsWith(".log")).toBe(true);
+      // Stable for the same cwd, distinct for a different cwd.
+      expect(devServerLogPath("/x/logs", "/home/me/proj")).toBe(p);
+      expect(devServerLogPath("/x/logs", "/home/me/other")).not.toBe(p);
     }),
   );
 });

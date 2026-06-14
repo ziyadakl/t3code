@@ -10,6 +10,7 @@ import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Encoding from "effect/Encoding";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schedule from "effect/Schedule";
@@ -147,6 +148,14 @@ export class DevServerRunner extends Context.Service<DevServerRunner, DevServerR
 /** Resolve the effective cwd from the payload. */
 export function resolveCwd(payload: DevServerPayload): string | null {
   return payload.worktreePath ?? payload.projectCwd;
+}
+
+/**
+ * Absolute path to the on-disk log file t3 writes for a dev server started at
+ * `cwd`. The cwd is base64url-encoded so it's a safe single filename.
+ */
+export function devServerLogPath(logsDir: string, cwd: string): string {
+  return `${logsDir}/devserver/${Encoding.encodeBase64Url(cwd)}.log`;
 }
 
 /**
@@ -337,6 +346,19 @@ const makeDevServerRunner = Effect.gen(function* () {
               }),
           ),
         );
+
+      // Tee the dev server's output to a logfile so it can be tailed from a
+      // terminal (and, later, shown in the UI). Truncate on each fresh start.
+      // This listener lives for the process lifetime (separate from the
+      // URL-capture listener below, which detaches once the URL is found).
+      const logPath = devServerLogPath(serverConfig.logsDir, cwd);
+      yield* fileSystem
+        .makeDirectory(`${serverConfig.logsDir}/devserver`, { recursive: true })
+        .pipe(Effect.ignore);
+      yield* fileSystem.writeFileString(logPath, "").pipe(Effect.ignore);
+      const _unsubscribeLog = proc.onData((data) => {
+        runFork(fileSystem.writeFileString(logPath, data, { flag: "a" }).pipe(Effect.ignore));
+      });
 
       // Deferred resolves with the first captured URL (or fails on early exit).
       // We use Deferred.doneUnsafe to settle it synchronously from PTY callbacks
