@@ -10,8 +10,10 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as SandcastleRouteImport } from './routes/sandcastle'
 import { Route as PairRouteImport } from './routes/pair'
 import { Route as ChatRouteImport } from './routes/_chat'
+import { Route as SandcastleIndexRouteImport } from './routes/sandcastle.index'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
 import { Route as SettingsSourceControlRouteImport } from './routes/settings.source-control'
 import { Route as SettingsProvidersRouteImport } from './routes/settings.providers'
@@ -21,12 +23,18 @@ import { Route as SettingsDiagnosticsRouteImport } from './routes/settings.diagn
 import { Route as SettingsConnectionsRouteImport } from './routes/settings.connections'
 import { Route as SettingsArchivedProjectsRouteImport } from './routes/settings.archived-projects'
 import { Route as SettingsArchivedRouteImport } from './routes/settings.archived'
+import { Route as SandcastleEnvironmentIdProjectIdRouteImport } from './routes/sandcastle.$environmentId.$projectId'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
 
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SandcastleRoute = SandcastleRouteImport.update({
+  id: '/sandcastle',
+  path: '/sandcastle',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PairRoute = PairRouteImport.update({
@@ -37,6 +45,11 @@ const PairRoute = PairRouteImport.update({
 const ChatRoute = ChatRouteImport.update({
   id: '/_chat',
   getParentRoute: () => rootRouteImport,
+} as any)
+const SandcastleIndexRoute = SandcastleIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => SandcastleRoute,
 } as any)
 const ChatIndexRoute = ChatIndexRouteImport.update({
   id: '/',
@@ -84,6 +97,12 @@ const SettingsArchivedRoute = SettingsArchivedRouteImport.update({
   path: '/archived',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SandcastleEnvironmentIdProjectIdRoute =
+  SandcastleEnvironmentIdProjectIdRouteImport.update({
+    id: '/$environmentId/$projectId',
+    path: '/$environmentId/$projectId',
+    getParentRoute: () => SandcastleRoute,
+  } as any)
 const ChatDraftDraftIdRoute = ChatDraftDraftIdRouteImport.update({
   id: '/draft/$draftId',
   path: '/draft/$draftId',
@@ -99,6 +118,7 @@ const ChatEnvironmentIdThreadIdRoute =
 export interface FileRoutesByFullPath {
   '/': typeof ChatIndexRoute
   '/pair': typeof PairRoute
+  '/sandcastle': typeof SandcastleRouteWithChildren
   '/settings': typeof SettingsRouteWithChildren
   '/settings/archived': typeof SettingsArchivedRoute
   '/settings/archived-projects': typeof SettingsArchivedProjectsRoute
@@ -108,8 +128,10 @@ export interface FileRoutesByFullPath {
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
+  '/sandcastle/': typeof SandcastleIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/sandcastle/$environmentId/$projectId': typeof SandcastleEnvironmentIdProjectIdRoute
 }
 export interface FileRoutesByTo {
   '/pair': typeof PairRoute
@@ -123,13 +145,16 @@ export interface FileRoutesByTo {
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/': typeof ChatIndexRoute
+  '/sandcastle': typeof SandcastleIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/sandcastle/$environmentId/$projectId': typeof SandcastleEnvironmentIdProjectIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_chat': typeof ChatRouteWithChildren
   '/pair': typeof PairRoute
+  '/sandcastle': typeof SandcastleRouteWithChildren
   '/settings': typeof SettingsRouteWithChildren
   '/settings/archived': typeof SettingsArchivedRoute
   '/settings/archived-projects': typeof SettingsArchivedProjectsRoute
@@ -140,14 +165,17 @@ export interface FileRoutesById {
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/_chat/': typeof ChatIndexRoute
+  '/sandcastle/': typeof SandcastleIndexRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/_chat/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/sandcastle/$environmentId/$projectId': typeof SandcastleEnvironmentIdProjectIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
     | '/pair'
+    | '/sandcastle'
     | '/settings'
     | '/settings/archived'
     | '/settings/archived-projects'
@@ -157,8 +185,10 @@ export interface FileRouteTypes {
     | '/settings/keybindings'
     | '/settings/providers'
     | '/settings/source-control'
+    | '/sandcastle/'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
+    | '/sandcastle/$environmentId/$projectId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/pair'
@@ -172,12 +202,15 @@ export interface FileRouteTypes {
     | '/settings/providers'
     | '/settings/source-control'
     | '/'
+    | '/sandcastle'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
+    | '/sandcastle/$environmentId/$projectId'
   id:
     | '__root__'
     | '/_chat'
     | '/pair'
+    | '/sandcastle'
     | '/settings'
     | '/settings/archived'
     | '/settings/archived-projects'
@@ -188,13 +221,16 @@ export interface FileRouteTypes {
     | '/settings/providers'
     | '/settings/source-control'
     | '/_chat/'
+    | '/sandcastle/'
     | '/_chat/$environmentId/$threadId'
     | '/_chat/draft/$draftId'
+    | '/sandcastle/$environmentId/$projectId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   ChatRoute: typeof ChatRouteWithChildren
   PairRoute: typeof PairRoute
+  SandcastleRoute: typeof SandcastleRouteWithChildren
   SettingsRoute: typeof SettingsRouteWithChildren
 }
 
@@ -205,6 +241,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/sandcastle': {
+      id: '/sandcastle'
+      path: '/sandcastle'
+      fullPath: '/sandcastle'
+      preLoaderRoute: typeof SandcastleRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/pair': {
@@ -220,6 +263,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/'
       preLoaderRoute: typeof ChatRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/sandcastle/': {
+      id: '/sandcastle/'
+      path: '/'
+      fullPath: '/sandcastle/'
+      preLoaderRoute: typeof SandcastleIndexRouteImport
+      parentRoute: typeof SandcastleRoute
     }
     '/_chat/': {
       id: '/_chat/'
@@ -284,6 +334,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsArchivedRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/sandcastle/$environmentId/$projectId': {
+      id: '/sandcastle/$environmentId/$projectId'
+      path: '/$environmentId/$projectId'
+      fullPath: '/sandcastle/$environmentId/$projectId'
+      preLoaderRoute: typeof SandcastleEnvironmentIdProjectIdRouteImport
+      parentRoute: typeof SandcastleRoute
+    }
     '/_chat/draft/$draftId': {
       id: '/_chat/draft/$draftId'
       path: '/draft/$draftId'
@@ -315,6 +372,20 @@ const ChatRouteChildren: ChatRouteChildren = {
 
 const ChatRouteWithChildren = ChatRoute._addFileChildren(ChatRouteChildren)
 
+interface SandcastleRouteChildren {
+  SandcastleIndexRoute: typeof SandcastleIndexRoute
+  SandcastleEnvironmentIdProjectIdRoute: typeof SandcastleEnvironmentIdProjectIdRoute
+}
+
+const SandcastleRouteChildren: SandcastleRouteChildren = {
+  SandcastleIndexRoute: SandcastleIndexRoute,
+  SandcastleEnvironmentIdProjectIdRoute: SandcastleEnvironmentIdProjectIdRoute,
+}
+
+const SandcastleRouteWithChildren = SandcastleRoute._addFileChildren(
+  SandcastleRouteChildren,
+)
+
 interface SettingsRouteChildren {
   SettingsArchivedRoute: typeof SettingsArchivedRoute
   SettingsArchivedProjectsRoute: typeof SettingsArchivedProjectsRoute
@@ -344,6 +415,7 @@ const SettingsRouteWithChildren = SettingsRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   ChatRoute: ChatRouteWithChildren,
   PairRoute: PairRoute,
+  SandcastleRoute: SandcastleRouteWithChildren,
   SettingsRoute: SettingsRouteWithChildren,
 }
 export const routeTree = rootRouteImport

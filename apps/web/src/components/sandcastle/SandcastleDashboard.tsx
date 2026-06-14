@@ -1,0 +1,113 @@
+// apps/web/src/components/sandcastle/SandcastleDashboard.tsx
+import { useMemo } from "react";
+import { Link } from "@tanstack/react-router";
+import { useShallow } from "zustand/react/shallow";
+import type { EnvironmentId } from "@t3tools/contracts";
+import { useStore, selectProjectsAcrossEnvironments } from "../../store.ts";
+import { useSavedEnvironmentRegistryStore } from "../../environments/runtime";
+import { Badge } from "../ui/badge.tsx";
+import { Card } from "../ui/card.tsx";
+import {
+  useSandcastleStatuses,
+  statusKey,
+  type ProjectRef,
+} from "./useSandcastleStatuses.ts";
+import { deriveBanner, bannerTone } from "./sandcastleView.ts";
+
+function EnvLabel({ environmentId }: { environmentId: EnvironmentId }) {
+  const label = useSavedEnvironmentRegistryStore(
+    (s) => s.byId[environmentId]?.label ?? "Local",
+  );
+  return <span className="text-xs text-muted-foreground">{label}</span>;
+}
+
+export function SandcastleDashboard() {
+  const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
+
+  const refs = useMemo<ProjectRef[]>(
+    () => projects.map((p) => ({ environmentId: p.environmentId, cwd: p.cwd })),
+    [projects],
+  );
+  const statuses = useSandcastleStatuses(refs);
+
+  // Only show Sandcastle-enabled projects (those with a .sandcastle/ dir).
+  const rows = projects
+    .map((p) => ({
+      project: p,
+      value: statuses.get(statusKey(p.environmentId, p.cwd)),
+    }))
+    .filter((r) => r.value?.entry.hasSandcastleDir);
+
+  return (
+    <div className="flex h-full flex-col gap-4 overflow-auto p-6">
+      <header className="flex items-baseline justify-between">
+        <h1 className="text-lg font-semibold">Sandcastle</h1>
+        <span className="text-xs text-muted-foreground">
+          {rows.length} project{rows.length === 1 ? "" : "s"}
+        </span>
+      </header>
+
+      {rows.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          No Sandcastle runs found. Projects appear here once they have a
+          <code className="mx-1 rounded bg-muted px-1 py-0.5">.sandcastle/</code>
+          directory.
+        </p>
+      ) : (
+        <div className="grid gap-3">
+          {rows.map(({ project, value }) => {
+            const entry = value!.entry;
+            const banner = deriveBanner(entry, value!.serverNow);
+            const snap = entry.snapshot;
+            return (
+              <Link
+                key={`${project.environmentId}-${project.id}`}
+                to="/sandcastle/$environmentId/$projectId"
+                params={{
+                  environmentId: project.environmentId,
+                  projectId: project.id,
+                }}
+                className="block outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-2xl"
+              >
+                <Card className="flex-row items-center justify-between gap-4 p-4 transition-colors hover:bg-accent/40">
+                  <div className="flex min-w-0 flex-col gap-1">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-sm font-medium">
+                        {project.name}
+                      </span>
+                      <EnvLabel environmentId={project.environmentId} />
+                    </div>
+                    {snap ? (
+                      <span className="truncate text-xs text-muted-foreground">
+                        iter {snap.run.iterations.current}/
+                        {snap.run.iterations.total} · {snap.run.branch}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    {snap ? (
+                      <>
+                        <Badge variant="info" size="sm">
+                          ▶ {snap.totals.running}
+                        </Badge>
+                        <Badge variant="success" size="sm">
+                          ✓ {snap.totals.merged}
+                        </Badge>
+                        <Badge variant="warning" size="sm">
+                          ⚠ {snap.totals.needsHuman}
+                        </Badge>
+                      </>
+                    ) : null}
+                    <Badge variant={bannerTone(banner.kind)} size="sm">
+                      {banner.text}
+                    </Badge>
+                  </div>
+                </Card>
+              </Link>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
