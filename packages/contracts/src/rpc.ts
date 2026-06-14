@@ -115,6 +115,12 @@ import {
   ResumeListImportableSessionsInput,
   ResumeListImportableSessionsResult,
 } from "./resume.ts";
+import {
+  DEV_SERVER_WS_METHODS,
+  WsDevServerStartRpc,
+  WsDevServerStopRpc,
+  WsDevServerStatusRpc,
+} from "./devServer.ts";
 
 export const WS_METHODS = {
   // Project registry methods
@@ -178,6 +184,11 @@ export const WS_METHODS = {
   sourceControlLookupRepository: "sourceControl.lookupRepository",
   sourceControlCloneRepository: "sourceControl.cloneRepository",
   sourceControlPublishRepository: "sourceControl.publishRepository",
+
+  // Dev server methods
+  devServerStart: DEV_SERVER_WS_METHODS.devServerStart,
+  devServerStop: DEV_SERVER_WS_METHODS.devServerStop,
+  devServerStatus: DEV_SERVER_WS_METHODS.devServerStatus,
 
   // Streaming subscriptions
   subscribeVcsStatus: "subscribeVcsStatus",
@@ -589,6 +600,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsVcsInitRpc,
   WsReviewGetDiffPreviewRpc,
   WsResumeListImportableSessionsRpc,
+  WsDevServerStartRpc,
+  WsDevServerStopRpc,
+  WsDevServerStatusRpc,
   WsTerminalOpenRpc,
   WsTerminalAttachRpc,
   WsTerminalWriteRpc,

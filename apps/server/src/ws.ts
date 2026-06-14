@@ -45,6 +45,7 @@ import {
   type TerminalEvent,
   type TerminalMetadataStreamEvent,
   ResumeError,
+  DevServerError,
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
@@ -53,6 +54,7 @@ import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/uns
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery.ts";
+import { DevServerRunner } from "./devServer/DevServerRunner.ts";
 import { ServerConfig } from "./config.ts";
 import { Keybindings } from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -228,6 +230,10 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.subscribeServerConfig, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeServerLifecycle, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeAuthAccess, AuthAccessReadScope],
+  // Dev server — morally "operate a process", same scope as terminal methods
+  [WS_METHODS.devServerStart, AuthTerminalOperateScope],
+  [WS_METHODS.devServerStop, AuthTerminalOperateScope],
+  [WS_METHODS.devServerStatus, AuthTerminalOperateScope],
 ]);
 
 function toAuthAccessStreamEvent(
@@ -311,6 +317,7 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
       const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
       const sessions = yield* SessionStore.SessionStore;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
+      const devServerRunner = yield* DevServerRunner;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
@@ -1407,6 +1414,48 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
           observeRpcEffect(WS_METHODS.terminalClose, terminalManager.close(input), {
             "rpc.aggregate": "terminal",
           }),
+        [WS_METHODS.devServerStart]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.devServerStart,
+            devServerRunner.start(input).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new DevServerError({
+                    message: cause.message,
+                    ...(cause.reason !== undefined ? { reason: cause.reason } : {}),
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "devServer" },
+          ),
+        [WS_METHODS.devServerStop]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.devServerStop,
+            devServerRunner.stop(input).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new DevServerError({
+                    message: cause.message,
+                    ...(cause.reason !== undefined ? { reason: cause.reason } : {}),
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "devServer" },
+          ),
+        [WS_METHODS.devServerStatus]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.devServerStatus,
+            devServerRunner.status(input).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new DevServerError({
+                    message: cause.message,
+                    ...(cause.reason !== undefined ? { reason: cause.reason } : {}),
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "devServer" },
+          ),
         [WS_METHODS.subscribeTerminalEvents]: (_input) =>
           observeRpcStream(
             WS_METHODS.subscribeTerminalEvents,

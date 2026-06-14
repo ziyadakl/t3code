@@ -63,6 +63,11 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): EnvironmentApi {
     resume: {
       listImportableSessions: rpcClient.resume.listImportableSessions,
     },
+    devServer: {
+      start: (input) => rpcClient.devServer.start(input as never),
+      stop: (input) => rpcClient.devServer.stop(input as never),
+      status: (input) => rpcClient.devServer.status(input as never),
+    },
   };
 }
 

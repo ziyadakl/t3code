@@ -16,6 +16,7 @@ import ProjectScriptsControl, { type NewProjectScriptInput } from "../ProjectScr
 import { Toggle } from "../ui/toggle";
 import { SidebarTrigger } from "../ui/sidebar";
 import { OpenInPicker } from "./OpenInPicker";
+import { DevServerToggle } from "./DevServerToggle";
 import { usePrimaryEnvironmentId } from "../../environments/primary";
 
 interface ChatHeaderProps {
@@ -36,6 +37,8 @@ interface ChatHeaderProps {
   diffToggleShortcutLabel: string | null;
   gitCwd: string | null;
   diffOpen: boolean;
+  activeThreadWorktreePath: string | null;
+  activeProjectCwd: string | null;
   onRunProjectScript: (script: ProjectScript) => void;
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<void>;
   onUpdateProjectScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void>;
@@ -74,6 +77,8 @@ export const ChatHeader = memo(function ChatHeader({
   diffToggleShortcutLabel,
   gitCwd,
   diffOpen,
+  activeThreadWorktreePath,
+  activeProjectCwd,
   onRunProjectScript,
   onAddProjectScript,
   onUpdateProjectScript,
@@ -138,6 +143,12 @@ export const ChatHeader = memo(function ChatHeader({
             {...(draftId ? { draftId } : {})}
           />
         )}
+        <DevServerToggle
+          environmentId={activeThreadEnvironmentId}
+          threadId={activeThreadId}
+          worktreePath={activeThreadWorktreePath}
+          projectCwd={activeProjectCwd}
+        />
         <Tooltip>
           <TooltipTrigger
             render={

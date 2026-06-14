@@ -110,6 +110,14 @@ const rpcClientMock = {
     ),
     subscribeThread: vi.fn(() => () => undefined),
   },
+  resume: {
+    listImportableSessions: vi.fn(),
+  },
+  devServer: {
+    start: vi.fn(),
+    stop: vi.fn(),
+    status: vi.fn(),
+  },
 };
 
 vi.mock("./environments/runtime", () => ({

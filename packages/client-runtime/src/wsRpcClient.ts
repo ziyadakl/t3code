@@ -171,6 +171,11 @@ export interface WsRpcClient {
       typeof WS_METHODS.resumeListImportableSessions
     >;
   };
+  readonly devServer: {
+    readonly start: RpcUnaryMethod<typeof WS_METHODS.devServerStart>;
+    readonly stop: RpcUnaryMethod<typeof WS_METHODS.devServerStop>;
+    readonly status: RpcUnaryMethod<typeof WS_METHODS.devServerStatus>;
+  };
 }
 
 export interface CreateWsRpcClientOptions {
@@ -366,6 +371,14 @@ export function createWsRpcClient(
     resume: {
       listImportableSessions: (input) =>
         transport.request((client) => client[WS_METHODS.resumeListImportableSessions](input)),
+    },
+    devServer: {
+      start: (input) =>
+        transport.request((client) => client[WS_METHODS.devServerStart](input)),
+      stop: (input) =>
+        transport.request((client) => client[WS_METHODS.devServerStop](input)),
+      status: (input) =>
+        transport.request((client) => client[WS_METHODS.devServerStatus](input)),
     },
   };
 }

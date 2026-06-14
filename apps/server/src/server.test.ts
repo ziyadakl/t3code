@@ -124,6 +124,7 @@ import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
+import { DevServerRunner } from "./devServer/DevServerRunner.ts";
 import * as Data from "effect/Data";
 
 const defaultProjectId = ProjectId.make("project-default");
@@ -645,9 +646,16 @@ const buildAppUnderTest = (options?: {
         }),
       ),
       Layer.provide(
-        Layer.mock(TerminalManager)({
-          ...options?.layers?.terminalManager,
-        }),
+        Layer.merge(
+          Layer.mock(TerminalManager)({
+            ...options?.layers?.terminalManager,
+          }),
+          Layer.mock(DevServerRunner)({
+            start: () => Effect.succeed({ running: false, url: null }),
+            stop: () => Effect.succeed({ running: false, url: null }),
+            status: () => Effect.succeed({ running: false, url: null }),
+          }),
+        ),
       ),
       Layer.provide(
         Layer.mock(OrchestrationEngineService)({

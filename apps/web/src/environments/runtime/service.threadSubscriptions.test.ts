@@ -153,6 +153,11 @@ vi.mock("@t3tools/client-runtime", async (importOriginal) => {
       getProcessResourceHistory: vi.fn(),
       signalProcess: vi.fn(),
     },
+    devServer: {
+      start: vi.fn(),
+      stop: vi.fn(),
+      status: vi.fn(),
+    },
   };
   return {
     ...actual,

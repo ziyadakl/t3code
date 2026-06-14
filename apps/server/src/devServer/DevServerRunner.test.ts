@@ -1,0 +1,333 @@
+/**
+ * Tests for DevServerRunner.
+ *
+ * Uses a fake PtyAdapter whose spawn() returns a stub PtyProcess you can
+ * drive from outside.
+ *
+ * Key design: instead of needing concurrent fibers to push data, the stub
+ * emits URL data synchronously when the first onData listener is registered.
+ * This makes all tests fully sequential and avoids complex fiber scheduling.
+ *
+ * IMPORTANT: All tests use `it.effect` — bare `it(() => Effect.gen(...))` is
+ * vacuous in this repo (passes without running the effect body).
+ */
+import { it, describe, expect } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import type { DevServerPayload } from "@t3tools/contracts";
+import { DevServerError } from "@t3tools/contracts";
+import { PtyAdapter } from "../terminal/Services/PTY.ts";
+import type { PtyProcess, PtySpawnInput } from "../terminal/Services/PTY.ts";
+import type { PtySpawnError } from "../terminal/Services/PTY.ts";
+import {
+  DevServerRunner,
+  DevServerRunnerLive,
+  stripAnsi,
+  extractUrl,
+  resolveCwd,
+} from "./DevServerRunner.ts";
+import { DEV_STOP_CMD, DEV_START_CMD } from "./devServerCommands.ts";
+
+// ---------------------------------------------------------------------------
+// Fake PTY infrastructure
+// ---------------------------------------------------------------------------
+
+interface StubPtyProcess extends PtyProcess {
+  pushData(data: string): void;
+  triggerExit(exitCode: number, signal?: number | null): void;
+  spawnedArgs: string[];
+}
+
+type StubMode =
+  | { kind: "url"; url: string }           // emit URL on first onData subscription
+  | { kind: "exit"; code: number }          // exit immediately on onExit subscription
+  | { kind: "manual" }                      // manual control (for stop-command stubs)
+  | { kind: "controlled"; deferred: Array<{ data?: string; exit?: number }> };
+
+function makeStubProcess(spawnedArgs: string[], mode: StubMode = { kind: "manual" }): StubPtyProcess {
+  const dataListeners: Array<(data: string) => void> = [];
+  const exitListeners: Array<(event: { exitCode: number; signal: number | null }) => void> = [];
+
+  const stub: StubPtyProcess = {
+    pid: 12345,
+    spawnedArgs,
+
+    write(_data) { /* no-op */ },
+    resize(_cols, _rows) { /* no-op */ },
+    kill(_signal) { /* no-op */ },
+
+    onData(cb) {
+      dataListeners.push(cb);
+      // If in url mode, emit the configured URL synchronously now
+      if (mode.kind === "url") {
+        cb(`- Local: ${mode.url}\n`);
+      }
+      return () => {
+        const idx = dataListeners.indexOf(cb);
+        if (idx !== -1) dataListeners.splice(idx, 1);
+      };
+    },
+
+    onExit(cb) {
+      exitListeners.push(cb);
+      if (mode.kind === "exit") {
+        cb({ exitCode: mode.code, signal: null });
+      }
+      return () => {
+        const idx = exitListeners.indexOf(cb);
+        if (idx !== -1) exitListeners.splice(idx, 1);
+      };
+    },
+
+    pushData(data) {
+      for (const cb of [...dataListeners]) cb(data);
+    },
+
+    triggerExit(exitCode, signal = null) {
+      for (const cb of [...exitListeners]) cb({ exitCode, signal });
+    },
+  };
+
+  return stub;
+}
+
+type SpawnFactory = (input: PtySpawnInput) => Effect.Effect<PtyProcess, PtySpawnError>;
+
+function makeFakePtyLayer(factory: SpawnFactory): Layer.Layer<PtyAdapter> {
+  return Layer.succeed(PtyAdapter, PtyAdapter.of({ spawn: factory }));
+}
+
+// ---------------------------------------------------------------------------
+// Shared test payload
+// ---------------------------------------------------------------------------
+
+const basePayload: DevServerPayload = {
+  threadId: "thread-001" as DevServerPayload["threadId"],
+  worktreePath: "/project/worktree",
+  projectCwd: "/project",
+};
+
+const nullCwdPayload: DevServerPayload = {
+  threadId: "thread-null" as DevServerPayload["threadId"],
+  worktreePath: null,
+  projectCwd: null,
+};
+
+// ---------------------------------------------------------------------------
+// Unit tests for pure helpers
+// ---------------------------------------------------------------------------
+
+describe("stripAnsi", () => {
+  it.effect("strips ANSI colour codes", () =>
+    Effect.sync(() => {
+      const raw = "\x1b[36mhttp://localhost:4001\x1b[39m";
+      expect(stripAnsi(raw)).toBe("http://localhost:4001");
+    }),
+  );
+});
+
+describe("extractUrl", () => {
+  it.effect("URL parse: ANSI-wrapped output → correct URL extracted", () =>
+    Effect.sync(() => {
+      const line = "  - Local: \x1b[36mhttp://100.99.237.12:4001\x1b[39m";
+      expect(extractUrl(line)).toBe("http://100.99.237.12:4001");
+    }),
+  );
+
+  it.effect("returns null when no URL present", () =>
+    Effect.sync(() => {
+      expect(extractUrl("starting dev server...")).toBeNull();
+    }),
+  );
+});
+
+describe("resolveCwd", () => {
+  it.effect("prefers worktreePath over projectCwd", () =>
+    Effect.sync(() => {
+      expect(resolveCwd(basePayload)).toBe("/project/worktree");
+    }),
+  );
+
+  it.effect("falls back to projectCwd when worktreePath is null", () =>
+    Effect.sync(() => {
+      const p: DevServerPayload = { ...basePayload, worktreePath: null };
+      expect(resolveCwd(p)).toBe("/project");
+    }),
+  );
+
+  it.effect("returns null when both are null", () =>
+    Effect.sync(() => {
+      expect(resolveCwd(nullCwdPayload)).toBeNull();
+    }),
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Integration tests
+// ---------------------------------------------------------------------------
+
+describe("DevServerRunner", () => {
+  it.effect("both-null cwd → DevServerError", () => {
+    const layer = DevServerRunnerLive.pipe(
+      Layer.provide(makeFakePtyLayer(() => Effect.die("should not be called") as never)),
+    );
+    return Effect.gen(function* () {
+      const runner = yield* DevServerRunner;
+      const err = yield* runner.start(nullCwdPayload).pipe(Effect.flip);
+      expect(err._tag).toBe("DevServerError");
+      expect((err as DevServerError).message).toContain("No working directory");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("start: URL parsed — ANSI-wrapped output → captures correct URL", () => {
+    // Stub emits ANSI-wrapped URL synchronously on onData registration
+    const layer = DevServerRunnerLive.pipe(
+      Layer.provide(
+        makeFakePtyLayer((input) =>
+          Effect.sync(() =>
+            makeStubProcess(input.args ?? [], {
+              kind: "url",
+              url: "http://100.99.237.12:4001",
+            }) as PtyProcess,
+          ),
+        ),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      const runner = yield* DevServerRunner;
+      // The stub emits URL when onData is registered; start() returns synchronously
+      const result = yield* runner.start({
+        ...basePayload,
+        worktreePath: "/ansi-test",
+        projectCwd: "/ansi-test",
+      });
+      expect(result.running).toBe(true);
+      expect(result.url).toBe("http://100.99.237.12:4001");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("start idempotency: second call returns same url without re-spawning", () => {
+    let spawnCount = 0;
+
+    const layer = DevServerRunnerLive.pipe(
+      Layer.provide(
+        makeFakePtyLayer((input) =>
+          Effect.sync(() => {
+            spawnCount++;
+            return makeStubProcess(input.args ?? [], {
+              kind: "url",
+              url: "http://localhost:3000",
+            }) as PtyProcess;
+          }),
+        ),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      const runner = yield* DevServerRunner;
+
+      const result1 = yield* runner.start(basePayload);
+      const result2 = yield* runner.start(basePayload);
+
+      expect(result1.url).toBe("http://localhost:3000");
+      expect(result2.url).toBe("http://localhost:3000");
+      expect(spawnCount).toBe(1); // only one spawn
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("status reflects running/url after start", () => {
+    const layer = DevServerRunnerLive.pipe(
+      Layer.provide(
+        makeFakePtyLayer((input) =>
+          Effect.sync(() =>
+            makeStubProcess(input.args ?? [], {
+              kind: "url",
+              url: "http://0.0.0.0:5173",
+            }) as PtyProcess,
+          ),
+        ),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      const runner = yield* DevServerRunner;
+
+      const before = yield* runner.status(basePayload);
+      expect(before.running).toBe(false);
+      expect(before.url).toBeNull();
+
+      yield* runner.start(basePayload);
+
+      const after = yield* runner.status(basePayload);
+      expect(after.running).toBe(true);
+      expect(after.url).toBe("http://0.0.0.0:5173");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("stop: runs DEV_STOP_CMD, kills start process, clears state", () => {
+    const seenCommands: string[] = [];
+
+    const layer = DevServerRunnerLive.pipe(
+      Layer.provide(
+        makeFakePtyLayer((input) =>
+          Effect.sync(() => {
+            const args = input.args ?? [];
+            const cmd = args[1] ?? "";
+            seenCommands.push(cmd);
+
+            if (cmd.includes("pnpm dev")) {
+              // Start command: emit URL synchronously
+              return makeStubProcess(args, { kind: "url", url: "http://localhost:4321" }) as PtyProcess;
+            } else {
+              // Stop command: exit immediately
+              return makeStubProcess(args, { kind: "exit", code: 0 }) as PtyProcess;
+            }
+          }),
+        ),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      const runner = yield* DevServerRunner;
+
+      yield* runner.start(basePayload);
+
+      const mid = yield* runner.status(basePayload);
+      expect(mid.running).toBe(true);
+
+      const stopResult = yield* runner.stop(basePayload);
+      expect(stopResult.running).toBe(false);
+      expect(stopResult.url).toBeNull();
+
+      const after = yield* runner.status(basePayload);
+      expect(after.running).toBe(false);
+
+      expect(seenCommands.some((c) => c.includes(DEV_STOP_CMD))).toBe(true);
+      expect(seenCommands.some((c) => c.includes(DEV_START_CMD))).toBe(true);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("early exit before URL → DevServerError with reason early-exit", () => {
+    // Stub exits immediately (before any URL)
+    const layer = DevServerRunnerLive.pipe(
+      Layer.provide(
+        makeFakePtyLayer((input) =>
+          Effect.sync(() =>
+            makeStubProcess(input.args ?? [], { kind: "exit", code: 1 }) as PtyProcess,
+          ),
+        ),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      const runner = yield* DevServerRunner;
+      const err = yield* runner.start(basePayload).pipe(Effect.flip);
+      const devErr = err as Partial<DevServerError> & { _tag?: string };
+      expect(devErr._tag).toBe("DevServerError");
+      expect(devErr.reason).toBe("early-exit");
+    }).pipe(Effect.provide(layer));
+  });
+});
