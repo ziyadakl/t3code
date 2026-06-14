@@ -8,10 +8,13 @@
  */
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Schedule from "effect/Schedule";
 import * as SynchronizedRef from "effect/SynchronizedRef";
+import { HttpClient } from "effect/unstable/http";
 import type { DevServerPayload, DevServerStatus } from "@t3tools/contracts";
 import { DevServerError } from "@t3tools/contracts";
 import { projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
@@ -37,6 +40,71 @@ const URL_RE = /https?:\/\/[^\s]+:\d+/;
 export function extractUrl(text: string): string | null {
   const m = URL_RE.exec(stripAnsi(text));
   return m ? m[0] : null;
+}
+
+// ---------------------------------------------------------------------------
+// Readiness probe
+// ---------------------------------------------------------------------------
+//
+// A dev server prints its URL the moment it binds the port, but it usually
+// hasn't compiled anything yet — many dev servers (Next.js especially) only
+// compile a route when a request actually hits it. So we don't just check that
+// the port is up: we issue a real HTTP GET, which BOTH triggers the compile and
+// blocks until the page is served. Once the GET returns, the page is warm and a
+// browser tab opened to it loads immediately instead of a blank/loading screen.
+
+/** Total time to keep probing before opening anyway (best-effort gate). */
+const READINESS_TOTAL_TIMEOUT = Duration.seconds(60);
+/** Per-request cap — generous, so one request can ride through a cold compile. */
+const READINESS_REQUEST_TIMEOUT = Duration.seconds(30);
+/** Gap between attempts while the server isn't yet accepting connections. */
+const READINESS_RETRY_INTERVAL = Duration.millis(500);
+
+/** A single readiness check: resolves true if the server answered, else false. */
+export type ReadyProbe = (url: string) => Effect.Effect<boolean>;
+
+export interface ReadinessOptions {
+  readonly totalTimeout?: Duration.Duration;
+  readonly retryInterval?: Duration.Duration;
+}
+
+/**
+ * Build a readiness probe that issues a real HTTP GET via the Effect HttpClient.
+ * ANY HTTP response (even 404/500) counts as ready — the server is up and
+ * serving; only a connection error or a request exceeding `requestTimeout`
+ * counts as not-ready. The GET also triggers compile-on-request dev servers.
+ */
+export function makeHttpProbe(
+  client: HttpClient.HttpClient,
+  requestTimeout: Duration.Duration,
+): ReadyProbe {
+  return (url) =>
+    client.get(url).pipe(
+      Effect.as(true),
+      Effect.timeout(requestTimeout),
+      Effect.orElseSucceed(() => false),
+      Effect.scoped,
+    );
+}
+
+/**
+ * Poll `url` (via `probe`) until it actually answers, so callers only open the
+ * tab once the page is compiled and serving. Best-effort: resolves false after
+ * the total timeout so a broken / crash-looping server can't hang start().
+ */
+export function waitUntilReady(
+  probe: ReadyProbe,
+  url: string,
+  opts: ReadinessOptions = {},
+): Effect.Effect<boolean> {
+  return probe(url).pipe(
+    Effect.repeat({
+      schedule: Schedule.spaced(opts.retryInterval ?? READINESS_RETRY_INTERVAL),
+      until: (ready) => ready === true,
+    }),
+    Effect.timeout(opts.totalTimeout ?? READINESS_TOTAL_TIMEOUT),
+    Effect.orElseSucceed(() => false),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -139,6 +207,10 @@ const makeDevServerRunner = Effect.gen(function* () {
   const processRunner = yield* ProcessRunner;
   const fileSystem = yield* FileSystem.FileSystem;
   const serverConfig = yield* ServerConfig;
+  const httpClient = yield* HttpClient.HttpClient;
+  // Readiness probe used to warm a dev server (compile-on-request) before the
+  // client opens its tab — so the tab loads a compiled page, not a blank one.
+  const readyProbe = makeHttpProbe(httpClient, READINESS_REQUEST_TIMEOUT);
 
   // Capture the current Effect context so we can use Effect.runForkWith from
   // sync callbacks (same pattern as terminal/Layers/Manager.ts:952).
@@ -227,6 +299,8 @@ const makeDevServerRunner = Effect.gen(function* () {
           next.set(cwd, { url: adoptedUrl, process: null });
           return next;
         });
+        // Warm it up before the caller opens the tab (compile-on-request).
+        yield* waitUntilReady(readyProbe, adoptedUrl);
         return { running: true, url: adoptedUrl } satisfies DevServerStatus;
       }
 
@@ -350,6 +424,9 @@ const makeDevServerRunner = Effect.gen(function* () {
         return next;
       });
 
+        // The server printed its URL but likely hasn't compiled yet — poll it
+        // (which triggers + waits for the compile) so the tab opens warm.
+        yield* waitUntilReady(readyProbe, urlResult);
         return { running: true, url: urlResult } satisfies DevServerStatus;
       });
 

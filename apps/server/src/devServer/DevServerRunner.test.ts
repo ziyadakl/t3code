@@ -13,6 +13,7 @@
  */
 import { it, describe, expect } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
@@ -31,9 +32,13 @@ import {
   stripAnsi,
   extractUrl,
   resolveCwd,
+  waitUntilReady,
+  makeHttpProbe,
+  type ReadyProbe,
 } from "./DevServerRunner.ts";
 import { DEV_STOP_CMD, DEV_START_CMD } from "./devServerCommands.ts";
 import { ChildProcessSpawner } from "effect/unstable/process";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 // ---------------------------------------------------------------------------
 // Fake PTY infrastructure
@@ -134,6 +139,17 @@ const NoopFileSystemLayer = FileSystem.layerNoop({});
 const TestServerConfigLayer = Layer.succeed(ServerConfig, { host: undefined } as ServerConfig["Service"]);
 
 /**
+ * A fake HttpClient that answers every request with 200, so start()'s readiness
+ * probe resolves immediately in tests (no real dev server is running here).
+ */
+const HealthyHttpClientLayer = Layer.succeed(
+  HttpClient.HttpClient,
+  HttpClient.make((request) =>
+    Effect.succeed(HttpClientResponse.fromWeb(request, new Response(null, { status: 200 }))),
+  ),
+);
+
+/**
  * Base detection-suppression layer: combine with PtyAdapter for existing tests.
  * Makes detectListening always return null so spawn tests behave as before.
  */
@@ -141,6 +157,7 @@ const DetectionNullLayer = Layer.mergeAll(
   NoDetectionProcessRunnerLayer,
   NoopFileSystemLayer,
   TestServerConfigLayer,
+  HealthyHttpClientLayer,
 );
 
 // ---------------------------------------------------------------------------
@@ -204,6 +221,60 @@ describe("resolveCwd", () => {
   it.effect("returns null when both are null", () =>
     Effect.sync(() => {
       expect(resolveCwd(nullCwdPayload)).toBeNull();
+    }),
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Readiness probe (uses it.live for the real clock + a stubbed global fetch)
+// ---------------------------------------------------------------------------
+
+describe("waitUntilReady", () => {
+  const fastOpts = { totalTimeout: Duration.seconds(2), retryInterval: Duration.millis(10) };
+
+  it.live("resolves true once the probe reports ready", () =>
+    Effect.gen(function* () {
+      const probe: ReadyProbe = () => Effect.succeed(true);
+      const ready = yield* waitUntilReady(probe, "http://x", fastOpts);
+      expect(ready).toBe(true);
+    }),
+  );
+
+  it.live("retries while the probe reports not-ready, then succeeds", () =>
+    Effect.gen(function* () {
+      let calls = 0;
+      const probe: ReadyProbe = () =>
+        Effect.sync(() => {
+          calls += 1;
+          return calls >= 3;
+        });
+      const ready = yield* waitUntilReady(probe, "http://x", fastOpts);
+      expect(ready).toBe(true);
+      expect(calls).toBeGreaterThanOrEqual(3);
+    }),
+  );
+
+  it.live("gives up (false) after the total timeout when never ready", () =>
+    Effect.gen(function* () {
+      const probe: ReadyProbe = () => Effect.succeed(false);
+      const ready = yield* waitUntilReady(probe, "http://x", {
+        totalTimeout: Duration.millis(60),
+        retryInterval: Duration.millis(10),
+      });
+      expect(ready).toBe(false);
+    }),
+  );
+});
+
+describe("makeHttpProbe", () => {
+  it.live("treats any HTTP response (even non-2xx) as ready", () =>
+    Effect.gen(function* () {
+      const client = HttpClient.make((request: HttpClientRequest.HttpClientRequest) =>
+        Effect.succeed(HttpClientResponse.fromWeb(request, new Response(null, { status: 503 }))),
+      );
+      const probe = makeHttpProbe(client, Duration.seconds(1));
+      const ready = yield* probe("http://127.0.0.1:65535");
+      expect(ready).toBe(true);
     }),
   );
 });
@@ -431,6 +502,7 @@ describe("DevServerRunner", () => {
           fakeProcessRunner,
           fakeFileSystem,
           TestServerConfigLayer,
+          HealthyHttpClientLayer,
         ),
       ),
     );
@@ -483,6 +555,7 @@ describe("DevServerRunner", () => {
           fakeProcessRunner,
           fakeFileSystem,
           TestServerConfigLayer,
+          HealthyHttpClientLayer,
         ),
       ),
     );
