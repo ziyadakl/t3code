@@ -146,6 +146,26 @@ describe("DevServerToggle — static rendering", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Running indicator (LED) — the Globe must read clearly as on vs off.
+// ---------------------------------------------------------------------------
+
+describe("DevServerToggle — running indicator", () => {
+  it("lights the Globe green at full opacity when running", async () => {
+    const { devServerGlobeClass } = await import("./DevServerToggle");
+    const on = devServerGlobeClass(true);
+    expect(on).toContain("text-green");
+    expect(on).toContain("opacity-100");
+  });
+
+  it("uses no lit colour when not running", async () => {
+    const { devServerGlobeClass } = await import("./DevServerToggle");
+    const off = devServerGlobeClass(false);
+    expect(off).not.toContain("text-green");
+    expect(off).not.toContain("opacity-100");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // API interaction tests — test the handler logic directly.
 // ---------------------------------------------------------------------------
 

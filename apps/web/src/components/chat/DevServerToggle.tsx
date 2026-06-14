@@ -19,6 +19,16 @@ interface DevServerToggleProps {
 /** Debounce delay for status re-fetch on window focus / visibility change (ms). */
 const STATUS_REFRESH_DEBOUNCE_MS = 500;
 
+/**
+ * Globe icon classes. When the dev server is running we light the icon up like
+ * an LED — a clear green at full opacity — so "running" is unmistakable at a
+ * glance. The generic outline-button pressed state (a faint background tint) is
+ * too subtle to read as on/off, so the colour change carries the signal.
+ */
+export function devServerGlobeClass(running: boolean): string {
+  return running ? "size-3 text-green-600 opacity-100 dark:text-green-400" : "size-3";
+}
+
 export const DevServerToggle = memo(function DevServerToggle({
   environmentId,
   threadId,
@@ -247,7 +257,7 @@ export const DevServerToggle = memo(function DevServerToggle({
               {pending ? (
                 <Loader2Icon className="size-3 animate-spin" />
               ) : (
-                <Globe className="size-3" />
+                <Globe className={devServerGlobeClass(running)} />
               )}
             </Button>
           }
