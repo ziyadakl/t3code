@@ -125,6 +125,7 @@ import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import { DevServerRunner } from "./devServer/DevServerRunner.ts";
+import { SandcastleStatusReader } from "./sandcastle/SandcastleStatusReader.ts";
 import * as Data from "effect/Data";
 
 const defaultProjectId = ProjectId.make("project-default");
@@ -646,7 +647,7 @@ const buildAppUnderTest = (options?: {
         }),
       ),
       Layer.provide(
-        Layer.merge(
+        Layer.mergeAll(
           Layer.mock(TerminalManager)({
             ...options?.layers?.terminalManager,
           }),
@@ -654,6 +655,10 @@ const buildAppUnderTest = (options?: {
             start: () => Effect.succeed({ running: false, url: null }),
             stop: () => Effect.succeed({ running: false, url: null }),
             status: () => Effect.succeed({ running: false, url: null }),
+          }),
+          Layer.mock(SandcastleStatusReader)({
+            statusAll: () =>
+              Effect.succeed({ serverNow: "1970-01-01T00:00:00.000Z", entries: [] }),
           }),
         ),
       ),

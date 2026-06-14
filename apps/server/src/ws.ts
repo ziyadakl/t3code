@@ -46,6 +46,7 @@ import {
   type TerminalMetadataStreamEvent,
   ResumeError,
   DevServerError,
+  SandcastleError,
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
@@ -55,6 +56,7 @@ import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery.ts";
 import { DevServerRunner } from "./devServer/DevServerRunner.ts";
+import { SandcastleStatusReader } from "./sandcastle/SandcastleStatusReader.ts";
 import { ServerConfig } from "./config.ts";
 import { Keybindings } from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -235,6 +237,8 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.devServerStop, AuthTerminalOperateScope],
   [WS_METHODS.devServerStatus, AuthTerminalOperateScope],
   [WS_METHODS.devServerLogs, AuthTerminalOperateScope],
+  // Sandcastle viewer — read-only status read, same "operate" scope as dev server
+  [WS_METHODS.sandcastleStatusAll, AuthTerminalOperateScope],
 ]);
 
 function toAuthAccessStreamEvent(
@@ -319,6 +323,7 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
       const sessions = yield* SessionStore.SessionStore;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const devServerRunner = yield* DevServerRunner;
+      const sandcastleStatusReader = yield* SandcastleStatusReader;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
@@ -1470,6 +1475,14 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
               ),
             ),
             { "rpc.aggregate": "devServer" },
+          ),
+        [WS_METHODS.sandcastleStatusAll]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.sandcastleStatusAll,
+            sandcastleStatusReader.statusAll(input).pipe(
+              Effect.mapError((cause) => new SandcastleError({ message: cause.message })),
+            ),
+            { "rpc.aggregate": "sandcastle" },
           ),
         [WS_METHODS.subscribeTerminalEvents]: (_input) =>
           observeRpcStream(

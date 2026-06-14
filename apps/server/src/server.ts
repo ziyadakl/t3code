@@ -36,6 +36,7 @@ import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import { ProviderInstanceRegistryHydrationLive } from "./provider/Layers/ProviderInstanceRegistryHydration.ts";
 import { TerminalManagerLive } from "./terminal/Layers/Manager.ts";
 import { DevServerRunnerLive } from "./devServer/DevServerRunner.ts";
+import { SandcastleStatusReaderLive } from "./sandcastle/SandcastleStatusReader.ts";
 import { layer as ProcessRunnerLive } from "./processRunner.ts";
 import * as GitManager from "./git/GitManager.ts";
 import { KeybindingsLive } from "./keybindings.ts";
@@ -260,6 +261,9 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(ProviderRuntimeLayerLive),
   Layer.provideMerge(TerminalLayerLive),
   Layer.provideMerge(DevServerRunnerLayerLive),
+  // SandcastleStatusReaderLive only needs FileSystem.FileSystem (provided by
+  // PlatformServicesLive, same as DevServerRunner relies on).
+  Layer.provideMerge(SandcastleStatusReaderLive),
   Layer.provideMerge(PersistenceLayerLive),
   Layer.provideMerge(KeybindingsLive),
   Layer.provideMerge(ProviderRegistryLive),
