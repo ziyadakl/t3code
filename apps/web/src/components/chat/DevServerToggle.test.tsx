@@ -53,6 +53,7 @@ function makeDevServerMethods(overrides: {
   status?: EnvironmentApi["devServer"]["status"];
   start?: EnvironmentApi["devServer"]["start"];
   stop?: EnvironmentApi["devServer"]["stop"];
+  logs?: EnvironmentApi["devServer"]["logs"];
 } = {}) {
   return {
     status: overrides.status ?? vi.fn().mockResolvedValue({ running: false, url: null }),
@@ -60,6 +61,9 @@ function makeDevServerMethods(overrides: {
       overrides.start ??
       vi.fn().mockResolvedValue({ running: true, url: "http://localhost:5173" }),
     stop: overrides.stop ?? vi.fn().mockResolvedValue({ running: false, url: null }),
+    logs:
+      overrides.logs ??
+      vi.fn().mockResolvedValue({ logPath: "/logs/devserver/x.log", content: "" }),
   };
 }
 

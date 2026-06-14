@@ -6,6 +6,7 @@ import { Group, GroupSeparator } from "../ui/group";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { stackedThreadToast, toastManager } from "../ui/toast";
+import { DevServerLogsPanel } from "./DevServerLogsPanel";
 import { readEnvironmentApi } from "~/environmentApi";
 import { readLocalApi } from "~/localApi";
 
@@ -38,6 +39,7 @@ export const DevServerToggle = memo(function DevServerToggle({
   const [running, setRunning] = useState(false);
   const [url, setUrl] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [logsOpen, setLogsOpen] = useState(false);
   const unmountedRef = useRef(false);
 
   // Whether we have an active project context to run a dev server against.
@@ -297,8 +299,27 @@ export const DevServerToggle = memo(function DevServerToggle({
           >
             Restart
           </MenuItem>
+          <MenuItem
+            onClick={() => {
+              setLogsOpen(true);
+            }}
+          >
+            View logs
+          </MenuItem>
         </MenuPopup>
       </Menu>
+
+      {logsOpen ? (
+        <DevServerLogsPanel
+          environmentId={environmentId}
+          threadId={threadId}
+          worktreePath={worktreePath}
+          projectCwd={projectCwd}
+          onClose={() => {
+            setLogsOpen(false);
+          }}
+        />
+      ) : null}
     </Group>
   );
 });

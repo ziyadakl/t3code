@@ -75,7 +75,7 @@ import type {
   ResumeListImportableSessionsInput,
   ResumeListImportableSessionsResult,
 } from "./resume.ts";
-import type { DevServerPayload, DevServerStatus } from "./devServer.ts";
+import type { DevServerPayload, DevServerStatus, DevServerLogs } from "./devServer.ts";
 import type { ClientSettings, ServerSettings, ServerSettingsPatch } from "./settings.ts";
 import type {
   SourceControlCloneRepositoryInput,
@@ -602,5 +602,6 @@ export interface EnvironmentApi {
     start: (input: DevServerPayload) => Promise<DevServerStatus>;
     stop: (input: DevServerPayload) => Promise<DevServerStatus>;
     status: (input: DevServerPayload) => Promise<DevServerStatus>;
+    logs: (input: DevServerPayload) => Promise<DevServerLogs>;
   };
 }

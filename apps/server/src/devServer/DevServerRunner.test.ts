@@ -142,8 +142,11 @@ const NoopFileSystemLayer = FileSystem.layerNoop({
   writeFileString: () => Effect.void,
 });
 
-/** Minimal ServerConfig for tests (only .host is used by detectListening). */
-const TestServerConfigLayer = Layer.succeed(ServerConfig, { host: undefined } as ServerConfig["Service"]);
+/** Minimal ServerConfig for tests (.host for detect, .logsDir for the logfile). */
+const TestServerConfigLayer = Layer.succeed(ServerConfig, {
+  host: undefined,
+  logsDir: "/tmp/test-logs",
+} as ServerConfig["Service"]);
 
 /**
  * A fake HttpClient that answers every request with 200, so start()'s readiness
@@ -586,6 +589,33 @@ describe("DevServerRunner", () => {
       expect(result.running).toBe(true);
       expect(result.url).toBe("http://100.99.237.12:4001");
       expect(spawnCount).toBe(0); // ADOPT: no spawn
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("logs: returns the ANSI-stripped tail of the logfile + its path", () => {
+    const fakeFileSystem = FileSystem.layerNoop({
+      readFileString: () => Effect.succeed("\x1b[36mhello\x1b[39m\nworld\n"),
+    });
+    const layer = DevServerRunnerLive.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          makeFakePtyLayer(() => Effect.die("should not be called") as never),
+          NoDetectionProcessRunnerLayer,
+          fakeFileSystem,
+          TestServerConfigLayer,
+          HealthyHttpClientLayer,
+        ),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      const runner = yield* DevServerRunner;
+      const result = yield* runner.logs(basePayload);
+      expect(result.content).toContain("hello");
+      expect(result.content).toContain("world");
+      expect(result.content).not.toContain("\x1b");
+      expect(result.logPath).toContain("/devserver/");
+      expect(result.logPath?.startsWith("/tmp/test-logs/")).toBe(true);
     }).pipe(Effect.provide(layer));
   });
 });

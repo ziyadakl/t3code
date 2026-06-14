@@ -234,6 +234,7 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.devServerStart, AuthTerminalOperateScope],
   [WS_METHODS.devServerStop, AuthTerminalOperateScope],
   [WS_METHODS.devServerStatus, AuthTerminalOperateScope],
+  [WS_METHODS.devServerLogs, AuthTerminalOperateScope],
 ]);
 
 function toAuthAccessStreamEvent(
@@ -1446,6 +1447,20 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
           observeRpcEffect(
             WS_METHODS.devServerStatus,
             devServerRunner.status(input).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new DevServerError({
+                    message: cause.message,
+                    ...(cause.reason !== undefined ? { reason: cause.reason } : {}),
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "devServer" },
+          ),
+        [WS_METHODS.devServerLogs]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.devServerLogs,
+            devServerRunner.logs(input).pipe(
               Effect.mapError(
                 (cause) =>
                   new DevServerError({

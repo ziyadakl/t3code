@@ -16,7 +16,7 @@ import * as Layer from "effect/Layer";
 import * as Schedule from "effect/Schedule";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import { HttpClient } from "effect/unstable/http";
-import type { DevServerPayload, DevServerStatus } from "@t3tools/contracts";
+import type { DevServerPayload, DevServerStatus, DevServerLogs } from "@t3tools/contracts";
 import { DevServerError } from "@t3tools/contracts";
 import { projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
 import { PtyAdapter } from "../terminal/Services/PTY.ts";
@@ -135,7 +135,11 @@ export interface DevServerRunnerShape {
   start(payload: DevServerPayload): Effect.Effect<DevServerStatus, DevServerError>;
   stop(payload: DevServerPayload): Effect.Effect<DevServerStatus, DevServerError>;
   status(payload: DevServerPayload): Effect.Effect<DevServerStatus, DevServerError>;
+  logs(payload: DevServerPayload): Effect.Effect<DevServerLogs, DevServerError>;
 }
+
+/** How much of the tail of a dev-server logfile to return to the UI (bytes). */
+const MAX_LOG_TAIL = 200_000;
 
 export class DevServerRunner extends Context.Service<DevServerRunner, DevServerRunnerShape>()(
   "t3/devServer/DevServerRunner",
@@ -515,7 +519,24 @@ const makeDevServerRunner = Effect.gen(function* () {
       return { running: false, url: null };
     });
 
-  return { start, stop, status } satisfies DevServerRunnerShape;
+  // ---- logs -----------------------------------------------------------------
+
+  const logs = (payload: DevServerPayload): Effect.Effect<DevServerLogs, DevServerError> =>
+    Effect.gen(function* () {
+      const cwd = resolveCwd(payload);
+      if (!cwd) {
+        return yield* new DevServerError({ message: "No working directory for dev server" });
+      }
+      const logPath = devServerLogPath(serverConfig.logsDir, cwd);
+      // Missing file (server never started by t3) → empty content, not an error.
+      const raw = yield* fileSystem
+        .readFileString(logPath)
+        .pipe(Effect.orElseSucceed(() => ""));
+      const tail = raw.length > MAX_LOG_TAIL ? raw.slice(raw.length - MAX_LOG_TAIL) : raw;
+      return { logPath, content: stripAnsi(tail) } satisfies DevServerLogs;
+    });
+
+  return { start, stop, status, logs } satisfies DevServerRunnerShape;
 });
 
 export const DevServerRunnerLive = Layer.effect(DevServerRunner, makeDevServerRunner);

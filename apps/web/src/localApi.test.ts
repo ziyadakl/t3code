@@ -117,6 +117,7 @@ const rpcClientMock = {
     start: vi.fn(),
     stop: vi.fn(),
     status: vi.fn(),
+    logs: vi.fn(),
   },
 };
 

@@ -120,6 +120,7 @@ import {
   WsDevServerStartRpc,
   WsDevServerStopRpc,
   WsDevServerStatusRpc,
+  WsDevServerLogsRpc,
 } from "./devServer.ts";
 
 export const WS_METHODS = {
@@ -189,6 +190,7 @@ export const WS_METHODS = {
   devServerStart: DEV_SERVER_WS_METHODS.devServerStart,
   devServerStop: DEV_SERVER_WS_METHODS.devServerStop,
   devServerStatus: DEV_SERVER_WS_METHODS.devServerStatus,
+  devServerLogs: DEV_SERVER_WS_METHODS.devServerLogs,
 
   // Streaming subscriptions
   subscribeVcsStatus: "subscribeVcsStatus",
@@ -603,6 +605,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsDevServerStartRpc,
   WsDevServerStopRpc,
   WsDevServerStatusRpc,
+  WsDevServerLogsRpc,
   WsTerminalOpenRpc,
   WsTerminalAttachRpc,
   WsTerminalWriteRpc,

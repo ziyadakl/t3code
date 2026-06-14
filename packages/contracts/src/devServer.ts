@@ -19,6 +19,7 @@ export const DEV_SERVER_WS_METHODS = {
   devServerStart: "devServer.start",
   devServerStop: "devServer.stop",
   devServerStatus: "devServer.status",
+  devServerLogs: "devServer.logs",
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -59,6 +60,21 @@ export const DevServerStatus = Schema.Struct({
 });
 export type DevServerStatus = typeof DevServerStatus.Type;
 
+/**
+ * Success schema for devServer.logs — the ANSI-stripped tail of the on-disk
+ * dev-server log plus its absolute path.
+ */
+export const DevServerLogs = Schema.Struct({
+  /** Absolute path to the logfile (so it can be tailed from a terminal). */
+  logPath: Schema.NullOr(Schema.String),
+  /**
+   * The tail of the log (ANSI stripped). Empty when t3 hasn't started — and so
+   * hasn't logged — a server for this cwd.
+   */
+  content: Schema.String,
+});
+export type DevServerLogs = typeof DevServerLogs.Type;
+
 // ---------------------------------------------------------------------------
 // Error type
 // ---------------------------------------------------------------------------
@@ -90,5 +106,11 @@ export const WsDevServerStopRpc = Rpc.make(DEV_SERVER_WS_METHODS.devServerStop, 
 export const WsDevServerStatusRpc = Rpc.make(DEV_SERVER_WS_METHODS.devServerStatus, {
   payload: DevServerPayload,
   success: DevServerStatus,
+  error: Schema.Union([DevServerError, EnvironmentAuthorizationError]),
+});
+
+export const WsDevServerLogsRpc = Rpc.make(DEV_SERVER_WS_METHODS.devServerLogs, {
+  payload: DevServerPayload,
+  success: DevServerLogs,
   error: Schema.Union([DevServerError, EnvironmentAuthorizationError]),
 });
