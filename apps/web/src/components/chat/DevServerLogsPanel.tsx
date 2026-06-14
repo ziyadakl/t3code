@@ -1,6 +1,5 @@
 import { type EnvironmentId, type ThreadId } from "@t3tools/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CheckIcon, CopyIcon } from "lucide-react";
 import { RightPanelSheet } from "../RightPanelSheet";
 import { Button } from "../ui/button";
 import { readEnvironmentApi } from "~/environmentApi";
@@ -101,12 +100,11 @@ export function DevServerLogsPanel({
           <div className="flex items-center gap-2">
             {content ? (
               <Button
-                className="gap-1 bg-[color-mix(in_oklab,var(--primary),#000_15%)] [:hover,[data-pressed]]:bg-primary"
+                className="bg-[color-mix(in_oklab,var(--primary),#000_15%)] shadow-none [:hover,[data-pressed]]:bg-primary"
                 onClick={copyLogs}
                 size="xs"
                 variant="default"
               >
-                {copiedLogs ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
                 {copiedLogs ? "Copied" : "Copy"}
               </Button>
             ) : null}
