@@ -1,6 +1,7 @@
 import {
   ArchiveIcon,
   ArrowUpDownIcon,
+  CastleIcon,
   ChevronRightIcon,
   CloudIcon,
   FolderPlusIcon,
@@ -2553,6 +2554,15 @@ const SidebarChromeHeader = memo(function SidebarChromeHeader({
           Version {APP_VERSION}
         </TooltipPopup>
       </Tooltip>
+      <Link
+        aria-label="Sandcastle"
+        title="Sandcastle"
+        to="/sandcastle"
+        className="flex items-center gap-1.5 rounded-md px-1 text-sm text-muted-foreground outline-hidden ring-ring transition-colors hover:text-foreground focus-visible:ring-2"
+      >
+        <CastleIcon className="size-4 shrink-0" />
+        <span className="truncate">Sandcastle</span>
+      </Link>
     </div>
   );
 
