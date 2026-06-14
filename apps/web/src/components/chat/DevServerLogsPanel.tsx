@@ -98,9 +98,22 @@ export function DevServerLogsPanel({
       <div className="flex h-full flex-col gap-2 p-3">
         <div className="flex items-center justify-between gap-2">
           <h2 className="font-medium text-sm">Dev server logs</h2>
-          <Button onClick={onClose} size="xs" variant="outline">
-            Close
-          </Button>
+          <div className="flex items-center gap-2">
+            {content ? (
+              <Button
+                className="gap-1 transition-transform hover:scale-110 active:scale-95"
+                onClick={copyLogs}
+                size="xs"
+                variant="default"
+              >
+                {copiedLogs ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
+                {copiedLogs ? "Copied" : "Copy"}
+              </Button>
+            ) : null}
+            <Button onClick={onClose} size="xs" variant="outline">
+              Close
+            </Button>
+          </div>
         </div>
 
         {logPath ? (
@@ -114,30 +127,17 @@ export function DevServerLogsPanel({
           </div>
         ) : null}
 
-        <div className="relative min-h-0 flex-1">
-          {content ? (
-            <Button
-              className="absolute top-2 right-2 z-10 gap-1 shadow-sm"
-              onClick={copyLogs}
-              size="xs"
-              variant="default"
-            >
-              {copiedLogs ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
-              {copiedLogs ? "Copied" : "Copy"}
-            </Button>
-          ) : null}
-          <pre
-            className="h-full w-full overflow-auto whitespace-pre-wrap break-all rounded-md border border-input p-2 font-mono text-[11px] leading-snug"
-            onScroll={(e) => {
-              const el = e.currentTarget;
-              atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-            }}
-            ref={preRef}
-          >
-            {content ||
-              "No logs yet. Only dev servers started by t3 are logged — use the Globe (or ▾ Restart) to start one."}
-          </pre>
-        </div>
+        <pre
+          className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-all rounded-md border border-input p-2 font-mono text-[11px] leading-snug"
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+          }}
+          ref={preRef}
+        >
+          {content ||
+            "No logs yet. Only dev servers started by t3 are logged — use the Globe (or ▾ Restart) to start one."}
+        </pre>
       </div>
     </RightPanelSheet>
   );
