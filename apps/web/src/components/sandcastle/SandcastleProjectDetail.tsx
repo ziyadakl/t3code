@@ -13,9 +13,10 @@ import {
 import {
   deriveBanner,
   bannerTone,
-  phaseLabel,
   githubIssueUrl,
+  partitionIssuesByPhase,
 } from "./sandcastleView.ts";
+import { SandcastleIssueRow } from "./SandcastleIssueRow.tsx";
 
 export function SandcastleProjectDetail({
   environmentId,
@@ -54,22 +55,7 @@ export function SandcastleProjectDetail({
   const banner = entry ? deriveBanner(entry, value!.serverNow) : null;
   const snap = entry?.snapshot ?? null;
 
-  const active = snap
-    ? snap.issues.filter(
-        (i) =>
-          i.phase !== "merged" &&
-          i.phase !== "needs-human" &&
-          i.phase !== "deferred",
-      )
-    : [];
-  const recent = snap
-    ? snap.issues.filter(
-        (i) =>
-          i.phase === "merged" ||
-          i.phase === "needs-human" ||
-          i.phase === "deferred",
-      )
-    : [];
+  const { active, recent } = partitionIssuesByPhase(snap?.issues ?? []);
 
   const issueLink = (n: number) =>
     githubIssueUrl(project.repositoryIdentity ?? null, n);
@@ -128,46 +114,14 @@ export function SandcastleProjectDetail({
             {active.length === 0 ? (
               <p className="text-xs text-muted-foreground">No active issues.</p>
             ) : (
-              active.map((i) => {
-                const href = issueLink(i.number);
-                return (
-                  <Card
-                    key={i.number}
-                    className="flex-row items-center justify-between gap-3 p-3"
-                  >
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        {href ? (
-                          <a
-                            href={href}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-sm font-medium underline"
-                          >
-                            #{i.number}
-                          </a>
-                        ) : (
-                          <span className="text-sm font-medium">
-                            #{i.number}
-                          </span>
-                        )}
-                        <span className="truncate text-sm">{i.title}</span>
-                      </div>
-                      {i.detail ? (
-                        <span className="text-xs text-muted-foreground">
-                          {i.detail}
-                        </span>
-                      ) : null}
-                    </div>
-                    <Badge
-                      variant={i.attention ? "warning" : "secondary"}
-                      size="sm"
-                    >
-                      {phaseLabel(i.phase)}
-                    </Badge>
-                  </Card>
-                );
-              })
+              active.map((i) => (
+                <SandcastleIssueRow
+                  key={i.number}
+                  variant="active"
+                  issue={i}
+                  href={issueLink(i.number)}
+                />
+              ))
             )}
           </section>
 
@@ -178,36 +132,14 @@ export function SandcastleProjectDetail({
                 Nothing finished yet.
               </p>
             ) : (
-              recent.map((i) => {
-                const href = issueLink(i.number);
-                return (
-                  <div
-                    key={i.number}
-                    className="flex items-center justify-between gap-3 px-1 py-1 text-sm"
-                  >
-                    <div className="flex min-w-0 items-center gap-2">
-                      {href ? (
-                        <a
-                          href={href}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="font-medium underline"
-                        >
-                          #{i.number}
-                        </a>
-                      ) : (
-                        <span className="font-medium">#{i.number}</span>
-                      )}
-                      <span className="truncate text-muted-foreground">
-                        {i.title}
-                      </span>
-                    </div>
-                    <Badge variant="secondary" size="sm">
-                      {phaseLabel(i.phase)}
-                    </Badge>
-                  </div>
-                );
-              })
+              recent.map((i) => (
+                <SandcastleIssueRow
+                  key={i.number}
+                  variant="recent"
+                  issue={i}
+                  href={issueLink(i.number)}
+                />
+              ))
             )}
           </section>
         </>

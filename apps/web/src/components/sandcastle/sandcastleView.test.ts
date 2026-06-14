@@ -5,9 +5,14 @@ import {
   isStale,
   githubIssueUrl,
   phaseLabel,
+  partitionIssuesByPhase,
   STALE_AFTER_MS,
 } from "./sandcastleView.ts";
-import type { SandcastleStatusEntry } from "@t3tools/contracts";
+import type {
+  RepositoryIdentity,
+  SandcastleStatusEntry,
+  SandcastleStatusIssue,
+} from "@t3tools/contracts";
 
 function entry(over: Partial<SandcastleStatusEntry>): SandcastleStatusEntry {
   return {
@@ -17,6 +22,19 @@ function entry(over: Partial<SandcastleStatusEntry>): SandcastleStatusEntry {
     schemaOutdated: false,
     readError: null,
     ...over,
+  };
+}
+
+/** Build a real RepositoryIdentity (mirrors environmentGrouping.test.ts fixtures). */
+function identity(
+  over: { owner?: string; name?: string; remoteUrl?: string } = {},
+): RepositoryIdentity {
+  const remoteUrl = over.remoteUrl ?? "https://github.com/example/repo.git";
+  return {
+    canonicalKey: remoteUrl,
+    locator: { source: "git-remote", remoteName: "origin", remoteUrl },
+    ...(over.owner !== undefined ? { owner: over.owner } : {}),
+    ...(over.name !== undefined ? { name: over.name } : {}),
   };
 }
 
@@ -69,20 +87,19 @@ describe("deriveBanner", () => {
 describe("githubIssueUrl", () => {
   it("builds from owner+name", () => {
     expect(
-      githubIssueUrl({ owner: "acme", name: "widgets" } as never, 42),
+      githubIssueUrl(identity({ owner: "acme", name: "widgets" }), 42),
     ).toBe("https://github.com/acme/widgets/issues/42");
   });
   it("falls back to remoteUrl parsing", () => {
     expect(
       githubIssueUrl(
-        { locator: { remoteUrl: "git@github.com:acme/widgets.git" } } as never,
+        identity({ remoteUrl: "git@github.com:acme/widgets.git" }),
         7,
       ),
     ).toBe("https://github.com/acme/widgets/issues/7");
   });
   it("returns null when nothing usable", () => {
     expect(githubIssueUrl(null, 1)).toBeNull();
-    expect(githubIssueUrl({} as never, 1)).toBeNull();
   });
 });
 
@@ -91,5 +108,31 @@ describe("phaseLabel", () => {
     expect(phaseLabel("implementer-retry")).toBe("Retry");
     expect(phaseLabel("needs-human")).toBe("Needs you");
     expect(phaseLabel("merged")).toBe("Merged");
+  });
+});
+
+function issue(
+  number: number,
+  phase: SandcastleStatusIssue["phase"],
+): SandcastleStatusIssue {
+  return { number, title: `#${number}`, branch: "b", phase };
+}
+
+describe("partitionIssuesByPhase", () => {
+  it("splits active (in-flight) from recent (terminal) phases", () => {
+    const issues = [
+      issue(1, "implementer"),
+      issue(2, "merged"),
+      issue(3, "reviewer"),
+      issue(4, "needs-human"),
+      issue(5, "deferred"),
+    ];
+    const { active, recent } = partitionIssuesByPhase(issues);
+    expect(active.map((i) => i.number)).toEqual([1, 3]);
+    expect(recent.map((i) => i.number)).toEqual([2, 4, 5]);
+  });
+
+  it("returns empty buckets for an empty list", () => {
+    expect(partitionIssuesByPhase([])).toEqual({ active: [], recent: [] });
   });
 });

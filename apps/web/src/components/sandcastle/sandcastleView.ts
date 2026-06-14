@@ -2,6 +2,7 @@
 import type {
   SandcastleIssuePhase,
   SandcastleStatusEntry,
+  SandcastleStatusIssue,
 } from "@t3tools/contracts";
 import type { RepositoryIdentity } from "@t3tools/contracts";
 import { parseGitHubRepositoryNameWithOwnerFromRemoteUrl } from "@t3tools/shared/git";
@@ -78,6 +79,26 @@ const PHASE_LABELS: Record<SandcastleIssuePhase, string> = {
 
 export function phaseLabel(phase: SandcastleIssuePhase): string {
   return PHASE_LABELS[phase] ?? phase;
+}
+
+/** Phases that mean an issue is finished (won't progress further this run). */
+export const TERMINAL_PHASES = new Set<SandcastleIssuePhase>([
+  "merged",
+  "needs-human",
+  "deferred",
+]);
+
+/** Split issues into still-in-flight (`active`) vs finished (`recent`). */
+export function partitionIssuesByPhase(issues: readonly SandcastleStatusIssue[]): {
+  active: SandcastleStatusIssue[];
+  recent: SandcastleStatusIssue[];
+} {
+  const active: SandcastleStatusIssue[] = [];
+  const recent: SandcastleStatusIssue[] = [];
+  for (const i of issues) {
+    (TERMINAL_PHASES.has(i.phase) ? recent : active).push(i);
+  }
+  return { active, recent };
 }
 
 /** Badge variant for a banner kind — maps to ui/badge.tsx variants. */
