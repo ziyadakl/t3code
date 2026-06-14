@@ -117,7 +117,7 @@ export function DevServerLogsPanel({
         <div className="relative min-h-0 flex-1">
           {content ? (
             <Button
-              className="absolute top-2 right-2 z-10 gap-1"
+              className="absolute top-2 right-2 z-10 gap-1 bg-popover dark:bg-popover"
               onClick={copyLogs}
               size="xs"
               variant="outline"
