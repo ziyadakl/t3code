@@ -23,4 +23,5 @@ export * from "./filesystem.ts";
 export * from "./review.ts";
 export * from "./resume.ts";
 export * from "./devServer.ts";
+export * from "./sandcastle.ts";
 export * from "./rpc.ts";
