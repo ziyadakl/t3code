@@ -15,8 +15,8 @@ layer("033_ProjectionThreadMessageProviderUuid", (it) => {
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
 
-        // Migrate up to just before 032, then seed pre-existing rows.
-        yield* runMigrations({ toMigrationInclusive: 31 });
+        // Migrate up to just before 033, then seed pre-existing rows.
+        yield* runMigrations({ toMigrationInclusive: 32 });
 
         yield* sql`
           INSERT INTO projection_thread_messages (
@@ -57,7 +57,7 @@ layer("033_ProjectionThreadMessageProviderUuid", (it) => {
           )
         `;
 
-        yield* runMigrations({ toMigrationInclusive: 32 });
+        yield* runMigrations({ toMigrationInclusive: 33 });
 
         const messageColumns = yield* sql<{ readonly name: string }>`
           PRAGMA table_info(projection_thread_messages)
@@ -91,7 +91,7 @@ layer("033_ProjectionThreadMessageProviderUuid", (it) => {
 
         // Re-running the migration is a no-op (idempotent guards): schema and
         // existing rows are unchanged.
-        yield* runMigrations({ toMigrationInclusive: 32 });
+        yield* runMigrations({ toMigrationInclusive: 33 });
 
         const messageColumnsAfter = yield* sql<{ readonly name: string }>`
           PRAGMA table_info(projection_thread_messages)
