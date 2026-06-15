@@ -15,6 +15,7 @@
     "start:mock-update-server": "node scripts/mock-update-server.ts",
     "build": "vp run --filter './apps/*' --filter './packages/*' --filter './oxlint-plugin-t3code' --filter './scripts' build",
     "deploy": "bash scripts/deploy-vps.sh",
+    "deploy:tarball": "bash scripts/deploy-vps-tarball.sh",
     "hooks:install": "bash scripts/install-git-hooks.sh",
     "deploy:auto:on": "git config t3.autoDeploy true && echo 'auto-deploy on commit: ON'",
     "deploy:auto:off": "git config t3.autoDeploy false && echo 'auto-deploy on commit: OFF'",
