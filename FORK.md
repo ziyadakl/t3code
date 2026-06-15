@@ -7,7 +7,7 @@
 > This file is the shared understanding. If you (or a new Claude session) are picking this up,
 > **read this first.** It is the source of truth; do not relearn it from scratch.
 >
-> _Last updated: 2026-06-03. Status: fork is bootstrapped, nothing custom built yet._
+> _Last updated: 2026-06-15. Status: actively developed. The fork carries several of its own features on top of Theo's (e.g. CLI↔t3 chat continuity/resume, thread-rename write-through, ESC-ESC rewind, the dev-server toggle, the Sandcastle viewer) and is current with upstream **v0.0.27** (adopted and deployed live on 2026-06-15). For the repeatable, fast adoption process, use the `adopting-upstream` skill (`.claude/skills/adopting-upstream/`) alongside this file._
 
 ---
 
@@ -78,7 +78,7 @@ Do this frequently. Resolve any conflict once; `rerere` remembers it.
 - `rerere.enabled = true`
 - `rerere.autoupdate = true`
 
-### The conflict-prone "hot files" (verified 2026-06-03)
+### The conflict-prone "hot files" (verified 2026-06-03; re-confirmed during the v0.0.27 adoption 2026-06-15 — `server.ts` and the orchestration reactors were the real conflict points)
 Touch these only when a feature genuinely requires it; keep edits minimal.
 
 | File | What it is | Bucket | Conflict risk |
