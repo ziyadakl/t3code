@@ -310,6 +310,11 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(OpenCodeRuntimeLive),
   Layer.provideMerge(ServerSettingsLive),
   Layer.provideMerge(WorkspaceLayerLive),
+).pipe(
+  // `.pipe()` only has overloads up to 20 arguments, so the dependency chain
+  // is split across two chained `.pipe()` calls. This is semantically
+  // identical — `A.pipe(f, g).pipe(h)` === `A.pipe(f, g, h)` — and preserves
+  // the exact `provideMerge` ordering.
   Layer.provideMerge(ProjectFaviconResolverLive),
   Layer.provideMerge(RepositoryIdentityResolverLive),
   Layer.provideMerge(ServerEnvironmentLive),

@@ -396,6 +396,7 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
           scripts: [],
           createdAt: now,
           updatedAt: now,
+          archivedAt: null,
         } satisfies OrchestrationProjectShell;
 
         const thread = {
@@ -537,6 +538,7 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
           scripts: [],
           createdAt: now,
           updatedAt: now,
+          archivedAt: null,
         } satisfies OrchestrationProjectShell;
 
         const thread = {
