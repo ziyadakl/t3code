@@ -37,7 +37,7 @@ export type ResumeListImportableSessionsResult = typeof ResumeListImportableSess
 /** Error raised by the /resume finder (listing past sessions). */
 export class ResumeError extends Schema.TaggedErrorClass<ResumeError>()("ResumeError", {
   detail: Schema.String,
-  cause: Schema.optional(Schema.Defect),
+  cause: Schema.optional(Schema.Defect()),
 }) {
   override get message(): string {
     return `Resume finder error: ${this.detail}`;
