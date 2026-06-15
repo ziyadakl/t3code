@@ -12,7 +12,11 @@ import {
   statusKey,
   type ProjectRef,
 } from "./useSandcastleStatuses.ts";
-import { deriveBanner, bannerTone } from "./sandcastleView.ts";
+import {
+  deriveBanner,
+  bannerTone,
+  finishedRunAgeHint,
+} from "./sandcastleView.ts";
 
 function EnvLabel({ environmentId }: { environmentId: EnvironmentId }) {
   const label = useSavedEnvironmentRegistryStore(
@@ -59,6 +63,9 @@ export function SandcastleDashboard() {
             const entry = value!.entry;
             const banner = deriveBanner(entry, value!.serverNow);
             const snap = entry.snapshot;
+            const ageHint = snap
+              ? finishedRunAgeHint(snap.state, snap.updatedAt, value!.serverNow)
+              : null;
             return (
               <Link
                 key={`${project.environmentId}-${project.id}`}
@@ -81,6 +88,7 @@ export function SandcastleDashboard() {
                       <span className="truncate text-xs text-muted-foreground">
                         iter {snap.run.iterations.current}/
                         {snap.run.iterations.total} · {snap.run.branch}
+                        {ageHint ? ` · updated ${ageHint}` : ""}
                       </span>
                     ) : null}
                   </div>

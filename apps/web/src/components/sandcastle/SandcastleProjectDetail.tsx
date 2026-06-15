@@ -15,6 +15,7 @@ import {
   bannerTone,
   githubIssueUrl,
   partitionIssuesByPhase,
+  finishedRunAgeHint,
 } from "./sandcastleView.ts";
 import { SandcastleIssueRow } from "./SandcastleIssueRow.tsx";
 
@@ -54,6 +55,9 @@ export function SandcastleProjectDetail({
   const entry = value?.entry;
   const banner = entry ? deriveBanner(entry, value!.serverNow) : null;
   const snap = entry?.snapshot ?? null;
+  const ageHint = snap
+    ? finishedRunAgeHint(snap.state, snap.updatedAt, value!.serverNow)
+    : null;
 
   const { active, recent } = partitionIssuesByPhase(snap?.issues ?? []);
 
@@ -74,6 +78,11 @@ export function SandcastleProjectDetail({
           <Badge variant={bannerTone(banner.kind)} size="sm">
             {banner.text}
           </Badge>
+        ) : null}
+        {ageHint ? (
+          <span className="text-xs text-muted-foreground">
+            Updated {ageHint}
+          </span>
         ) : null}
       </header>
 

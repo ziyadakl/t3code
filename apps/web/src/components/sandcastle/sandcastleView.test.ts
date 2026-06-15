@@ -6,6 +6,8 @@ import {
   githubIssueUrl,
   phaseLabel,
   partitionIssuesByPhase,
+  formatRelativeAge,
+  finishedRunAgeHint,
   STALE_AFTER_MS,
 } from "./sandcastleView.ts";
 import type {
@@ -134,5 +136,39 @@ describe("partitionIssuesByPhase", () => {
 
   it("returns empty buckets for an empty list", () => {
     expect(partitionIssuesByPhase([])).toEqual({ active: [], recent: [] });
+  });
+});
+
+describe("formatRelativeAge", () => {
+  const now = "2026-06-14T12:00:00Z";
+  const ago = (ms: number) => new Date(Date.parse(now) - ms).toISOString();
+
+  it("says 'just now' under a minute", () => {
+    expect(formatRelativeAge(ago(30_000), now)).toBe("just now");
+  });
+  it("reports minutes, hours, and days", () => {
+    expect(formatRelativeAge(ago(5 * 60_000), now)).toBe("5m ago");
+    expect(formatRelativeAge(ago(11 * 3_600_000), now)).toBe("11h ago");
+    expect(formatRelativeAge(ago(3 * 86_400_000), now)).toBe("3d ago");
+  });
+  it("clamps a future timestamp (clock skew) to 'just now'", () => {
+    expect(formatRelativeAge(ago(-60_000), now)).toBe("just now");
+  });
+  it("returns null for an unparseable timestamp", () => {
+    expect(formatRelativeAge("nonsense", now)).toBeNull();
+  });
+});
+
+describe("finishedRunAgeHint", () => {
+  const now = "2026-06-14T12:00:00Z";
+  const elevenHoursAgo = new Date(Date.parse(now) - 11 * 3_600_000).toISOString();
+
+  it("shows the age for finished runs (done/stopped)", () => {
+    expect(finishedRunAgeHint("done", elevenHoursAgo, now)).toBe("11h ago");
+    expect(finishedRunAgeHint("stopped", elevenHoursAgo, now)).toBe("11h ago");
+  });
+  it("returns null for active runs (running/restarting)", () => {
+    expect(finishedRunAgeHint("running", elevenHoursAgo, now)).toBeNull();
+    expect(finishedRunAgeHint("restarting", elevenHoursAgo, now)).toBeNull();
   });
 });

@@ -1,6 +1,7 @@
 // apps/web/src/components/sandcastle/sandcastleView.ts
 import type {
   SandcastleIssuePhase,
+  SandcastleRunState,
   SandcastleStatusEntry,
   SandcastleStatusIssue,
 } from "@t3tools/contracts";
@@ -29,6 +30,39 @@ export function isStale(updatedAtIso: string, serverNowIso: string): boolean {
   const now = Date.parse(serverNowIso);
   if (Number.isNaN(updated) || Number.isNaN(now)) return false;
   return now - updated > STALE_AFTER_MS;
+}
+
+/** Run states where the loop is actively progressing — the live/stale banner
+ *  already conveys freshness, so no age hint is needed. */
+const ACTIVE_RUN_STATES = new Set<SandcastleRunState>(["running", "restarting"]);
+
+/** Human relative age of a snapshot vs the reading server's clock, e.g. "11h ago".
+ *  Skew-safe (uses serverNow, clamps future timestamps); null if unparseable. */
+export function formatRelativeAge(
+  updatedAtIso: string,
+  serverNowIso: string,
+): string | null {
+  const updated = Date.parse(updatedAtIso);
+  const now = Date.parse(serverNowIso);
+  if (Number.isNaN(updated) || Number.isNaN(now)) return null;
+  const sec = Math.floor(Math.max(0, now - updated) / 1000);
+  if (sec < 60) return "just now";
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  return `${Math.floor(hr / 24)}d ago`;
+}
+
+/** Age hint to show on FINISHED runs (not running/restarting) so an old snapshot
+ *  doesn't look live. Null for active runs or an unparseable timestamp. */
+export function finishedRunAgeHint(
+  state: SandcastleRunState,
+  updatedAtIso: string,
+  serverNowIso: string,
+): string | null {
+  if (ACTIVE_RUN_STATES.has(state)) return null;
+  return formatRelativeAge(updatedAtIso, serverNowIso);
 }
 
 export function deriveBanner(entry: SandcastleStatusEntry, serverNowIso: string): Banner {
