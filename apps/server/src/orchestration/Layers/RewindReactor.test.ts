@@ -258,7 +258,7 @@ const createHarness = () =>
   });
 
 // Seed a small conversation with an anchor uuid on the first assistant reply.
-const seedConversation = (engine: OrchestrationEngineShape): Effect.Effect<void> =>
+const seedConversation = (engine: OrchestrationEngineShape) =>
   Effect.gen(function* () {
     const send = (suffix: string, createdAt: string, providerMessageUuid?: string) =>
       engine.dispatch({
