@@ -22,7 +22,7 @@
     "build:desktop": "vp run --filter @t3tools/desktop --filter t3 build",
     "typecheck": "vp run -r --concurrency-limit 2 typecheck",
     "tc": "vp run -r --concurrency-limit 2 typecheck",
-    "lint": "vp lint --report-unused-disable-directives",
+    "lint": "node scripts/lint-all.ts",
     "lint:mobile": "node scripts/mobile-native-static-check.ts",
     "test": "vp run -r test",
     "test:desktop-smoke": "vp run --filter @t3tools/desktop smoke-test",
