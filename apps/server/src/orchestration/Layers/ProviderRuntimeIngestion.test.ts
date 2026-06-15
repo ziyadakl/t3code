@@ -327,6 +327,12 @@ describe("ProviderRuntimeIngestion", () => {
       drain,
       listMessages: (threadId: ThreadId = asThreadId("thread-1")) =>
         Effect.runPromise(messageRepo.listByThreadId({ threadId })),
+      readEvents: (fromOffset = 0) =>
+        Effect.runPromise(
+          Stream.runCollect(engine.readEvents(fromOffset)).pipe(
+            Effect.map((chunk) => Array.from(chunk)),
+          ),
+        ),
     };
   }
 
@@ -2023,11 +2029,7 @@ describe("ProviderRuntimeIngestion", () => {
     expect(resumedMessage?.text).toBe(" second half");
     expect(resumedMessage?.streaming).toBe(false);
 
-    const events = await Effect.runPromise(
-      Stream.runCollect(harness.engine.readEvents(0)).pipe(
-        Effect.map((chunk) => Array.from(chunk)),
-      ),
-    );
+    const events = await harness.readEvents(0);
     const assistantEvents = events.filter(
       (event): event is Extract<(typeof events)[number], { type: "thread.message-sent" }> =>
         event.type === "thread.message-sent" &&
@@ -2379,11 +2381,7 @@ describe("ProviderRuntimeIngestion", () => {
         ),
     );
 
-    const events = await Effect.runPromise(
-      Stream.runCollect(harness.engine.readEvents(0)).pipe(
-        Effect.map((chunk) => Array.from(chunk)),
-      ),
-    );
+    const events = await harness.readEvents(0);
     const completionEvents = events.filter((event) => {
       if (event.type !== "thread.message-sent") {
         return false;

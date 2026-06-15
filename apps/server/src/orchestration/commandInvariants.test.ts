@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "@effect/vitest";
 import {
   MessageId,
   CommandId,
@@ -130,30 +130,29 @@ describe("commandInvariants", () => {
     ).toEqual([ThreadId.make("thread-2")]);
   });
 
-  it("requires existing thread", async () => {
-    const thread = await Effect.runPromise(
-      requireThread({
+  it.effect("requires existing thread", () =>
+    Effect.gen(function* () {
+      const thread = yield* requireThread({
         readModel,
         command: messageSendCommand,
         threadId: ThreadId.make("thread-1"),
-      }),
-    );
-    expect(thread.id).toBe(ThreadId.make("thread-1"));
+      });
+      expect(thread.id).toBe(ThreadId.make("thread-1"));
 
-    await expect(
-      Effect.runPromise(
+      const error = yield* Effect.flip(
         requireThread({
           readModel,
           command: messageSendCommand,
           threadId: ThreadId.make("missing"),
         }),
-      ),
-    ).rejects.toThrow("does not exist");
-  });
+      );
+      expect(error.message).toContain("does not exist");
+    }),
+  );
 
-  it("requires missing thread for create flows", async () => {
-    await Effect.runPromise(
-      requireThreadAbsent({
+  it.effect("requires missing thread for create flows", () =>
+    Effect.gen(function* () {
+      yield* requireThreadAbsent({
         readModel,
         command: {
           type: "thread.create",
@@ -172,11 +171,9 @@ describe("commandInvariants", () => {
           createdAt: now,
         },
         threadId: ThreadId.make("thread-3"),
-      }),
-    );
+      });
 
-    await expect(
-      Effect.runPromise(
+      const error = yield* Effect.flip(
         requireThreadAbsent({
           readModel,
           command: {
@@ -197,89 +194,85 @@ describe("commandInvariants", () => {
           },
           threadId: ThreadId.make("thread-1"),
         }),
-      ),
-    ).rejects.toThrow("already exists");
-  });
+      );
+      expect(error.message).toContain("already exists");
+    }),
+  );
 
-  it("guards project archive state", async () => {
-    const archiveReadModel: OrchestrationReadModel = {
-      ...readModel,
-      projects: readModel.projects.map((project) =>
-        project.id === ProjectId.make("project-b")
-          ? { ...project, archivedAt: now }
-          : project,
-      ),
-    };
+  it.effect("guards project archive state", () =>
+    Effect.gen(function* () {
+      const archiveReadModel: OrchestrationReadModel = {
+        ...readModel,
+        projects: readModel.projects.map((project) =>
+          project.id === ProjectId.make("project-b")
+            ? { ...project, archivedAt: now }
+            : project,
+        ),
+      };
 
-    const archiveCommand: OrchestrationCommand = {
-      type: "project.archive",
-      commandId: CommandId.make("cmd-project-archive"),
-      projectId: ProjectId.make("project-a"),
-    };
-    const unarchiveCommand: OrchestrationCommand = {
-      type: "project.unarchive",
-      commandId: CommandId.make("cmd-project-unarchive"),
-      projectId: ProjectId.make("project-b"),
-    };
+      const archiveCommand: OrchestrationCommand = {
+        type: "project.archive",
+        commandId: CommandId.make("cmd-project-archive"),
+        projectId: ProjectId.make("project-a"),
+      };
+      const unarchiveCommand: OrchestrationCommand = {
+        type: "project.unarchive",
+        commandId: CommandId.make("cmd-project-unarchive"),
+        projectId: ProjectId.make("project-b"),
+      };
 
-    // An active project can be archived; an already-archived one cannot.
-    const activeProject = await Effect.runPromise(
-      requireProjectNotArchived({
+      // An active project can be archived; an already-archived one cannot.
+      const activeProject = yield* requireProjectNotArchived({
         readModel: archiveReadModel,
         command: archiveCommand,
         projectId: ProjectId.make("project-a"),
-      }),
-    );
-    expect(activeProject.id).toBe(ProjectId.make("project-a"));
+      });
+      expect(activeProject.id).toBe(ProjectId.make("project-a"));
 
-    await expect(
-      Effect.runPromise(
+      const archivedError = yield* Effect.flip(
         requireProjectNotArchived({
           readModel: archiveReadModel,
           command: { ...archiveCommand, projectId: ProjectId.make("project-b") },
           projectId: ProjectId.make("project-b"),
         }),
-      ),
-    ).rejects.toThrow("already archived");
+      );
+      expect(archivedError.message).toContain("already archived");
 
-    // An archived project can be unarchived; an active one cannot.
-    const archivedProject = await Effect.runPromise(
-      requireProjectArchived({
+      // An archived project can be unarchived; an active one cannot.
+      const archivedProject = yield* requireProjectArchived({
         readModel: archiveReadModel,
         command: unarchiveCommand,
         projectId: ProjectId.make("project-b"),
-      }),
-    );
-    expect(archivedProject.id).toBe(ProjectId.make("project-b"));
+      });
+      expect(archivedProject.id).toBe(ProjectId.make("project-b"));
 
-    await expect(
-      Effect.runPromise(
+      const notArchivedError = yield* Effect.flip(
         requireProjectArchived({
           readModel: archiveReadModel,
           command: { ...unarchiveCommand, projectId: ProjectId.make("project-a") },
           projectId: ProjectId.make("project-a"),
         }),
-      ),
-    ).rejects.toThrow("is not archived");
-  });
+      );
+      expect(notArchivedError.message).toContain("is not archived");
+    }),
+  );
 
-  it("requires non-negative integers", async () => {
-    await Effect.runPromise(
-      requireNonNegativeInteger({
+  it.effect("requires non-negative integers", () =>
+    Effect.gen(function* () {
+      yield* requireNonNegativeInteger({
         commandType: "thread.checkpoint.revert",
         field: "turnCount",
         value: 0,
-      }),
-    );
+      });
 
-    await expect(
-      Effect.runPromise(
+      const error = yield* Effect.flip(
         requireNonNegativeInteger({
           commandType: "thread.checkpoint.revert",
           field: "turnCount",
           value: -1,
         }),
-      ),
-    ).rejects.toThrow("greater than or equal to 0");
-  });
+      );
+      expect(error.message).toContain("greater than or equal to 0");
+    }),
+  );
 });

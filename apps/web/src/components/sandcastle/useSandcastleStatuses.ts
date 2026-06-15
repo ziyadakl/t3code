@@ -77,7 +77,6 @@ export function useSandcastleStatuses(
       window.clearInterval(id);
     };
     // grouped is derived from `signature`; re-run only when the set changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signature]);
 
   return map;

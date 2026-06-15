@@ -124,6 +124,16 @@ export function waitUntilReady(
 /** Sentinel offered to the queue to tell the drain fiber to flush + stop. */
 const TEE_DONE = Symbol("devServer/tee/done");
 
+/**
+ * Build a synchronous `runFork` bound to the current Effect context, for
+ * bridging sync PTY callbacks into the runtime (same pattern as
+ * terminal/Layers/Manager.ts). Exposed so tests can obtain the exact runner
+ * `teeProcessOutput` expects without reaching for `Effect.runForkWith` inline.
+ */
+export const makeContextRunFork: Effect.Effect<
+  <A, E>(effect: Effect.Effect<A, E>) => Fiber.Fiber<A, E>
+> = Effect.map(Effect.context<never>(), (context) => Effect.runForkWith(context));
+
 export interface TeeHandle {
   /**
    * Detach the onData listener, then wait for the drain fiber to flush every
@@ -299,8 +309,7 @@ const makeDevServerRunner = Effect.gen(function* () {
 
   // Capture the current Effect context so we can use Effect.runForkWith from
   // sync callbacks (same pattern as terminal/Layers/Manager.ts:952).
-  const context = yield* Effect.context<never>();
-  const runFork = Effect.runForkWith(context);
+  const runFork = yield* makeContextRunFork;
 
   /** Helper that runs detectListening with the captured services. */
   const detect = (cwd: string): Effect.Effect<string | null> =>

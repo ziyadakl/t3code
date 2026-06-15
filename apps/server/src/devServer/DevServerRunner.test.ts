@@ -35,6 +35,7 @@ import {
   devServerLogPath,
   waitUntilReady,
   makeHttpProbe,
+  makeContextRunFork,
   teeProcessOutput,
   type ReadyProbe,
 } from "./DevServerRunner.ts";
@@ -662,7 +663,7 @@ describe("teeProcessOutput", () => {
         Effect.sync(() => {
           writes.push(data);
         });
-      const runFork = Effect.runForkWith(yield* Effect.context<never>());
+      const runFork = yield* makeContextRunFork;
 
       const tee = yield* teeProcessOutput({ proc: src.proc, logPath: "/x.log", appendChunk, runFork });
       src.push("a");
@@ -684,7 +685,7 @@ describe("teeProcessOutput", () => {
         Effect.sync(() => {
           writes.push(data);
         });
-      const runFork = Effect.runForkWith(yield* Effect.context<never>());
+      const runFork = yield* makeContextRunFork;
 
       const tee = yield* teeProcessOutput({ proc: src.proc, logPath: "/x.log", appendChunk, runFork });
       src.push("early");
@@ -704,7 +705,7 @@ describe("teeProcessOutput", () => {
         Effect.sync(() => {
           writes.push(data);
         });
-      const runFork = Effect.runForkWith(yield* Effect.context<never>());
+      const runFork = yield* makeContextRunFork;
 
       const tee = yield* teeProcessOutput({ proc: src.proc, logPath: "/x.log", appendChunk, runFork });
       src.push("tail");

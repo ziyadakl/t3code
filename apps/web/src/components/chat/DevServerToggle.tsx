@@ -62,7 +62,6 @@ export const DevServerToggle = memo(function DevServerToggle({
     return () => {
       unmountedRef.current = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [environmentId, threadId, worktreePath, projectCwd, available]);
 
   // Keep status honest: re-fetch when the user returns to the tab or the window
@@ -104,7 +103,6 @@ export const DevServerToggle = memo(function DevServerToggle({
       window.removeEventListener("focus", scheduleRefreshStatus);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [environmentId, threadId, worktreePath, projectCwd, available]);
 
   /** Open the given URL (or no-op if null). */
@@ -164,7 +162,6 @@ export const DevServerToggle = memo(function DevServerToggle({
     } finally {
       if (!unmountedRef.current) setPending(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [environmentId, threadId, worktreePath, projectCwd, running, url, pending, openUrl]);
 
   /** Stop the dev server. */
@@ -190,7 +187,6 @@ export const DevServerToggle = memo(function DevServerToggle({
     } finally {
       if (!unmountedRef.current) setPending(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [environmentId, threadId, worktreePath, projectCwd, pending]);
 
   /** Restart: stop then start, then open the new URL. */
@@ -219,7 +215,6 @@ export const DevServerToggle = memo(function DevServerToggle({
     } finally {
       if (!unmountedRef.current) setPending(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [environmentId, threadId, worktreePath, projectCwd, pending, openUrl]);
 
   const primaryLabel = running
