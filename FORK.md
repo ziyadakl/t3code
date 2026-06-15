@@ -7,7 +7,7 @@
 > This file is the shared understanding. If you (or a new Claude session) are picking this up,
 > **read this first.** It is the source of truth; do not relearn it from scratch.
 >
-> _Last updated: 2026-06-15. Status: actively developed. The fork carries several of its own features on top of Theo's (e.g. CLI↔t3 chat continuity/resume, thread-rename write-through, ESC-ESC rewind, the dev-server toggle, the Sandcastle viewer) and is current with upstream **v0.0.27** (adopted and deployed live on 2026-06-15). For the repeatable, fast adoption process, use the `adopting-upstream` skill (`.claude/skills/adopting-upstream/`) alongside this file._
+> _Last updated: 2026-06-15. Status: actively developed. The fork carries several of its own features on top of Theo's (e.g. CLI↔t3 chat continuity/resume, thread-rename write-through, ESC-ESC rewind, the dev-server toggle, the Sandcastle viewer) and is current with upstream **v0.0.27** (adopted and deployed live on 2026-06-15). For the repeatable, fast adoption process, use the `update-t3` skill (`.claude/skills/update-t3/`, invoke with `/update-t3`) alongside this file._
 
 ---
 

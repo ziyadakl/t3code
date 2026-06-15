@@ -1,5 +1,5 @@
 ---
-name: adopting-upstream
+name: update-t3
 description: Use when adopting a new upstream pingdotgg/t3code release into this fork — pulling upstream commits/tags into the `custom` branch via merge or rebase, reconciling them with the fork's own features, and shipping green to the VPS. Especially when the upstream change touches the build toolchain, dependencies, or migrations.
 ---
 
