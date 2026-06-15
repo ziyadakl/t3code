@@ -2,7 +2,7 @@
 #
 # One-command deploy of the t3 fork server (server bundle + web client) to the VPS.
 #
-#   bun run deploy            # or: bash scripts/deploy-vps.sh
+#   pnpm run deploy           # or: bash scripts/deploy-vps.sh
 #
 # Does the whole validated file-swap runbook with a hard stop on any failure, so
 # it can never leave the live server half-swapped:
@@ -88,9 +88,9 @@ if [[ "${T3_SKIP_BUILD:-}" == "1" ]]; then
   say "Skipping build (T3_SKIP_BUILD=1) — reusing $DIST"
 else
   say "Building web bundle"
-  CI=1 mise exec -- bun --filter=@t3tools/web run build
+  CI=1 pnpm exec vp run --filter @t3tools/web build
   say "Building server bundle (copies web dist into dist/client)"
-  CI=1 mise exec -- bun --filter=t3 run build
+  CI=1 pnpm exec vp run --filter t3 build
 fi
 
 [[ -f "$DIST/bin.mjs" ]] || die "missing build artifact: $DIST/bin.mjs"
