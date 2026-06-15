@@ -559,8 +559,10 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("RewindReactor", (it
         Effect.sync(() => {
           try {
             return fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8") === "v2\n";
-          } catch {
-            return false;
+          } catch (error) {
+            // File may not exist yet mid-restore — that's the only retryable case.
+            if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+            throw error;
           }
         }),
       );
