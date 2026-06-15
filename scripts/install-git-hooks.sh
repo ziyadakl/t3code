@@ -15,4 +15,4 @@ git config core.hooksPath .githooks
 chmod +x .githooks/* 2>/dev/null || true
 
 echo "git hooks installed: core.hooksPath -> .githooks (auto-deploy on commit)."
-echo "  toggle off: bun run deploy:auto:off   |   on: bun run deploy:auto:on"
+echo "  toggle off: pnpm run deploy:auto:off   |   on: pnpm run deploy:auto:on"

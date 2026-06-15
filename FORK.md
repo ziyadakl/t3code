@@ -97,12 +97,12 @@ Touch these only when a feature genuinely requires it; keep edits minimal.
   `server.ts`; keep `YourLayerLive` in your own new file.
 
 ### Required checks before declaring work done (from Theo's `AGENTS.md`)
-- `bun fmt`, `bun lint`, `bun typecheck` must all pass
-- Use `bun run test` (Vitest) — **never** `bun test`
-- If touching native mobile code, `bun lint:mobile` must also pass
+- `pnpm run fmt`, `pnpm run lint`, `pnpm run typecheck` must all pass
+- Use `pnpm run test` (the vite-plus test runner — `@effect/vitest`'s `it.effect` rides on it)
+- If touching native mobile code, `pnpm run lint:mobile` must also pass
 
 ### Toolchain notes
-- `mise` pins Node 24.13.1 + Bun 1.3.9 (see `.mise.toml`).
-- `bun` is **not** on the PATH directly — run everything via `mise exec -- bun …`
-  (e.g. `mise exec -- bun install`, `mise exec -- bun run test`).
+- Node is pinned via `engines` (`^24.13.1`); the package manager is `pnpm@10.24.0`.
+- Run commands directly with `pnpm …` (e.g. `pnpm install`, `pnpm run test`).
+  There is no `.mise.toml` / `bun` / `turbo` — those are gone.
 - There is **no plugin / settings / config layer** — additions must be real code changes.

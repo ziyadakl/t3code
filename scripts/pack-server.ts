@@ -9,8 +9,8 @@
  * publishing to npm — so the fork's own server build can be deployed to a VPS.
  *
  * Prereq: build the server first so the assets exist:
- *   bun --filter=@t3tools/web run build
- *   bun --filter=t3 run build
+ *   pnpm exec vp run --filter @t3tools/web build
+ *   pnpm exec vp run --filter t3 build
  *
  * Output: `apps/server/t3-<version>.tgz`. Install it on the target with:
  *   npm install --prefix <dir> apps/server/t3-<version>.tgz
@@ -30,7 +30,7 @@ const backupPath = `${pkgPath}.pack-bak`;
 for (const rel of ["dist/bin.mjs", "dist/client/index.html"]) {
   if (!existsSync(join(serverDir, rel))) {
     throw new Error(
-      `Missing build asset: apps/server/${rel}. Run \`bun --filter=t3 run build\` first.`,
+      `Missing build asset: apps/server/${rel}. Run \`pnpm exec vp run --filter t3 build\` first.`,
     );
   }
 }
