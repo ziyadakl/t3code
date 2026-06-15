@@ -1,5 +1,5 @@
 // apps/web/src/components/sandcastle/sandcastleView.test.ts
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "vite-plus/test";
 import {
   deriveBanner,
   isStale,

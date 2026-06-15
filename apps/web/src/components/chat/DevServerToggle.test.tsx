@@ -11,7 +11,7 @@
 import { EnvironmentId, type EnvironmentApi, ThreadId } from "@t3tools/contracts";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 // ---------------------------------------------------------------------------
 // Module-level mocks — hoisted before any imports of the mocked modules.
