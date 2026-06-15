@@ -553,7 +553,16 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("RewindReactor", (it
       });
 
       yield* waitFor(
-        Effect.sync(() => fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8") === "v2\n"),
+        // During the working-tree restore README.md is briefly absent; a transient
+        // ENOENT must read as "not ready yet" (retryable false), not throw an
+        // unhandled defect that fails the test.
+        Effect.sync(() => {
+          try {
+            return fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8") === "v2\n";
+          } catch {
+            return false;
+          }
+        }),
       );
 
       // The working tree moved back, but the conversation is untouched.
