@@ -2554,15 +2554,6 @@ const SidebarChromeHeader = memo(function SidebarChromeHeader({
           Version {APP_VERSION}
         </TooltipPopup>
       </Tooltip>
-      <Link
-        aria-label="Sandcastle"
-        title="Sandcastle"
-        to="/sandcastle"
-        className="flex items-center gap-1.5 rounded-md px-1 text-sm text-muted-foreground outline-hidden ring-ring transition-colors hover:text-foreground focus-visible:ring-2"
-      >
-        <CastleIcon className="size-4 shrink-0" />
-        <span className="truncate">Sandcastle</span>
-      </Link>
     </div>
   );
 
@@ -2590,6 +2581,18 @@ const SidebarChromeFooter = memo(function SidebarChromeFooter() {
       <SidebarProviderUpdatePill />
       <SidebarUpdatePill />
       <SidebarMenu>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            size="sm"
+            className="gap-2 px-2 py-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
+            render={
+              <Link to="/sandcastle" aria-label="Sandcastle" title="Sandcastle" />
+            }
+          >
+            <CastleIcon className="size-3.5" />
+            <span className="text-xs">Sandcastle</span>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
         <SidebarMenuItem>
           <SidebarMenuButton
             size="sm"
