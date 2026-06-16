@@ -74,8 +74,14 @@ export function computeNotifications(
     const changed = s.phase !== previous;
     const isNotifyPhase = NOTIFY_PHASES.has(s.phase);
     const suppressedByFocus = ctx.isFocused && ctx.activeKey === s.key;
+    // "completed" is derived from the orchestration status settling to "ready",
+    // so only treat it as a real completion when the thread was previously
+    // active. This stops idle / never-run threads that first surface as "ready"
+    // from emitting a spurious "Agent finished" notification.
+    const completedFromActive =
+      s.phase !== "completed" || previous === "running" || previous === "starting";
 
-    if (changed && isNotifyPhase && !suppressedByFocus) {
+    if (changed && isNotifyPhase && completedFromActive && !suppressedByFocus) {
       toFire.push({
         key: s.key,
         phase: s.phase,

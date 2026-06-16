@@ -59,6 +59,26 @@ describe("computeNotifications", () => {
     expect(next.get(KEY)).toBe("completed");
   });
 
+  it("fires completed when transitioning from starting", () => {
+    const prev = new Map<string, AgentAwarenessPhase | null>([[KEY, "starting"]]);
+
+    const { toFire } = computeNotifications(prev, [snapshot({ phase: "completed" })], unfocused);
+
+    expect(toFire).toHaveLength(1);
+    expect(toFire[0]?.phase).toBe("completed");
+  });
+
+  it("does not fire completed when the thread was not previously active", () => {
+    // A thread first observed idle/ready (phase null) that surfaces as
+    // completed must NOT notify — it never actually ran while we were watching,
+    // so "completed" here is just the orchestration status reading "ready".
+    const prev = new Map<string, AgentAwarenessPhase | null>([[KEY, null]]);
+
+    const { toFire } = computeNotifications(prev, [snapshot({ phase: "completed" })], unfocused);
+
+    expect(toFire).toEqual([]);
+  });
+
   it("does not refire when the phase is unchanged", () => {
     const prev = new Map<string, AgentAwarenessPhase | null>([[KEY, "completed"]]);
 

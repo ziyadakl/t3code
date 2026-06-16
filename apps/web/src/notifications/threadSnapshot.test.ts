@@ -71,6 +71,25 @@ describe("summaryToPhaseSnapshot", () => {
     expect(snapshot.phase).toBe("completed");
   });
 
+  it("reports completed when the session settled to ready even with a null latest turn", () => {
+    // The real shape of a finished turn in this orchestrator: the session goes
+    // "ready" but latestTurn stays null because the turn-diff/checkpoint event
+    // that would populate it is not reliably emitted. This MUST still resolve to
+    // "completed" or the agent finishing never fires a notification.
+    const snapshot = summaryToPhaseSnapshot(makeSummary({ session: makeSession("ready") }));
+    expect(snapshot.phase).toBe("completed");
+  });
+
+  it("does not report completed for an idle session with no turn", () => {
+    const snapshot = summaryToPhaseSnapshot(makeSummary({ session: makeSession("idle") }));
+    expect(snapshot.phase).toBeNull();
+  });
+
+  it("does not report completed for a stopped session with no turn", () => {
+    const snapshot = summaryToPhaseSnapshot(makeSummary({ session: makeSession("stopped") }));
+    expect(snapshot.phase).toBeNull();
+  });
+
   it("reports waiting_for_approval when approvals are pending", () => {
     const snapshot = summaryToPhaseSnapshot(makeSummary({ hasPendingApprovals: true }));
     expect(snapshot.phase).toBe("waiting_for_approval");
