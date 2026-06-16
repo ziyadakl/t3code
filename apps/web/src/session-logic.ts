@@ -1229,15 +1229,38 @@ export function inferCheckpointTurnCountByTurnId(
 }
 
 /**
+ * Strips an absolute path down to repo-relative by removing the repo root
+ * prefix.  If the path is already relative (does not start with "/"), or the
+ * root is unknown, the path is returned as-is (after stripping a leading "./").
+ *
+ * No `node:path` dependency — intentionally pure string ops so it is safe in
+ * both Node and browser contexts.
+ */
+export function toRepoRelativePath(
+  p: string,
+  root: string | null | undefined,
+): string {
+  const stripped = p.startsWith("./") ? p.slice(2) : p;
+  if (!root || !stripped.startsWith("/")) return stripped;
+  const base = root.endsWith("/") ? root : root + "/";
+  return stripped.startsWith(base) ? stripped.slice(base.length) : stripped;
+}
+
+/**
  * Groups activities by `turnId` and, per turn, returns the agent edit set
  * (the files the agent itself edited via file_change tool activities).
  * Activities with `turnId === null` are skipped.
+ *
+ * When `root` (the repo/worktree root) is provided, absolute paths emitted by
+ * Claude are normalized to repo-relative so they match the repo-relative paths
+ * in checkpoint diffs. See ADR-0004.
  *
  * This is the single source of truth for "what the agent edited per turn" on
  * the web side. See ADR-0004.
  */
 export function agentEditSetByTurnId(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
+  root?: string | null,
 ): Map<TurnId, ReadonlyArray<string>> {
   const byTurn = new Map<TurnId, OrchestrationThreadActivity[]>();
   for (const activity of activities) {
@@ -1251,23 +1274,25 @@ export function agentEditSetByTurnId(
   }
   const result = new Map<TurnId, ReadonlyArray<string>>();
   for (const [turnId, turnActivities] of byTurn) {
-    result.set(turnId, agentEditSet(turnActivities));
+    const rawPaths = agentEditSet(turnActivities);
+    result.set(
+      turnId,
+      root ? rawPaths.map((p) => toRepoRelativePath(p, root)) : rawPaths,
+    );
   }
   return result;
 }
 
 /**
  * Returns true when `diffPath` (a repo-relative or `./`-prefixed path from the
- * checkpoint diff) is attributable to the agent, i.e. some path in `agentPaths`
- * equals `diffPath` exactly, or ends with `"/" + diffPath` (so that Claude's
- * absolute `/abs/repo/src/foo.ts` matches the diff's `src/foo.ts`).
+ * checkpoint diff) matches an entry in `agentPaths` exactly (after stripping a
+ * leading `./` from `diffPath`).
+ *
+ * Agent paths are expected to be pre-normalized to repo-relative by
+ * `agentEditSetByTurnId` (see `toRepoRelativePath`), so a simple exact-equality
+ * check is sufficient and avoids the fragile `endsWith` suffix heuristic.
  *
  * A leading `./` is stripped from `diffPath` before matching.
- *
- * NOTE: The boundary check uses `endsWith("/" + diffPath)`, which requires a
- * directory separator. A bare filename like `"foo.ts"` will NOT match an agent
- * path like `"/repo/src/barfoo.ts"` — the `/` in `"/foo.ts"` is the guard.
- * It WILL match `"/repo/src/foo.ts"` correctly. This is the intended behaviour.
  */
 export function pathIsInAgentEditSet(
   diffPath: string,
@@ -1275,19 +1300,39 @@ export function pathIsInAgentEditSet(
 ): boolean {
   // Strip a leading "./" that some tools emit.
   const normalized = diffPath.startsWith("./") ? diffPath.slice(2) : diffPath;
-  for (const h of agentPaths) {
-    if (h === normalized || h.endsWith("/" + normalized)) return true;
+  return agentPaths.some((h) => h === normalized);
+}
+
+// Maps each user prompt to the number of turns its rewind would restore, BUT only
+// when the span of turns being undone contains agent-edited files — so the "also
+// restore files" rewind affordance (inline banner, ESC-ESC picker, per-row action)
+// is offered only when the agent actually edited something the restore would revert.
+// A checkpoint span where the agent made no file changes (all agent edit sets in the
+// span are empty) is treated as a no-op restore and the affordance is hidden.
+// See ADR-0004 (decision 4: gate is per-SPAN, not per single turn).
+// Presence in the returned map == "a file-restore is offerable for this prompt".
+
+/**
+ * Returns true when ANY turn whose effective checkpointTurnCount is strictly
+ * greater than `restoreTarget` has a non-empty agent edit set. This is the
+ * span-union check used by `computeRevertTurnCountByUserMessageId`.
+ */
+function spanHasAgentEdits(
+  restoreTarget: number,
+  turnDiffSummaryByAssistantMessageId: ReadonlyMap<MessageId, TurnDiffSummary>,
+  inferredCheckpointTurnCountByTurnId: Record<TurnId, number>,
+  agentEditSetMap: ReadonlyMap<TurnId, ReadonlyArray<string>>,
+): boolean {
+  for (const s of turnDiffSummaryByAssistantMessageId.values()) {
+    const tc = s.checkpointTurnCount ?? inferredCheckpointTurnCountByTurnId[s.turnId];
+    if (typeof tc !== "number") continue;
+    if (tc > restoreTarget) {
+      if ((agentEditSetMap.get(s.turnId)?.length ?? 0) > 0) return true;
+    }
   }
   return false;
 }
 
-// Maps each user prompt to the number of turns its rewind would restore, BUT only
-// when the rewound turn had agent-edited files — so the "also restore files" rewind
-// affordance (inline banner, ESC-ESC picker, per-row action) is offered only when
-// the agent actually edited something the restore would revert. A checkpoint where
-// the agent made no file changes (empty agent edit set for that turn) is treated as
-// a no-op restore and the affordance is hidden. See ADR-0004.
-// Presence in the returned map == "a file-restore is offerable for this prompt".
 export function computeRevertTurnCountByUserMessageId(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
   turnDiffSummaryByAssistantMessageId: ReadonlyMap<MessageId, TurnDiffSummary>;
@@ -1324,9 +1369,18 @@ export function computeRevertTurnCountByUserMessageId(input: {
       if (typeof turnCount !== "number") {
         break;
       }
-      // Only offer a file restore when the agent itself edited files in this turn.
-      if ((agentEditSetMap.get(summary.turnId)?.length ?? 0) > 0) {
-        byUserMessageId.set(entry.message.id, Math.max(0, turnCount - 1));
+      const restoreTarget = Math.max(0, turnCount - 1);
+      // Only offer a file restore when the span of turns being undone (all turns
+      // with checkpointTurnCount > restoreTarget) contains agent-edited files.
+      if (
+        spanHasAgentEdits(
+          restoreTarget,
+          turnDiffSummaryByAssistantMessageId,
+          inferredCheckpointTurnCountByTurnId,
+          agentEditSetMap,
+        )
+      ) {
+        byUserMessageId.set(entry.message.id, restoreTarget);
       }
       break;
     }

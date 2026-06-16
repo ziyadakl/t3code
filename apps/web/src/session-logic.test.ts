@@ -24,6 +24,7 @@ import {
   computeRevertTurnCountByUserMessageId,
   agentEditSetByTurnId,
   pathIsInAgentEditSet,
+  toRepoRelativePath,
   type TimelineEntry,
 } from "./session-logic";
 import { type TurnDiffSummary } from "./types";
@@ -1656,30 +1657,59 @@ describe("agentEditSetByTurnId", () => {
   });
 });
 
+describe("toRepoRelativePath", () => {
+  it("strips the root prefix from an absolute path under the repo root", () => {
+    expect(toRepoRelativePath("/repo/src/foo.ts", "/repo")).toBe("src/foo.ts");
+  });
+
+  it("strips trailing slash from root before matching", () => {
+    expect(toRepoRelativePath("/repo/src/foo.ts", "/repo/")).toBe("src/foo.ts");
+  });
+
+  it("leaves an already-relative path unchanged", () => {
+    expect(toRepoRelativePath("src/bar.ts", "/repo")).toBe("src/bar.ts");
+  });
+
+  it("leaves a path that is absolute but outside the root unchanged", () => {
+    expect(toRepoRelativePath("/other/src/foo.ts", "/repo")).toBe("/other/src/foo.ts");
+  });
+
+  it("strips a leading ./ before processing", () => {
+    expect(toRepoRelativePath("./src/foo.ts", "/repo")).toBe("src/foo.ts");
+  });
+
+  it("returns the path unchanged when root is null", () => {
+    expect(toRepoRelativePath("src/foo.ts", null)).toBe("src/foo.ts");
+  });
+
+  it("returns the path unchanged when root is undefined", () => {
+    expect(toRepoRelativePath("/repo/src/foo.ts", undefined)).toBe("/repo/src/foo.ts");
+  });
+});
+
 describe("pathIsInAgentEditSet", () => {
-  it("matches when absolute agent path ends with /diffPath", () => {
-    expect(pathIsInAgentEditSet("src/foo.ts", ["/abs/repo/src/foo.ts"])).toBe(true);
+  // Agent paths are now pre-normalized to repo-relative by agentEditSetByTurnId.
+  // pathIsInAgentEditSet uses exact equality after stripping a leading ./ from diffPath.
+
+  it("matches when both are repo-relative and equal", () => {
+    expect(pathIsInAgentEditSet("src/foo.ts", ["src/foo.ts"])).toBe(true);
   });
 
   it("matches when agent path equals diffPath exactly (relative-to-relative)", () => {
     expect(pathIsInAgentEditSet("src/bar.ts", ["src/bar.ts"])).toBe(true);
   });
 
-  it("strips a leading ./ from diffPath before matching", () => {
-    expect(pathIsInAgentEditSet("./src/foo.ts", ["/abs/repo/src/foo.ts"])).toBe(true);
+  it("strips a leading ./ from diffPath before exact matching", () => {
+    expect(pathIsInAgentEditSet("./src/foo.ts", ["src/foo.ts"])).toBe(true);
   });
 
-  it("requires a / boundary — bare suffix without separator does NOT match", () => {
-    // diff path "foo.ts" should not match agent "/repo/src/foo.ts" only via trailing substring
-    // because the boundary check uses endsWith("/" + diffPath), so "foo.ts" hits the boundary
-    // correctly; but "oo.ts" must NOT match "foo.ts"
-    expect(pathIsInAgentEditSet("oo.ts", ["/abs/repo/src/foo.ts"])).toBe(false);
+  it("does NOT match a bare suffix without full path equality", () => {
+    // agent paths are repo-relative; "oo.ts" should not match "src/foo.ts"
+    expect(pathIsInAgentEditSet("oo.ts", ["src/foo.ts"])).toBe(false);
   });
 
   it("returns false when diffPath is not in agentPaths", () => {
-    expect(pathIsInAgentEditSet("src/other.ts", ["/abs/repo/src/foo.ts", "src/bar.ts"])).toBe(
-      false,
-    );
+    expect(pathIsInAgentEditSet("src/other.ts", ["src/foo.ts", "src/bar.ts"])).toBe(false);
   });
 
   it("returns false for an empty agent set", () => {
@@ -1731,8 +1761,47 @@ describe("computeRevertTurnCountByUserMessageId — agent edit set gate", () => 
         [MessageId.make("a1"), summary("turn-1", [{ path: "src/x.ts" }], 3)],
       ]),
       inferredCheckpointTurnCountByTurnId: {},
-      agentEditSetByTurnId: new Map([[TurnId.make("turn-1"), ["/repo/src/x.ts"]]]),
+      agentEditSetByTurnId: new Map([[TurnId.make("turn-1"), ["src/x.ts"]]]),
     });
     expect(result.get(MessageId.make("u1"))).toBe(2);
+  });
+
+  it("per-span: shows affordance when matched turn is empty but a later turn in span has edits", () => {
+    // turn-1 (checkpointTurnCount 1) → matched turn for u1, restoreTarget = 0
+    // turn-2 (checkpointTurnCount 2) → in the span (> restoreTarget 0), non-empty agent edit set
+    // The affordance should be offered because the SPAN has agent edits.
+    // Current single-turn code gates on turn-1's empty set → does NOT offer → this test is RED.
+    const result = computeRevertTurnCountByUserMessageId({
+      timelineEntries: [messageEntry("u1", "user"), messageEntry("a1", "assistant")],
+      turnDiffSummaryByAssistantMessageId: new Map([
+        [MessageId.make("a1"), summary("turn-1", [{ path: "src/x.ts" }], 1)],
+        // turn-2 exists in the summary map even though it's not in the timeline (it could be
+        // from a prior segment); the gate must scan ALL summaries to build the span union.
+        [MessageId.make("a2"), summary("turn-2", [{ path: "src/y.ts" }], 2)],
+      ]),
+      inferredCheckpointTurnCountByTurnId: {},
+      agentEditSetByTurnId: new Map([
+        [TurnId.make("turn-1"), []], // matched turn — empty
+        [TurnId.make("turn-2"), ["src/y.ts"]], // in span (checkpointTurnCount 2 > restoreTarget 0) — non-empty
+      ]),
+    });
+    expect(result.has(MessageId.make("u1"))).toBe(true);
+    expect(result.get(MessageId.make("u1"))).toBe(0); // Math.max(0, 1 - 1)
+  });
+
+  it("per-span: hides affordance when all turns in span have empty agent edit sets", () => {
+    const result = computeRevertTurnCountByUserMessageId({
+      timelineEntries: [messageEntry("u1", "user"), messageEntry("a1", "assistant")],
+      turnDiffSummaryByAssistantMessageId: new Map([
+        [MessageId.make("a1"), summary("turn-1", [{ path: "src/x.ts" }], 1)],
+        [MessageId.make("a2"), summary("turn-2", [{ path: "src/y.ts" }], 2)],
+      ]),
+      inferredCheckpointTurnCountByTurnId: {},
+      agentEditSetByTurnId: new Map([
+        [TurnId.make("turn-1"), []], // empty
+        [TurnId.make("turn-2"), []], // also empty
+      ]),
+    });
+    expect(result.has(MessageId.make("u1"))).toBe(false);
   });
 });

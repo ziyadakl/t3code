@@ -1867,8 +1867,12 @@ export default function ChatView(props: ChatViewProps) {
     return byMessageId;
   }, [turnDiffSummaries]);
   const agentEditSetByTurnIdMap = useMemo(
-    () => agentEditSetByTurnId(activeThread?.activities ?? []),
-    [activeThread?.activities],
+    () =>
+      agentEditSetByTurnId(
+        activeThread?.activities ?? [],
+        activeThread?.worktreePath ?? activeProject?.cwd ?? null,
+      ),
+    [activeThread?.activities, activeThread?.worktreePath, activeProject?.cwd],
   );
   const revertTurnCountByUserMessageId = useMemo(
     () =>
