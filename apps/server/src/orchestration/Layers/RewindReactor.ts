@@ -24,6 +24,7 @@ import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { checkpointRefForThreadTurn } from "../../checkpointing/Utils.ts";
 import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts";
+import { agentEditSetForUndoneSpan } from "../agentEditSetForRestore.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProviderSessionDirectory } from "../../provider/Services/ProviderSessionDirectory.ts";
 import { ProjectionThreadMessageRepository } from "../../persistence/Services/ProjectionThreadMessages.ts";
@@ -400,10 +401,18 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    const paths = agentEditSetForUndoneSpan({
+      activities: thread.activities,
+      checkpoints: thread.checkpoints,
+      targetTurnCount: turnCount,
+      cwd: session.cwd,
+    });
+
     const restored = yield* checkpointStore.restoreCheckpoint({
       cwd: session.cwd,
       checkpointRef: targetCheckpointRef,
       fallbackToHead: turnCount === 0,
+      paths,
     });
     if (!restored) {
       yield* appendFailureActivity({

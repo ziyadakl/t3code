@@ -7,6 +7,7 @@ import { execFileSync } from "node:child_process";
 import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
+  EventId,
   MessageId,
   NonNegativeInt,
   ProjectId,
@@ -507,71 +508,145 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("RewindReactor", (it
     }),
   );
 
-  it.effect("file-restore restores the tree without touching message rows", () =>
-    Effect.gen(function* () {
-      const harness = yield* createHarness();
-      yield* seedConversation(harness.engine);
+  it.effect(
+    "file-restore reverts only the agent's files and leaves the user's tracked changes intact",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* createHarness();
+        yield* seedConversation(harness.engine);
 
-      // Capture checkpoints for turn 0 (v1) and turn 1 (v2).
-      yield* harness.checkpointStore.captureCheckpoint({
-        cwd: harness.cwd,
-        checkpointRef: checkpointRefForThreadTurn(threadId, 0),
-      });
-      fs.writeFileSync(path.join(harness.cwd, "README.md"), "v2\n", "utf8");
+        // The repo starts with README.md="v1\n" (from createGitRepository).
+        // Also commit a second tracked file that belongs to the USER (not the agent).
+        fs.writeFileSync(path.join(harness.cwd, "notes.txt"), "user-v1\n", "utf8");
+        runGit(harness.cwd, ["add", "notes.txt"]);
+        runGit(harness.cwd, ["commit", "-m", "Add notes.txt"]);
 
-      // Register the turn-1 checkpoint in the projection via a turn-diff-complete so
-      // the reactor can resolve its ref.
-      yield* harness.engine.dispatch({
-        type: "thread.turn.diff.complete",
-        commandId: CommandId.make("cmd-turn-diff-1"),
-        threadId,
-        turnId: TurnId.make("turn-1"),
-        completedAt: "2026-01-01T00:01:30.000Z",
-        checkpointRef: checkpointRefForThreadTurn(threadId, 1),
-        status: "ready",
-        files: [],
-        checkpointTurnCount: NonNegativeInt.make(1),
-        createdAt: "2026-01-01T00:01:30.000Z",
-      } as never);
-      yield* harness.checkpointStore.captureCheckpoint({
-        cwd: harness.cwd,
-        checkpointRef: checkpointRefForThreadTurn(threadId, 1),
-      });
-      fs.writeFileSync(path.join(harness.cwd, "README.md"), "v3\n", "utf8");
+        // Turn 0: capture the initial state.
+        yield* harness.checkpointStore.captureCheckpoint({
+          cwd: harness.cwd,
+          checkpointRef: checkpointRefForThreadTurn(threadId, 0),
+        });
 
-      const messagesBefore = yield* harness.snapshotQuery.getThreadDetailById(threadId);
-      const countBefore = Option.isSome(messagesBefore) ? messagesBefore.value.messages.length : 0;
-      expect(countBefore).toBeGreaterThan(0);
+        // Turn 1: agent writes README.md="v2", user writes notes.txt="user-v2".
+        // Capture checkpoint — both files snapshotted at these values.
+        fs.writeFileSync(path.join(harness.cwd, "README.md"), "v2\n", "utf8");
+        fs.writeFileSync(path.join(harness.cwd, "notes.txt"), "user-v2\n", "utf8");
+        yield* harness.engine.dispatch({
+          type: "thread.turn.diff.complete",
+          commandId: CommandId.make("cmd-turn-diff-1"),
+          threadId,
+          turnId: TurnId.make("turn-1"),
+          completedAt: "2026-01-01T00:01:30.000Z",
+          checkpointRef: checkpointRefForThreadTurn(threadId, 1),
+          status: "ready",
+          files: [],
+          checkpointTurnCount: NonNegativeInt.make(1),
+          createdAt: "2026-01-01T00:01:30.000Z",
+        } as never);
+        yield* harness.checkpointStore.captureCheckpoint({
+          cwd: harness.cwd,
+          checkpointRef: checkpointRefForThreadTurn(threadId, 1),
+        });
 
-      // Restore files to turn 1 (v2).
-      yield* harness.engine.dispatch({
-        type: "thread.files.restore",
-        commandId: CommandId.make("cmd-files-restore"),
-        threadId,
-        turnCount: NonNegativeInt.make(1),
-        createdAt: "2026-01-01T00:03:00.000Z",
-      });
+        // Turn 2: agent writes README.md="v3" (agent's edit).
+        // User also updates notes.txt="user-v3" (user's subsequent edit, NOT in agent set).
+        fs.writeFileSync(path.join(harness.cwd, "README.md"), "v3\n", "utf8");
+        fs.writeFileSync(path.join(harness.cwd, "notes.txt"), "user-v3\n", "utf8");
 
-      yield* waitFor(
-        // During the working-tree restore README.md is briefly absent; a transient
-        // ENOENT must read as "not ready yet" (retryable false), not throw an
-        // unhandled defect that fails the test.
-        Effect.sync(() => {
-          try {
-            return fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8") === "v2\n";
-          } catch (error) {
-            // File may not exist yet mid-restore — that's the only retryable case.
-            if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
-            throw error;
-          }
-        }),
-      );
+        // Register the turn-2 mapping in the projection.
+        yield* harness.engine.dispatch({
+          type: "thread.turn.diff.complete",
+          commandId: CommandId.make("cmd-turn-diff-2"),
+          threadId,
+          turnId: TurnId.make("turn-2"),
+          completedAt: "2026-01-01T00:02:00.000Z",
+          checkpointRef: checkpointRefForThreadTurn(threadId, 2),
+          status: "ready",
+          files: [],
+          checkpointTurnCount: NonNegativeInt.make(2),
+          createdAt: "2026-01-01T00:02:00.000Z",
+        } as never);
 
-      // The working tree moved back, but the conversation is untouched.
-      expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe("v2\n");
-      const messagesAfter = yield* harness.snapshotQuery.getThreadDetailById(threadId);
-      const countAfter = Option.isSome(messagesAfter) ? messagesAfter.value.messages.length : 0;
-      expect(countAfter).toBe(countBefore);
-    }),
+        // Seed a file_change activity attributing README.md to turn-2. Absolute
+        // path exercises the abs→relative normalization in agentEditSetForUndoneSpan.
+        // notes.txt is intentionally NOT in the agent edit set.
+        yield* harness.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.make("cmd-activity-1"),
+          threadId,
+          activity: {
+            id: EventId.make("evt-activity-1"),
+            tone: "tool",
+            kind: "tool.completed",
+            summary: "Edit",
+            payload: {
+              itemType: "file_change",
+              data: { input: { file_path: path.join(harness.cwd, "README.md") } },
+            },
+            turnId: TurnId.make("turn-2"),
+            createdAt: "2026-01-01T00:02:01.000Z",
+          },
+          createdAt: "2026-01-01T00:02:01.000Z",
+        } as never);
+
+        // Guard assertion: confirm the activity was projected before we trigger restore.
+        const threadDetail = yield* harness.snapshotQuery.getThreadDetailById(threadId);
+        const detail = Option.getOrUndefined(threadDetail);
+        expect(detail).toBeDefined();
+        const fileChangeActivity = detail!.activities.find(
+          (a) =>
+            a.turnId === "turn-2" &&
+            typeof a.payload === "object" &&
+            a.payload !== null &&
+            (a.payload as Record<string, unknown>).itemType === "file_change",
+        );
+        expect(
+          fileChangeActivity,
+          "Guard: file_change activity for turn-2 must be projected before restore",
+        ).toBeDefined();
+
+        // Count messages before restore — they must survive untouched.
+        const messagesBefore = yield* harness.snapshotQuery.getThreadDetailById(threadId);
+        const countBefore = Option.isSome(messagesBefore) ? messagesBefore.value.messages.length : 0;
+        expect(countBefore).toBeGreaterThan(0);
+
+        // Restore files to turn 1. The scoped restore should revert only README.md
+        // (the agent's file, per the file_change activity) and leave notes.txt at
+        // "user-v3" (the user's own edit after turn-1, not in the agent edit set).
+        // The OLD whole-tree `git restore -- .` would have reverted notes.txt back
+        // to "user-v2" (the checkpoint value), FAILING the assertion below.
+        yield* harness.engine.dispatch({
+          type: "thread.files.restore",
+          commandId: CommandId.make("cmd-files-restore"),
+          threadId,
+          turnCount: NonNegativeInt.make(1),
+          createdAt: "2026-01-01T00:03:00.000Z",
+        });
+
+        yield* waitFor(
+          // During the working-tree restore README.md is briefly absent; a transient
+          // ENOENT must read as "not ready yet" (retryable false), not a defect.
+          Effect.sync(() => {
+            try {
+              return fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8") === "v2\n";
+            } catch (error) {
+              if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+              throw error;
+            }
+          }),
+        );
+
+        // The agent's file was reverted (scoped restore worked).
+        expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe("v2\n");
+        // The user's tracked file was NOT reverted — their "user-v3" edit survived.
+        // Under old whole-tree restore this would be "user-v2" (FAIL). Under scoped
+        // restore this is "user-v3" (PASS) because notes.txt is not in the agent
+        // edit set.
+        expect(fs.readFileSync(path.join(harness.cwd, "notes.txt"), "utf8")).toBe("user-v3\n");
+        // The conversation is untouched.
+        const messagesAfter = yield* harness.snapshotQuery.getThreadDetailById(threadId);
+        const countAfter = Option.isSome(messagesAfter) ? messagesAfter.value.messages.length : 0;
+        expect(countAfter).toBe(countBefore);
+      }),
   );
 });
