@@ -71,6 +71,7 @@ function buildProps() {
     timestampFormat: "24-hour" as const,
     workspaceRoot: undefined,
     onIsAtEndChange: vi.fn(),
+    agentEditSetByTurnId: new Map(),
   };
 }
 

@@ -22,6 +22,8 @@ import {
   isLatestTurnSettled,
   shouldMarkThreadVisited,
   computeRevertTurnCountByUserMessageId,
+  agentEditSetByTurnId,
+  pathIsInAgentEditSet,
   type TimelineEntry,
 } from "./session-logic";
 import { type TurnDiffSummary } from "./types";
@@ -1372,24 +1374,26 @@ describe("computeRevertTurnCountByUserMessageId", () => {
     checkpointTurnCount,
   });
 
-  it("does not flag a prompt whose turn changed no files", () => {
+  it("does not flag a prompt whose turn had no agent-edited files", () => {
     const result = computeRevertTurnCountByUserMessageId({
       timelineEntries: [messageEntry("u1", "user"), messageEntry("a1", "assistant")],
       turnDiffSummaryByAssistantMessageId: new Map([
         [MessageId.make("a1"), summary("turn-1", [], 1)],
       ]),
       inferredCheckpointTurnCountByTurnId: {},
+      agentEditSetByTurnId: new Map([[TurnId.make("turn-1"), []]]),
     });
     expect(result.has(MessageId.make("u1"))).toBe(false);
   });
 
-  it("flags a prompt whose turn changed files with count = checkpointTurnCount - 1", () => {
+  it("flags a prompt whose turn had agent-edited files with count = checkpointTurnCount - 1", () => {
     const result = computeRevertTurnCountByUserMessageId({
       timelineEntries: [messageEntry("u1", "user"), messageEntry("a1", "assistant")],
       turnDiffSummaryByAssistantMessageId: new Map([
         [MessageId.make("a1"), summary("turn-1", [{ path: "src/x.ts" }], 3)],
       ]),
       inferredCheckpointTurnCountByTurnId: {},
+      agentEditSetByTurnId: new Map([[TurnId.make("turn-1"), ["/repo/src/x.ts"]]]),
     });
     expect(result.get(MessageId.make("u1"))).toBe(2);
   });
@@ -1600,5 +1604,135 @@ describe("deriveActiveWorkStartedAt", () => {
         "2026-02-27T21:11:00.000Z",
       ),
     ).toBe("2026-02-27T21:11:00.000Z");
+  });
+});
+
+describe("agentEditSetByTurnId", () => {
+  it("groups file_change activities by turn and excludes non-file_change activities", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      // turn-A: Claude-shaped (snake_case file_path, proves the old harvester missed this)
+      makeActivity({
+        id: "claude-edit",
+        turnId: "turn-A",
+        kind: "tool.completed",
+        payload: {
+          itemType: "file_change",
+          data: { input: { file_path: "/abs/repo/src/foo.ts" } },
+        },
+      }),
+      // turn-A: non-file_change activity — must be excluded
+      makeActivity({
+        id: "command-run",
+        turnId: "turn-A",
+        kind: "tool.completed",
+        payload: { itemType: "command_execution", data: { item: { command: "ls" } } },
+      }),
+      // turn-B: Codex-shaped (relative path via item.changes[].path)
+      makeActivity({
+        id: "codex-edit",
+        turnId: "turn-B",
+        kind: "tool.completed",
+        payload: {
+          itemType: "file_change",
+          data: { item: { changes: [{ path: "src/bar.ts" }] } },
+        },
+      }),
+      // no turnId — must be skipped
+      makeActivity({
+        id: "no-turn",
+        kind: "tool.completed",
+        payload: { itemType: "file_change", data: { input: { file_path: "/repo/orphan.ts" } } },
+      }),
+    ];
+
+    const result = agentEditSetByTurnId(activities);
+
+    // turn-A: only the Claude file_change entry; the command is excluded
+    expect(result.get(TurnId.make("turn-A"))).toEqual(["/abs/repo/src/foo.ts"]);
+    // turn-B: Codex relative path
+    expect(result.get(TurnId.make("turn-B"))).toEqual(["src/bar.ts"]);
+    // orphan (null turnId) must not appear in the map
+    expect(result.size).toBe(2);
+  });
+});
+
+describe("pathIsInAgentEditSet", () => {
+  it("matches when absolute agent path ends with /diffPath", () => {
+    expect(pathIsInAgentEditSet("src/foo.ts", ["/abs/repo/src/foo.ts"])).toBe(true);
+  });
+
+  it("matches when agent path equals diffPath exactly (relative-to-relative)", () => {
+    expect(pathIsInAgentEditSet("src/bar.ts", ["src/bar.ts"])).toBe(true);
+  });
+
+  it("strips a leading ./ from diffPath before matching", () => {
+    expect(pathIsInAgentEditSet("./src/foo.ts", ["/abs/repo/src/foo.ts"])).toBe(true);
+  });
+
+  it("requires a / boundary — bare suffix without separator does NOT match", () => {
+    // diff path "foo.ts" should not match agent "/repo/src/foo.ts" only via trailing substring
+    // because the boundary check uses endsWith("/" + diffPath), so "foo.ts" hits the boundary
+    // correctly; but "oo.ts" must NOT match "foo.ts"
+    expect(pathIsInAgentEditSet("oo.ts", ["/abs/repo/src/foo.ts"])).toBe(false);
+  });
+
+  it("returns false when diffPath is not in agentPaths", () => {
+    expect(pathIsInAgentEditSet("src/other.ts", ["/abs/repo/src/foo.ts", "src/bar.ts"])).toBe(
+      false,
+    );
+  });
+
+  it("returns false for an empty agent set", () => {
+    expect(pathIsInAgentEditSet("src/foo.ts", [])).toBe(false);
+  });
+});
+
+describe("computeRevertTurnCountByUserMessageId — agent edit set gate", () => {
+  const messageEntry = (id: string, role: "user" | "assistant"): TimelineEntry => ({
+    id,
+    kind: "message",
+    createdAt: "2026-02-23T00:00:00.000Z",
+    message: {
+      id: MessageId.make(id),
+      role,
+      text: role === "user" ? "do the thing" : "done",
+      createdAt: "2026-02-23T00:00:00.000Z",
+      streaming: false,
+    },
+  });
+  const summary = (
+    turnId: string,
+    files: Array<{ path: string }>,
+    checkpointTurnCount?: number,
+  ): import("./types").TurnDiffSummary => ({
+    turnId: TurnId.make(turnId),
+    completedAt: "2026-02-23T00:00:01.000Z",
+    files,
+    checkpointTurnCount,
+  });
+
+  it("hides the affordance when checkpoint diff is non-empty but agent edit set is empty for that turn", () => {
+    const result = computeRevertTurnCountByUserMessageId({
+      timelineEntries: [messageEntry("u1", "user"), messageEntry("a1", "assistant")],
+      turnDiffSummaryByAssistantMessageId: new Map([
+        [MessageId.make("a1"), summary("turn-1", [{ path: "src/x.ts" }], 2)],
+      ]),
+      inferredCheckpointTurnCountByTurnId: {},
+      // turn-1 has NO file_change activities → empty agent edit set
+      agentEditSetByTurnId: new Map([[TurnId.make("turn-1"), []]]),
+    });
+    expect(result.has(MessageId.make("u1"))).toBe(false);
+  });
+
+  it("shows the affordance when agent edit set is non-empty for the turn", () => {
+    const result = computeRevertTurnCountByUserMessageId({
+      timelineEntries: [messageEntry("u1", "user"), messageEntry("a1", "assistant")],
+      turnDiffSummaryByAssistantMessageId: new Map([
+        [MessageId.make("a1"), summary("turn-1", [{ path: "src/x.ts" }], 3)],
+      ]),
+      inferredCheckpointTurnCountByTurnId: {},
+      agentEditSetByTurnId: new Map([[TurnId.make("turn-1"), ["/repo/src/x.ts"]]]),
+    });
+    expect(result.get(MessageId.make("u1"))).toBe(2);
   });
 });

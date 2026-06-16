@@ -13,6 +13,7 @@ import {
   type ThreadId,
   type TurnId,
 } from "@t3tools/contracts";
+import { agentEditSet, editedPathsForActivity } from "@t3tools/shared/agentEditSet";
 
 import type {
   ChatMessage,
@@ -1076,68 +1077,18 @@ function extractWorkLogRequestKind(
   return requestKindFromRequestType(payload?.requestType) ?? undefined;
 }
 
-function pushChangedFile(target: string[], seen: Set<string>, value: unknown) {
-  const normalized = asTrimmedString(value);
-  if (!normalized || seen.has(normalized)) {
-    return;
-  }
-  seen.add(normalized);
-  target.push(normalized);
-}
-
-function collectChangedFiles(value: unknown, target: string[], seen: Set<string>, depth: number) {
-  if (depth > 4 || target.length >= 12) {
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (const entry of value) {
-      collectChangedFiles(entry, target, seen, depth + 1);
-      if (target.length >= 12) {
-        return;
-      }
-    }
-    return;
-  }
-
-  const record = asRecord(value);
-  if (!record) {
-    return;
-  }
-
-  pushChangedFile(target, seen, record.path);
-  pushChangedFile(target, seen, record.filePath);
-  pushChangedFile(target, seen, record.relativePath);
-  pushChangedFile(target, seen, record.filename);
-  pushChangedFile(target, seen, record.newPath);
-  pushChangedFile(target, seen, record.oldPath);
-
-  for (const nestedKey of [
-    "item",
-    "result",
-    "input",
-    "data",
-    "changes",
-    "files",
-    "edits",
-    "patch",
-    "patches",
-    "operations",
-  ]) {
-    if (!(nestedKey in record)) {
-      continue;
-    }
-    collectChangedFiles(record[nestedKey], target, seen, depth + 1);
-    if (target.length >= 12) {
-      return;
-    }
-  }
-}
-
+/**
+ * Returns the files changed by a single tool activity. Delegates to the shared
+ * `editedPathsForActivity` so the work-log inline display uses the same
+ * harvester as the per-turn agent edit set. This means only `file_change`
+ * activities contribute changed files (SAFETY: reads/commands are excluded).
+ * See ADR-0004.
+ */
 function extractChangedFiles(payload: Record<string, unknown> | null): string[] {
-  const changedFiles: string[] = [];
-  const seen = new Set<string>();
-  collectChangedFiles(asRecord(payload?.data), changedFiles, seen, 0);
-  return changedFiles;
+  if (!payload) return [];
+  // Reconstruct a ToolActivityLike so we can reuse the shared harvester.
+  // `kind` is not inspected by editedPathsForActivity; only payload.itemType matters.
+  return editedPathsForActivity({ kind: "tool.completed", payload });
 }
 
 function compareActivitiesByOrder(
@@ -1277,19 +1228,78 @@ export function inferCheckpointTurnCountByTurnId(
   return result;
 }
 
+/**
+ * Groups activities by `turnId` and, per turn, returns the agent edit set
+ * (the files the agent itself edited via file_change tool activities).
+ * Activities with `turnId === null` are skipped.
+ *
+ * This is the single source of truth for "what the agent edited per turn" on
+ * the web side. See ADR-0004.
+ */
+export function agentEditSetByTurnId(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): Map<TurnId, ReadonlyArray<string>> {
+  const byTurn = new Map<TurnId, OrchestrationThreadActivity[]>();
+  for (const activity of activities) {
+    if (activity.turnId === null) continue;
+    const existing = byTurn.get(activity.turnId);
+    if (existing) {
+      existing.push(activity);
+    } else {
+      byTurn.set(activity.turnId, [activity]);
+    }
+  }
+  const result = new Map<TurnId, ReadonlyArray<string>>();
+  for (const [turnId, turnActivities] of byTurn) {
+    result.set(turnId, agentEditSet(turnActivities));
+  }
+  return result;
+}
+
+/**
+ * Returns true when `diffPath` (a repo-relative or `./`-prefixed path from the
+ * checkpoint diff) is attributable to the agent, i.e. some path in `agentPaths`
+ * equals `diffPath` exactly, or ends with `"/" + diffPath` (so that Claude's
+ * absolute `/abs/repo/src/foo.ts` matches the diff's `src/foo.ts`).
+ *
+ * A leading `./` is stripped from `diffPath` before matching.
+ *
+ * NOTE: The boundary check uses `endsWith("/" + diffPath)`, which requires a
+ * directory separator. A bare filename like `"foo.ts"` will NOT match an agent
+ * path like `"/repo/src/barfoo.ts"` — the `/` in `"/foo.ts"` is the guard.
+ * It WILL match `"/repo/src/foo.ts"` correctly. This is the intended behaviour.
+ */
+export function pathIsInAgentEditSet(
+  diffPath: string,
+  agentPaths: ReadonlyArray<string>,
+): boolean {
+  // Strip a leading "./" that some tools emit.
+  const normalized = diffPath.startsWith("./") ? diffPath.slice(2) : diffPath;
+  for (const h of agentPaths) {
+    if (h === normalized || h.endsWith("/" + normalized)) return true;
+  }
+  return false;
+}
+
 // Maps each user prompt to the number of turns its rewind would restore, BUT only
-// when the rewound turn actually changed files — so the "also restore files" rewind
+// when the rewound turn had agent-edited files — so the "also restore files" rewind
 // affordance (inline banner, ESC-ESC picker, per-row action) is offered only when
-// there is something to restore. A checkpoint with an empty diff (no file changes)
-// or a "missing" placeholder is intentionally left out: restoring it is a no-op.
+// the agent actually edited something the restore would revert. A checkpoint where
+// the agent made no file changes (empty agent edit set for that turn) is treated as
+// a no-op restore and the affordance is hidden. See ADR-0004.
 // Presence in the returned map == "a file-restore is offerable for this prompt".
 export function computeRevertTurnCountByUserMessageId(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
   turnDiffSummaryByAssistantMessageId: ReadonlyMap<MessageId, TurnDiffSummary>;
   inferredCheckpointTurnCountByTurnId: Record<TurnId, number>;
+  agentEditSetByTurnId: ReadonlyMap<TurnId, ReadonlyArray<string>>;
 }): Map<MessageId, number> {
-  const { timelineEntries, turnDiffSummaryByAssistantMessageId, inferredCheckpointTurnCountByTurnId } =
-    input;
+  const {
+    timelineEntries,
+    turnDiffSummaryByAssistantMessageId,
+    inferredCheckpointTurnCountByTurnId,
+    agentEditSetByTurnId: agentEditSetMap,
+  } = input;
   const byUserMessageId = new Map<MessageId, number>();
   for (let index = 0; index < timelineEntries.length; index += 1) {
     const entry = timelineEntries[index];
@@ -1314,8 +1324,8 @@ export function computeRevertTurnCountByUserMessageId(input: {
       if (typeof turnCount !== "number") {
         break;
       }
-      // Only offer a file restore when this turn actually changed files.
-      if (summary.files.length > 0) {
+      // Only offer a file restore when the agent itself edited files in this turn.
+      if ((agentEditSetMap.get(summary.turnId)?.length ?? 0) > 0) {
         byUserMessageId.set(entry.message.id, Math.max(0, turnCount - 1));
       }
       break;

@@ -17,7 +17,7 @@ import {
 } from "react";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import { FileDiff } from "@pierre/diffs/react";
-import { deriveTimelineEntries, formatElapsed } from "../../session-logic";
+import { deriveTimelineEntries, formatElapsed, pathIsInAgentEditSet } from "../../session-logic";
 import { type TurnDiffSummary } from "../../types";
 import { summarizeTurnDiffStats } from "../../lib/turnDiffTree";
 import {
@@ -98,6 +98,9 @@ interface TimelineRowSharedState {
   onRewindConversationAndFiles: (messageId: MessageId) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
+  /** Agent edit set keyed by turn — used to filter the per-turn changed-files
+   *  list to only files the agent itself edited. See ADR-0004. */
+  agentEditSetByTurnId: ReadonlyMap<TurnId, ReadonlyArray<string>>;
 }
 
 interface TimelineRowActivityState {
@@ -139,6 +142,9 @@ interface MessagesTimelineProps {
   workspaceRoot: string | undefined;
   skills?: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   onIsAtEndChange: (isAtEnd: boolean) => void;
+  /** Agent edit set keyed by turn — scopes the per-turn changed-files list to
+   *  files the agent itself edited. See ADR-0004. */
+  agentEditSetByTurnId: ReadonlyMap<TurnId, ReadonlyArray<string>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -169,6 +175,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   workspaceRoot,
   skills = EMPTY_TIMELINE_SKILLS,
   onIsAtEndChange,
+  agentEditSetByTurnId,
 }: MessagesTimelineProps) {
   const rawRows = useMemo(
     () =>
@@ -235,6 +242,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onRewindConversationAndFiles,
       onImageExpand,
       onOpenTurnDiff,
+      agentEditSetByTurnId,
     }),
     [
       timestampFormat,
@@ -248,6 +256,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onRewindConversationAndFiles,
       onImageExpand,
       onOpenTurnDiff,
+      agentEditSetByTurnId,
     ],
   );
   const activityState = useMemo<TimelineRowActivityState>(
@@ -680,14 +689,23 @@ const AssistantChangedFilesSection = memo(function AssistantChangedFilesSection(
   resolvedTheme: "light" | "dark";
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
 }) {
+  const { agentEditSetByTurnId } = use(TimelineRowCtx);
+
   if (!turnSummary) return null;
   const checkpointFiles = turnSummary.files;
-  if (checkpointFiles.length === 0) return null;
+  const agentEditedPaths = agentEditSetByTurnId.get(turnSummary.turnId) ?? [];
+  // Filter the whole-tree checkpoint diff down to files the agent itself edited.
+  // This makes the displayed list consistent with what file-restore will actually
+  // revert. See ADR-0004.
+  const agentFiles = checkpointFiles.filter((f) =>
+    pathIsInAgentEditSet(f.path, agentEditedPaths),
+  );
+  if (agentFiles.length === 0) return null;
 
   return (
     <AssistantChangedFilesSectionInner
       turnSummary={turnSummary}
-      checkpointFiles={checkpointFiles}
+      checkpointFiles={agentFiles}
       routeThreadKey={routeThreadKey}
       resolvedTheme={resolvedTheme}
       onOpenTurnDiff={onOpenTurnDiff}

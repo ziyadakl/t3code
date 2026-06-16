@@ -72,6 +72,7 @@ import {
   shouldMarkThreadVisited,
   formatElapsed,
   computeRevertTurnCountByUserMessageId,
+  agentEditSetByTurnId,
 } from "../session-logic";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
@@ -1865,14 +1866,24 @@ export default function ChatView(props: ChatViewProps) {
     }
     return byMessageId;
   }, [turnDiffSummaries]);
+  const agentEditSetByTurnIdMap = useMemo(
+    () => agentEditSetByTurnId(activeThread?.activities ?? []),
+    [activeThread?.activities],
+  );
   const revertTurnCountByUserMessageId = useMemo(
     () =>
       computeRevertTurnCountByUserMessageId({
         timelineEntries,
         turnDiffSummaryByAssistantMessageId,
         inferredCheckpointTurnCountByTurnId,
+        agentEditSetByTurnId: agentEditSetByTurnIdMap,
       }),
-    [inferredCheckpointTurnCountByTurnId, timelineEntries, turnDiffSummaryByAssistantMessageId],
+    [
+      inferredCheckpointTurnCountByTurnId,
+      timelineEntries,
+      turnDiffSummaryByAssistantMessageId,
+      agentEditSetByTurnIdMap,
+    ],
   );
 
   // Prior user prompts for the ESC-ESC rewind picker, most-recent-first. A
@@ -4274,6 +4285,7 @@ export default function ChatView(props: ChatViewProps) {
               workspaceRoot={activeWorkspaceRoot}
               skills={activeProviderStatus?.skills ?? EMPTY_PROVIDER_SKILLS}
               onIsAtEndChange={onIsAtEndChange}
+              agentEditSetByTurnId={agentEditSetByTurnIdMap}
             />
 
             {/* scroll to bottom pill — shown when user has scrolled away from the bottom */}

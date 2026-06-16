@@ -113,6 +113,7 @@ function buildProps() {
     timestampFormat: "locale" as const,
     workspaceRoot: undefined,
     onIsAtEndChange: () => {},
+    agentEditSetByTurnId: new Map(),
   };
 }
 
