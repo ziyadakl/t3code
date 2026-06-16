@@ -1,6 +1,8 @@
 import type {
   EnvironmentId,
+  OrchestrationLatestTurnState,
   OrchestrationProjectShell,
+  OrchestrationSessionStatus,
   OrchestrationThreadShell,
   ThreadId,
 } from "@t3tools/contracts";
@@ -43,6 +45,21 @@ export interface ProjectThreadAwarenessInput {
   >;
 }
 
+/**
+ * The minimal thread shape `resolveThreadAwarenessPhase` actually reads. Kept
+ * deliberately narrow so callers holding only a partial view (e.g. the web
+ * sidebar summary, which exposes the orchestration status under a different
+ * field name and lacks `modelSelection`) can derive a phase without supplying a
+ * full thread shell. The full `ProjectThreadAwarenessInput["thread"]` remains
+ * assignable to this type, so existing callers are unaffected.
+ */
+export interface ThreadAwarenessPhaseInput {
+  readonly hasPendingApprovals: boolean;
+  readonly hasPendingUserInput: boolean;
+  readonly session: { readonly status: OrchestrationSessionStatus } | null;
+  readonly latestTurn: { readonly state: OrchestrationLatestTurnState } | null;
+}
+
 export function buildAgentAwarenessDeepLink(input: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
@@ -82,8 +99,8 @@ export function projectThreadAwareness(
   };
 }
 
-function resolveThreadAwarenessPhase(
-  thread: ProjectThreadAwarenessInput["thread"],
+export function resolveThreadAwarenessPhase(
+  thread: ThreadAwarenessPhaseInput,
 ): AgentAwarenessPhase | null {
   if (thread.hasPendingApprovals) {
     return "waiting_for_approval";
@@ -106,7 +123,7 @@ function resolveThreadAwarenessPhase(
   return null;
 }
 
-function headlineForPhase(phase: AgentAwarenessPhase): string {
+export function headlineForPhase(phase: AgentAwarenessPhase): string {
   switch (phase) {
     case "starting":
       return "Starting agent";

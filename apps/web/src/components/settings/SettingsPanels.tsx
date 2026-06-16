@@ -31,6 +31,7 @@ import { TraitsPicker } from "../chat/TraitsPicker";
 import { isElectron } from "../../env";
 import { buildHostedChannelSelectionUrl, type HostedAppChannel } from "../../hostedPairing";
 import { useTheme } from "../../hooks/useTheme";
+import { requestNotificationPermission } from "../../notifications/browserNotifications";
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
 import { useProjectActions } from "../../hooks/useProjectActions";
@@ -520,6 +521,28 @@ export function GeneralSettingsPanel() {
     DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection ?? null,
   );
 
+  const handleToggleCompletionNotifications = (checked: boolean) => {
+    void (async () => {
+      if (!checked) {
+        updateSettings({ completionNotificationsEnabled: false });
+        return;
+      }
+      const permission = await requestNotificationPermission();
+      if (permission === "granted") {
+        updateSettings({ completionNotificationsEnabled: true });
+        return;
+      }
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Notifications blocked",
+          description:
+            "Allow notifications for this site in your browser settings to enable completion notifications.",
+        }),
+      );
+    })();
+  };
+
   return (
     <SettingsPageContainer>
       <SettingsSection title="General">
@@ -818,6 +841,20 @@ export function GeneralSettingsPanel() {
                 updateSettings({ confirmThreadDelete: Boolean(checked) })
               }
               aria-label="Confirm thread deletion"
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Completion notifications"
+          description="Notify me in this browser when an agent finishes or needs me."
+          control={
+            <Switch
+              checked={settings.completionNotificationsEnabled}
+              onCheckedChange={(checked) =>
+                handleToggleCompletionNotifications(Boolean(checked))
+              }
+              aria-label="Enable completion notifications"
             />
           }
         />

@@ -15,6 +15,7 @@ const clientSettings: ClientSettings = {
   autoOpenPlanSidebar: false,
   confirmThreadArchive: true,
   confirmThreadDelete: false,
+  completionNotificationsEnabled: false,
   dismissedProviderUpdateNotificationKeys: [],
   diffIgnoreWhitespace: true,
   diffWordWrap: true,

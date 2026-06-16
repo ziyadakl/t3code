@@ -43,6 +43,9 @@ export const ClientSettingsSchema = Schema.Struct({
   autoOpenPlanSidebar: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   confirmThreadArchive: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  completionNotificationsEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
   dismissedProviderUpdateNotificationKeys: Schema.Array(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
@@ -510,6 +513,7 @@ export const ClientSettingsPatch = Schema.Struct({
   autoOpenPlanSidebar: Schema.optionalKey(Schema.Boolean),
   confirmThreadArchive: Schema.optionalKey(Schema.Boolean),
   confirmThreadDelete: Schema.optionalKey(Schema.Boolean),
+  completionNotificationsEnabled: Schema.optionalKey(Schema.Boolean),
   diffIgnoreWhitespace: Schema.optionalKey(Schema.Boolean),
   diffWordWrap: Schema.optionalKey(Schema.Boolean),
   favorites: Schema.optionalKey(
