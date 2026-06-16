@@ -69,6 +69,7 @@ import {
   hasActionableProposedPlan,
   hasToolActivityForTurn,
   isLatestTurnSettled,
+  shouldMarkThreadVisited,
   formatElapsed,
   computeRevertTurnCountByUserMessageId,
 } from "../session-logic";
@@ -1340,16 +1341,28 @@ export default function ChatView(props: ChatViewProps) {
 
   useEffect(() => {
     if (!serverThread?.id) return;
-    if (!latestTurnSettled) return;
-    if (!activeLatestTurn?.completedAt) return;
-    const turnCompletedAt = Date.parse(activeLatestTurn.completedAt);
-    if (Number.isNaN(turnCompletedAt)) return;
-    const lastVisitedAt = activeThreadLastVisitedAt ? Date.parse(activeThreadLastVisitedAt) : NaN;
-    if (!Number.isNaN(lastVisitedAt) && lastVisitedAt >= turnCompletedAt) return;
+    const completedAt = activeLatestTurn?.completedAt;
+    if (!completedAt) return;
+    // Match useCompletionNotifications' "focused" definition so the badge and the
+    // notification agree on whether the user is actually looking at this tab.
+    const isFocused =
+      typeof document !== "undefined" &&
+      document.visibilityState === "visible" &&
+      document.hasFocus();
+    if (
+      !shouldMarkThreadVisited({
+        latestTurnSettled,
+        completedAt,
+        lastVisitedAt: activeThreadLastVisitedAt,
+        isFocused,
+      })
+    ) {
+      return;
+    }
 
     markThreadVisited(
       scopedThreadKey(scopeThreadRef(serverThread.environmentId, serverThread.id)),
-      activeLatestTurn.completedAt,
+      completedAt,
     );
   }, [
     activeLatestTurn?.completedAt,

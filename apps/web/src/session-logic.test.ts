@@ -20,6 +20,7 @@ import {
   hasActionableProposedPlan,
   hasToolActivityForTurn,
   isLatestTurnSettled,
+  shouldMarkThreadVisited,
   computeRevertTurnCountByUserMessageId,
   type TimelineEntry,
 } from "./session-logic";
@@ -1505,6 +1506,39 @@ describe("isLatestTurnSettled", () => {
         null,
       ),
     ).toBe(false);
+  });
+});
+
+describe("shouldMarkThreadVisited", () => {
+  const base = {
+    latestTurnSettled: true,
+    completedAt: "2026-02-27T21:10:06.000Z",
+    lastVisitedAt: undefined,
+    isFocused: true,
+  } as const;
+
+  it("marks the thread visited when its turn settled and the tab is focused", () => {
+    expect(shouldMarkThreadVisited({ ...base })).toBe(true);
+  });
+
+  it("does not mark visited when the tab is not focused, so the badge survives until the user returns", () => {
+    expect(shouldMarkThreadVisited({ ...base, isFocused: false })).toBe(false);
+  });
+
+  it("does not re-mark a thread already visited at or after the turn completed", () => {
+    expect(
+      shouldMarkThreadVisited({ ...base, lastVisitedAt: "2026-02-27T21:10:06.000Z" }),
+    ).toBe(false);
+  });
+
+  it("marks visited when the turn completed after the last visit", () => {
+    expect(
+      shouldMarkThreadVisited({ ...base, lastVisitedAt: "2026-02-27T21:10:00.000Z" }),
+    ).toBe(true);
+  });
+
+  it("does not mark visited when there is no completed turn", () => {
+    expect(shouldMarkThreadVisited({ ...base, completedAt: null })).toBe(false);
   });
 });
 

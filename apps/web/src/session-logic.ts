@@ -163,6 +163,26 @@ export function isLatestTurnSettled(
   return true;
 }
 
+export function shouldMarkThreadVisited(input: {
+  latestTurnSettled: boolean;
+  completedAt: string | null | undefined;
+  lastVisitedAt: string | null | undefined;
+  isFocused: boolean;
+}): boolean {
+  if (!input.latestTurnSettled) return false;
+  if (!input.completedAt) return false;
+  const turnCompletedAt = Date.parse(input.completedAt);
+  if (Number.isNaN(turnCompletedAt)) return false;
+  // Don't clear the unseen-completion badge while the user isn't looking. A turn
+  // that finishes in a backgrounded/blurred tab must stay "unread" so the badge
+  // is there when they come back — same focus definition the completion
+  // notifications use, so badge and notification agree on "is the user here".
+  if (!input.isFocused) return false;
+  const lastVisitedAt = input.lastVisitedAt ? Date.parse(input.lastVisitedAt) : NaN;
+  if (!Number.isNaN(lastVisitedAt) && lastVisitedAt >= turnCompletedAt) return false;
+  return true;
+}
+
 export function deriveActiveWorkStartedAt(
   latestTurn: LatestTurnTiming | null,
   session: SessionActivityState | null,
