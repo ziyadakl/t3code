@@ -9,6 +9,7 @@ import {
   ProviderDriverKind,
   type ToolLifecycleItemType,
   type UserInputQuestion,
+  type MessageId,
   type ThreadId,
   type TurnId,
 } from "@t3tools/contracts";
@@ -1254,6 +1255,54 @@ export function inferCheckpointTurnCountByTurnId(
     result[summary.turnId] = index + 1;
   }
   return result;
+}
+
+// Maps each user prompt to the number of turns its rewind would restore, BUT only
+// when the rewound turn actually changed files — so the "also restore files" rewind
+// affordance (inline banner, ESC-ESC picker, per-row action) is offered only when
+// there is something to restore. A checkpoint with an empty diff (no file changes)
+// or a "missing" placeholder is intentionally left out: restoring it is a no-op.
+// Presence in the returned map == "a file-restore is offerable for this prompt".
+export function computeRevertTurnCountByUserMessageId(input: {
+  timelineEntries: ReadonlyArray<TimelineEntry>;
+  turnDiffSummaryByAssistantMessageId: ReadonlyMap<MessageId, TurnDiffSummary>;
+  inferredCheckpointTurnCountByTurnId: Record<TurnId, number>;
+}): Map<MessageId, number> {
+  const { timelineEntries, turnDiffSummaryByAssistantMessageId, inferredCheckpointTurnCountByTurnId } =
+    input;
+  const byUserMessageId = new Map<MessageId, number>();
+  for (let index = 0; index < timelineEntries.length; index += 1) {
+    const entry = timelineEntries[index];
+    if (!entry || entry.kind !== "message" || entry.message.role !== "user") {
+      continue;
+    }
+
+    for (let nextIndex = index + 1; nextIndex < timelineEntries.length; nextIndex += 1) {
+      const nextEntry = timelineEntries[nextIndex];
+      if (!nextEntry || nextEntry.kind !== "message") {
+        continue;
+      }
+      if (nextEntry.message.role === "user") {
+        break;
+      }
+      const summary = turnDiffSummaryByAssistantMessageId.get(nextEntry.message.id);
+      if (!summary) {
+        continue;
+      }
+      const turnCount =
+        summary.checkpointTurnCount ?? inferredCheckpointTurnCountByTurnId[summary.turnId];
+      if (typeof turnCount !== "number") {
+        break;
+      }
+      // Only offer a file restore when this turn actually changed files.
+      if (summary.files.length > 0) {
+        byUserMessageId.set(entry.message.id, Math.max(0, turnCount - 1));
+      }
+      break;
+    }
+  }
+
+  return byUserMessageId;
 }
 
 export function derivePhase(session: ThreadSession | null): SessionPhase {

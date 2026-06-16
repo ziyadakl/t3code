@@ -84,6 +84,22 @@ export function resolveAssistantMessageCopyState({
   };
 }
 
+/**
+ * Whether the message list has nothing more to scroll to — either it is already
+ * scrolled to the end, or the content fits the viewport (LegendList's
+ * `contentLength` is the total content size; `scrollLength` is the viewport
+ * length). Used to suppress the "scroll to bottom" pill on non-overflowing
+ * threads, where LegendList can report a stale `isAtEnd=false` and never fire a
+ * corrective scroll event to clear it.
+ */
+export function isEffectivelyAtEnd(state: {
+  isAtEnd: boolean;
+  contentLength: number;
+  scrollLength: number;
+}): boolean {
+  return state.isAtEnd || state.contentLength <= state.scrollLength;
+}
+
 function deriveTerminalAssistantMessageIds(timelineEntries: ReadonlyArray<TimelineEntry>) {
   const lastAssistantMessageIdByResponseKey = new Map<string, string>();
   let nullTurnResponseIndex = 0;

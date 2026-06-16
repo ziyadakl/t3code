@@ -20,7 +20,10 @@ import {
   hasActionableProposedPlan,
   hasToolActivityForTurn,
   isLatestTurnSettled,
+  computeRevertTurnCountByUserMessageId,
+  type TimelineEntry,
 } from "./session-logic";
+import { type TurnDiffSummary } from "./types";
 
 let nextActivityId = 0;
 
@@ -1341,6 +1344,53 @@ describe("deriveTimelineEntries", () => {
         completedAt: "2026-02-23T00:00:02.000Z",
       }),
     ).toBe("assistant-final");
+  });
+});
+
+describe("computeRevertTurnCountByUserMessageId", () => {
+  const messageEntry = (id: string, role: "user" | "assistant"): TimelineEntry => ({
+    id,
+    kind: "message",
+    createdAt: "2026-02-23T00:00:00.000Z",
+    message: {
+      id: MessageId.make(id),
+      role,
+      text: role === "user" ? "do the thing" : "done",
+      createdAt: "2026-02-23T00:00:00.000Z",
+      streaming: false,
+    },
+  });
+  const summary = (
+    turnId: string,
+    files: Array<{ path: string }>,
+    checkpointTurnCount?: number,
+  ): TurnDiffSummary => ({
+    turnId: TurnId.make(turnId),
+    completedAt: "2026-02-23T00:00:01.000Z",
+    files,
+    checkpointTurnCount,
+  });
+
+  it("does not flag a prompt whose turn changed no files", () => {
+    const result = computeRevertTurnCountByUserMessageId({
+      timelineEntries: [messageEntry("u1", "user"), messageEntry("a1", "assistant")],
+      turnDiffSummaryByAssistantMessageId: new Map([
+        [MessageId.make("a1"), summary("turn-1", [], 1)],
+      ]),
+      inferredCheckpointTurnCountByTurnId: {},
+    });
+    expect(result.has(MessageId.make("u1"))).toBe(false);
+  });
+
+  it("flags a prompt whose turn changed files with count = checkpointTurnCount - 1", () => {
+    const result = computeRevertTurnCountByUserMessageId({
+      timelineEntries: [messageEntry("u1", "user"), messageEntry("a1", "assistant")],
+      turnDiffSummaryByAssistantMessageId: new Map([
+        [MessageId.make("a1"), summary("turn-1", [{ path: "src/x.ts" }], 3)],
+      ]),
+      inferredCheckpointTurnCountByTurnId: {},
+    });
+    expect(result.get(MessageId.make("u1"))).toBe(2);
   });
 });
 

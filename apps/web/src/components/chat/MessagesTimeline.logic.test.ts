@@ -5,7 +5,23 @@ import {
   deriveMessagesTimelineRows,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
+  isEffectivelyAtEnd,
 } from "./MessagesTimeline.logic";
+
+describe("isEffectivelyAtEnd", () => {
+  it("is true when already at the end regardless of overflow", () => {
+    expect(isEffectivelyAtEnd({ isAtEnd: true, contentLength: 1333, scrollLength: 657 })).toBe(true);
+  });
+  it("is false when content overflows and not at the end", () => {
+    expect(isEffectivelyAtEnd({ isAtEnd: false, contentLength: 1333, scrollLength: 657 })).toBe(
+      false,
+    );
+  });
+  it("is true when content fits the viewport (nothing to scroll)", () => {
+    expect(isEffectivelyAtEnd({ isAtEnd: false, contentLength: 657, scrollLength: 657 })).toBe(true);
+    expect(isEffectivelyAtEnd({ isAtEnd: false, contentLength: 400, scrollLength: 657 })).toBe(true);
+  });
+});
 
 describe("computeMessageDurationStart", () => {
   it("returns message createdAt when there is no preceding user message", () => {

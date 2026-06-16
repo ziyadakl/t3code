@@ -70,6 +70,7 @@ import {
   hasToolActivityForTurn,
   isLatestTurnSettled,
   formatElapsed,
+  computeRevertTurnCountByUserMessageId,
 } from "../session-logic";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
@@ -160,6 +161,7 @@ import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
+import { isEffectivelyAtEnd } from "./chat/MessagesTimeline.logic";
 import { ChatHeader } from "./chat/ChatHeader";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { NoActiveThreadState } from "./NoActiveThreadState";
@@ -1850,38 +1852,15 @@ export default function ChatView(props: ChatViewProps) {
     }
     return byMessageId;
   }, [turnDiffSummaries]);
-  const revertTurnCountByUserMessageId = useMemo(() => {
-    const byUserMessageId = new Map<MessageId, number>();
-    for (let index = 0; index < timelineEntries.length; index += 1) {
-      const entry = timelineEntries[index];
-      if (!entry || entry.kind !== "message" || entry.message.role !== "user") {
-        continue;
-      }
-
-      for (let nextIndex = index + 1; nextIndex < timelineEntries.length; nextIndex += 1) {
-        const nextEntry = timelineEntries[nextIndex];
-        if (!nextEntry || nextEntry.kind !== "message") {
-          continue;
-        }
-        if (nextEntry.message.role === "user") {
-          break;
-        }
-        const summary = turnDiffSummaryByAssistantMessageId.get(nextEntry.message.id);
-        if (!summary) {
-          continue;
-        }
-        const turnCount =
-          summary.checkpointTurnCount ?? inferredCheckpointTurnCountByTurnId[summary.turnId];
-        if (typeof turnCount !== "number") {
-          break;
-        }
-        byUserMessageId.set(entry.message.id, Math.max(0, turnCount - 1));
-        break;
-      }
-    }
-
-    return byUserMessageId;
-  }, [inferredCheckpointTurnCountByTurnId, timelineEntries, turnDiffSummaryByAssistantMessageId]);
+  const revertTurnCountByUserMessageId = useMemo(
+    () =>
+      computeRevertTurnCountByUserMessageId({
+        timelineEntries,
+        turnDiffSummaryByAssistantMessageId,
+        inferredCheckpointTurnCountByTurnId,
+      }),
+    [inferredCheckpointTurnCountByTurnId, timelineEntries, turnDiffSummaryByAssistantMessageId],
+  );
 
   // Prior user prompts for the ESC-ESC rewind picker, most-recent-first. A
   // prompt is checkpoint-gated for "also restore files" iff a revert turn count
@@ -2620,7 +2599,20 @@ export default function ChatView(props: ChatViewProps) {
   // thread switches.  LegendList fires scroll events with isAtEnd=false while
   // initialScrollAtEnd is settling; hiding is always immediate.
   const showScrollDebouncer = useRef(
-    new Debouncer(() => setShowScrollToBottom(true), { wait: 150 }),
+    new Debouncer(
+      () => {
+        // Don't show the pill when there's nothing to scroll (content fits the
+        // viewport) or we're already at the end. LegendList can leave a stale
+        // isAtEnd=false on a non-overflowing list and never fire a corrective
+        // scroll event, which would otherwise strand the pill visible-and-dead.
+        const state = legendListRef.current?.getState?.();
+        if (state && isEffectivelyAtEnd(state)) {
+          return;
+        }
+        setShowScrollToBottom(true);
+      },
+      { wait: 150 },
+    ),
   );
   const onIsAtEndChange = useCallback((isAtEnd: boolean) => {
     if (isAtEndRef.current === isAtEnd) return;
