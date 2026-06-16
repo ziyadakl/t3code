@@ -23,6 +23,13 @@ export interface VcsRestoreCheckpointInput {
   readonly cwd: string;
   readonly checkpointRef: CheckpointRef;
   readonly fallbackToHead?: boolean;
+  /**
+   * Repo-relative paths to scope the restore to (the agent edit set). When set,
+   * ONLY these paths are reverted to the checkpoint and only agent-created files
+   * among them are removed — the user's other files (incl. untracked) are left
+   * untouched. When omitted, the whole working tree is restored (legacy).
+   */
+  readonly paths?: ReadonlyArray<string>;
 }
 
 export interface VcsDiffCheckpointsInput {

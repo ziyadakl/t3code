@@ -25,6 +25,13 @@ export interface RestoreCheckpointInput {
   readonly cwd: string;
   readonly checkpointRef: CheckpointRef;
   readonly fallbackToHead?: boolean;
+  /**
+   * Repo-relative paths to scope the restore to (the agent edit set). When set,
+   * only these paths are reverted/removed; the user's other files (including
+   * untracked) are untouched. When omitted, the whole working tree is restored.
+   * See docs/adr/0004-author-scoped-file-restore.md.
+   */
+  readonly paths?: ReadonlyArray<string>;
 }
 
 export interface DiffCheckpointsInput {

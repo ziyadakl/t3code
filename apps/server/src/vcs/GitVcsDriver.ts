@@ -702,23 +702,86 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         return false;
       }
 
-      yield* execute({
-        operation,
-        cwd: input.cwd,
-        args: ["restore", "--source", commitOid, "--worktree", "--staged", "--", "."],
-      });
-      yield* execute({
-        operation,
-        cwd: input.cwd,
-        args: ["clean", "-fd", "--", "."],
-      });
+      if (input.paths === undefined) {
+        // Legacy whole-tree restore: overwrite every file and remove every
+        // untracked file. Used when no agent edit set is supplied.
+        yield* execute({
+          operation,
+          cwd: input.cwd,
+          args: ["restore", "--source", commitOid, "--worktree", "--staged", "--", "."],
+        });
+        yield* execute({
+          operation,
+          cwd: input.cwd,
+          args: ["clean", "-fd", "--", "."],
+        });
+
+        const headExists = yield* hasHeadCommit(input.cwd);
+        if (headExists) {
+          yield* execute({
+            operation,
+            cwd: input.cwd,
+            args: ["reset", "--quiet", "--", "."],
+          });
+        }
+
+        return true;
+      }
+
+      // Path-scoped restore (ADR-0004): touch ONLY the supplied paths (the agent
+      // edit set). Crucially, there is NO broad `git clean -fd -- .` here — the
+      // user's other files, including untracked ones, are never removed.
+      if (input.paths.length === 0) {
+        return true;
+      }
+
+      const presentInCheckpoint: string[] = [];
+      const createdSinceCheckpoint: string[] = [];
+      for (const relativePath of input.paths) {
+        const probe = yield* execute({
+          operation,
+          cwd: input.cwd,
+          args: ["cat-file", "-e", `${commitOid}:${relativePath}`],
+          allowNonZeroExit: true,
+        });
+        if (probe.exitCode === 0) {
+          presentInCheckpoint.push(relativePath);
+        } else {
+          createdSinceCheckpoint.push(relativePath);
+        }
+      }
+
+      if (presentInCheckpoint.length > 0) {
+        // Revert modifications and restore agent-deleted files to the checkpoint.
+        yield* execute({
+          operation,
+          cwd: input.cwd,
+          args: ["restore", "--source", commitOid, "--worktree", "--staged", "--", ...presentInCheckpoint],
+        });
+      }
+
+      if (createdSinceCheckpoint.length > 0) {
+        // The agent created these after the checkpoint → undo the creation,
+        // scoped to exactly these paths (tracked copies via `rm`, untracked via
+        // a path-scoped `clean`). The user's untracked files are not in this list.
+        yield* execute({
+          operation,
+          cwd: input.cwd,
+          args: ["rm", "-f", "--ignore-unmatch", "--", ...createdSinceCheckpoint],
+        });
+        yield* execute({
+          operation,
+          cwd: input.cwd,
+          args: ["clean", "-fd", "--", ...createdSinceCheckpoint],
+        });
+      }
 
       const headExists = yield* hasHeadCommit(input.cwd);
       if (headExists) {
         yield* execute({
           operation,
           cwd: input.cwd,
-          args: ["reset", "--quiet", "--", "."],
+          args: ["reset", "--quiet", "--", ...input.paths],
         });
       }
 

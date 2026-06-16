@@ -54,7 +54,7 @@ Extract `collectChangedFiles` / `extractChangedFiles` (today web-only, `session-
 
 ### Path-scoped VCS (fork-local)
 
-Extend `VcsCheckpointOps.restoreCheckpoint` / `diffCheckpoints` and the `CheckpointStore` interface with an optional `paths?: ReadonlyArray<string>`. Existing whole-tree callers pass nothing and are **unchanged**. The path-scoped restore in `GitVcsDriver`:
+Extend `VcsCheckpointOps.restoreCheckpoint` and the `CheckpointStore` interface with an optional repo-relative `paths?: ReadonlyArray<string>`. Existing whole-tree callers pass nothing and are **unchanged**. (The diff is left whole-tree — the per-turn display filters client-side, see *Display* below, so no server-side scoped diff is needed in v1.) The path-scoped restore in `GitVcsDriver` partitions the paths via a `git cat-file -e <commit>:<path>` probe:
 
 - `git restore --source <commit> --worktree --staged -- <paths…>` for paths present in the target tree (revert);
 - for an agent path **absent** in the target tree (agent-created), a targeted `git rm -f --ignore-unmatch -- <path>` / unlink (delete) — **never** a broad `clean -fd`;
@@ -80,7 +80,7 @@ The per-turn "changed files" expander (`MessagesTimeline.tsx:684`) renders `turn
 ## Implementation outline (touchpoints)
 
 - **Shared:** new `@t3tools/shared` agent-edit-set module (move `collectChangedFiles` / `extractChangedFiles`; keep a web re-export to minimise churn).
-- **Server VCS (fork-local):** `VcsDriver.ts` (optional `paths`), `GitVcsDriver.ts` (path-scoped restore + diff, per-path create/delete), `checkpointing/Services/CheckpointStore.ts` (interface + layer passthrough).
+- **Server VCS (fork-local) — DONE (slice 2):** `VcsDriver.ts` + `checkpointing/Services/CheckpointStore.ts` (optional repo-relative `paths` on the restore input; layer forwards verbatim), `GitVcsDriver.ts` (path-scoped restore: `cat-file -e` probe → revert present paths, scoped remove of agent-created paths, **no broad `clean -fd`**). Real-git integration tests in `CheckpointStore.test.ts`.
 - **Server orchestration (fork-local):** `RewindReactor.handleFilesRestoreRequested` — derive the span's Agent edit set, pass `paths` into `restoreCheckpoint`; guard/no-op when empty.
 - **Web:** `MessagesTimeline.tsx` (render Agent edit set), `session-logic.ts` (re-gate `computeRevertTurnCountByUserMessageId`; use the shared harvester).
 - **No migration. No change to `packages/contracts/src/orchestration.ts`.**

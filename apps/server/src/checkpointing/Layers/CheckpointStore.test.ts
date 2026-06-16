@@ -203,4 +203,96 @@ it.layer(TestLayer)("CheckpointStoreLive", (it) => {
       }),
     );
   });
+
+  describe("restoreCheckpoint", () => {
+    it.effect(
+      "scoped restore reverts only the agent's files and never touches the user's files",
+      () =>
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const tmp = yield* makeTmpDir();
+          yield* initRepoWithCommit(tmp);
+          const checkpointStore = yield* CheckpointStore;
+          const threadId = ThreadId.make("thread-restore-scoped");
+          const baseline = checkpointRefForThreadTurn(threadId, 0);
+
+          // Baseline captured into the checkpoint.
+          yield* writeTextFile(path.join(tmp, "agent.ts"), "agent-v1\n");
+          yield* writeTextFile(path.join(tmp, "user.ts"), "user-v1\n");
+          yield* checkpointStore.captureCheckpoint({ cwd: tmp, checkpointRef: baseline });
+
+          // The turn: the agent edits agent.ts; meanwhile the user hand-edits
+          // user.ts and creates a brand-new untracked file.
+          yield* writeTextFile(path.join(tmp, "agent.ts"), "agent-v2\n");
+          yield* writeTextFile(path.join(tmp, "user.ts"), "user-v2\n");
+          yield* writeTextFile(path.join(tmp, "user-new.ts"), "user-new\n");
+
+          const restored = yield* checkpointStore.restoreCheckpoint({
+            cwd: tmp,
+            checkpointRef: baseline,
+            paths: ["agent.ts"],
+          });
+
+          expect(restored).toBe(true);
+          // Agent's edit reverted to the checkpoint.
+          expect(yield* fileSystem.readFileString(path.join(tmp, "agent.ts"))).toBe("agent-v1\n");
+          // User's concurrent hand-edit preserved (not in the agent edit set).
+          expect(yield* fileSystem.readFileString(path.join(tmp, "user.ts"))).toBe("user-v2\n");
+          // User's new untracked file is NOT deleted (the old `clean -fd` bug).
+          expect(yield* fileSystem.exists(path.join(tmp, "user-new.ts"))).toBe(true);
+        }),
+    );
+
+    it.effect("scoped restore removes an agent-created file but keeps the user's new files", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const checkpointStore = yield* CheckpointStore;
+        const threadId = ThreadId.make("thread-restore-created");
+        const baseline = checkpointRefForThreadTurn(threadId, 0);
+
+        // Baseline: neither file exists yet.
+        yield* checkpointStore.captureCheckpoint({ cwd: tmp, checkpointRef: baseline });
+
+        // The turn: the agent creates created.ts; the user creates their own file.
+        yield* writeTextFile(path.join(tmp, "created.ts"), "created\n");
+        yield* writeTextFile(path.join(tmp, "user-own.ts"), "mine\n");
+
+        const restored = yield* checkpointStore.restoreCheckpoint({
+          cwd: tmp,
+          checkpointRef: baseline,
+          paths: ["created.ts"],
+        });
+
+        expect(restored).toBe(true);
+        // Agent-created file is undone (absent in the checkpoint → removed).
+        expect(yield* fileSystem.exists(path.join(tmp, "created.ts"))).toBe(false);
+        // The user's own new file is untouched.
+        expect(yield* fileSystem.exists(path.join(tmp, "user-own.ts"))).toBe(true);
+      }),
+    );
+
+    it.effect("whole-tree restore (no paths) still reverts everything and removes untracked", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const checkpointStore = yield* CheckpointStore;
+        const threadId = ThreadId.make("thread-restore-wholetree");
+        const baseline = checkpointRefForThreadTurn(threadId, 0);
+
+        yield* writeTextFile(path.join(tmp, "tracked.ts"), "v1\n");
+        yield* checkpointStore.captureCheckpoint({ cwd: tmp, checkpointRef: baseline });
+        yield* writeTextFile(path.join(tmp, "tracked.ts"), "v2\n");
+        yield* writeTextFile(path.join(tmp, "untracked.ts"), "stray\n");
+
+        // No `paths` → legacy whole-tree behavior, unchanged.
+        yield* checkpointStore.restoreCheckpoint({ cwd: tmp, checkpointRef: baseline });
+
+        expect(yield* fileSystem.readFileString(path.join(tmp, "tracked.ts"))).toBe("v1\n");
+        expect(yield* fileSystem.exists(path.join(tmp, "untracked.ts"))).toBe(false);
+      }),
+    );
+  });
 });
