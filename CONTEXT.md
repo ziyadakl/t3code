@@ -26,6 +26,16 @@ Claude's on-disk grouping of sessions by working directory: `~/.claude/projects/
 **Worktree**:
 An isolated git working copy t3 may create for a Thread. When present, the Thread runs there instead of the repo root — which puts its Provider session in a *different* Project bucket than a terminal session run from the repo.
 
+**Checkpoint**:
+A per-turn snapshot of a Thread's whole working tree, stored as a git shadow-commit ref (`refs/t3/checkpoints/…`) — not a branch commit, so it never touches the user's git history. A pre-turn baseline and a post-turn checkpoint bracket each turn; file-restore/rewind target a checkpoint.
+
+**Checkpoint diff**:
+Every file that differs between two **Checkpoints**. **Author-blind**: because each checkpoint is the whole working tree, the diff includes files the *user* hand-edited and build output, not only the agent's work. Backs the raw git diff view — but is **not** the source of the per-turn "changed files" list or of file-restore (those use the **Agent edit set**).
+
+**Agent edit set** (added 2026-06-16):
+The files the agent *itself* changed during a turn, via its own file-editing tools (Claude `Edit`/`Write`/`MultiEdit`, Codex `apply_patch`, etc.), derived from the agent's tool-call activities. This is t3's attribution of "what the agent did", and it is what a turn's "changed files" list shows and what a **file-restore** reverts. Best-effort: it may **under-count** — a file the agent changes by running a shell command, or a provider that doesn't report paths (Grok/OpenCode today), won't appear. By design t3 **fails safe** on under-counting: restore touches only the attributed files, never the whole tree, so the user's own separate work is never clobbered (the one exception is a file the user *and* the agent both edited — it reverts as a whole).
+_Avoid_: equating the whole-tree **Checkpoint diff** with "the agent's changes" — the diff is author-blind.
+
 **Importable session**:
 A past Claude Provider session in this project's Project bucket that t3's `/resume` picker offers to pull into a new Thread. Defined as: a top-level chat (not a background sub-agent / sidechain session), with real content (not an empty or abandoned stub), that originated in the **terminal** (not one t3 itself created), in this project's working directory. A terminal session already pulled into a Thread is still listed but flagged "already in t3".
 _Avoid_: listing t3-originated or sub-agent sessions in the picker by default.
