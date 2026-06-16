@@ -29,6 +29,7 @@ import {
   type VcsStatusResult,
 } from "@t3tools/contracts";
 import * as GitVcsDriverCore from "./GitVcsDriverCore.ts";
+import { runScopedRestore } from "./scopedCheckpointRestore.ts";
 import * as VcsDriver from "./VcsDriver.ts";
 import * as VcsProcess from "./VcsProcess.ts";
 
@@ -731,61 +732,8 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       // Path-scoped restore (ADR-0004): touch ONLY the supplied paths (the agent
       // edit set). Crucially, there is NO broad `git clean -fd -- .` here — the
       // user's other files, including untracked ones, are never removed.
-      if (input.paths.length === 0) {
-        return true;
-      }
-
-      const presentInCheckpoint: string[] = [];
-      const createdSinceCheckpoint: string[] = [];
-      for (const relativePath of input.paths) {
-        const probe = yield* execute({
-          operation,
-          cwd: input.cwd,
-          args: ["cat-file", "-e", `${commitOid}:${relativePath}`],
-          allowNonZeroExit: true,
-        });
-        if (probe.exitCode === 0) {
-          presentInCheckpoint.push(relativePath);
-        } else {
-          createdSinceCheckpoint.push(relativePath);
-        }
-      }
-
-      if (presentInCheckpoint.length > 0) {
-        // Revert modifications and restore agent-deleted files to the checkpoint.
-        yield* execute({
-          operation,
-          cwd: input.cwd,
-          args: ["restore", "--source", commitOid, "--worktree", "--staged", "--", ...presentInCheckpoint],
-        });
-      }
-
-      if (createdSinceCheckpoint.length > 0) {
-        // The agent created these after the checkpoint → undo the creation,
-        // scoped to exactly these paths (tracked copies via `rm`, untracked via
-        // a path-scoped `clean`). The user's untracked files are not in this list.
-        yield* execute({
-          operation,
-          cwd: input.cwd,
-          args: ["rm", "-f", "--ignore-unmatch", "--", ...createdSinceCheckpoint],
-        });
-        yield* execute({
-          operation,
-          cwd: input.cwd,
-          args: ["clean", "-fd", "--", ...createdSinceCheckpoint],
-        });
-      }
-
-      const headExists = yield* hasHeadCommit(input.cwd);
-      if (headExists) {
-        yield* execute({
-          operation,
-          cwd: input.cwd,
-          args: ["reset", "--quiet", "--", ...input.paths],
-        });
-      }
-
-      return true;
+      // Logic extracted to scopedCheckpointRestore.ts for testability + batching.
+      return yield* runScopedRestore({ cwd: input.cwd, commitOid, paths: input.paths, execute, hasHeadCommit });
     }),
 
     diffCheckpoints: Effect.fn("GitVcsDriver.checkpoints.diffCheckpoints")(function* (input) {
