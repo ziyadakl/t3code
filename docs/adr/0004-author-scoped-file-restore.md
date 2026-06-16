@@ -1,6 +1,6 @@
 # Author-scoped file-restore (agent edit set)
 
-**Status:** design agreed (2026-06-16) — not yet implemented. Fork-local; see [FORK.md](../../FORK.md) and [CONTEXT.md](../../CONTEXT.md). Refines decisions 7–8 of [ADR-0002](./0002-conversation-rewind.md).
+**Status:** design agreed (2026-06-16) — not yet implemented. Adds a fork-local module (`vcs/scopedCheckpointRestore.ts`) plus minimal edits to a small number of upstream VCS/checkpoint files per FORK.md's "edit only when necessary, keep small" allowance; see [FORK.md](../../FORK.md) and [CONTEXT.md](../../CONTEXT.md). Refines decisions 7–8 of [ADR-0002](./0002-conversation-rewind.md).
 
 ## Context
 
@@ -52,7 +52,7 @@ At restore time, `RewindReactor.handleFilesRestoreRequested` already loads threa
 
 Extract `collectChangedFiles` / `extractChangedFiles` (today web-only, `session-logic.ts:1083-1141`) into a shared module (`@t3tools/shared`). The web display and the server restore then compute the **identical** Agent edit set from the same activity payloads — so what the user sees in the list cannot disagree with what restore actually touches.
 
-### Path-scoped VCS (fork-local)
+### Path-scoped VCS (fork-local module + minimal upstream edits)
 
 Extend `VcsCheckpointOps.restoreCheckpoint` and the `CheckpointStore` interface with an optional repo-relative `paths?: ReadonlyArray<string>`. Existing whole-tree callers pass nothing and are **unchanged**. (The diff is left whole-tree — the per-turn display filters client-side, see *Display* below, so no server-side scoped diff is needed in v1.) The path-scoped restore in `GitVcsDriver` partitions the paths via a `git cat-file -e <commit>:<path>` probe:
 
@@ -60,7 +60,9 @@ Extend `VcsCheckpointOps.restoreCheckpoint` and the `CheckpointStore` interface 
 - for an agent path **absent** in the target tree (agent-created), a targeted `git rm -f --ignore-unmatch -- <path>` / unlink (delete) — **never** a broad `clean -fd`;
 - `git reset --quiet -- <paths…>`.
 
-All edits land in fork-local `vcs/` + `checkpointing/` files; the upstream whole-tree path is left intact.
+The scoped-restore logic lives in the new fork-local `apps/server/src/vcs/scopedCheckpointRestore.ts` (a pure `planScopedRestore` planner + a thin `runScopedRestore` orchestrator). `GitVcsDriver.ts` (upstream) retains the unchanged legacy whole-tree restore path and adds a thin one-line delegation to `runScopedRestore` for the scoped case. `vcs/VcsDriver.ts` and `checkpointing/Services/CheckpointStore.ts` (upstream) carry only a minimal optional `paths?` field forwarded verbatim. These three upstream files are minimal, necessary edits per FORK.md's "edit only when necessary, keep small" allowance — they are not fork-local. The legacy whole-tree restore behavior is preserved and unchanged for all existing callers.
+
+> **Note on present/created partition:** the `git cat-file -e <commit>:<path>` probe (partitioning paths into present-at-target vs. agent-created) is **required** and cannot be collapsed. `git restore --source` errors when asked to restore a path that does not exist at the target commit, so created paths must be separated out and handled via `git rm -f --ignore-unmatch` / unlink — there is no single-command "restore all then clean" equivalent that is both safe and scoped.
 
 ### Display (web, client-only)
 
@@ -80,7 +82,7 @@ The per-turn "changed files" expander (`MessagesTimeline.tsx:684`) renders `turn
 ## Implementation outline (touchpoints)
 
 - **Shared:** new `@t3tools/shared` agent-edit-set module (move `collectChangedFiles` / `extractChangedFiles`; keep a web re-export to minimise churn).
-- **Server VCS (fork-local) — DONE (slice 2):** `VcsDriver.ts` + `checkpointing/Services/CheckpointStore.ts` (optional repo-relative `paths` on the restore input; layer forwards verbatim), `GitVcsDriver.ts` (path-scoped restore: `cat-file -e` probe → revert present paths, scoped remove of agent-created paths, **no broad `clean -fd`**). Real-git integration tests in `CheckpointStore.test.ts`.
+- **Server VCS — DONE (slice 2):** new fork-local `apps/server/src/vcs/scopedCheckpointRestore.ts` holds the scoped-restore logic (`planScopedRestore` + `runScopedRestore`). Upstream `VcsDriver.ts` + `checkpointing/Services/CheckpointStore.ts` receive a minimal optional `paths?` field (forwarded verbatim). Upstream `GitVcsDriver.ts` keeps the unchanged whole-tree path and adds a thin delegation to `runScopedRestore` for the scoped case. Real-git integration tests in `CheckpointStore.test.ts`.
 - **Server orchestration (fork-local):** `RewindReactor.handleFilesRestoreRequested` — derive the span's Agent edit set, pass `paths` into `restoreCheckpoint`; guard/no-op when empty.
 - **Web:** `MessagesTimeline.tsx` (render Agent edit set), `session-logic.ts` (re-gate `computeRevertTurnCountByUserMessageId`; use the shared harvester).
 - **No migration. No change to `packages/contracts/src/orchestration.ts`.**
