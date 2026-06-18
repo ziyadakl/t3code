@@ -2,6 +2,7 @@ import { describe, it, expect } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 import {
   SandcastleStatusSnapshot,
+  SandcastleStatusHistoryEntry,
   SANDCASTLE_STATUS_SCHEMA_VERSION,
 } from "./sandcastle.ts";
 
@@ -67,5 +68,91 @@ describe("SandcastleStatusSnapshot", () => {
 
   it("pins the known schema version to 1", () => {
     expect(SANDCASTLE_STATUS_SCHEMA_VERSION).toBe(1);
+  });
+
+  it("decodes a snapshot without history (backward compat)", () => {
+    // SAMPLE has no `history` key — old runs must still decode
+    const decoded = Schema.decodeUnknownSync(SandcastleStatusSnapshot)(SAMPLE);
+    expect(decoded.history).toBeUndefined();
+  });
+
+  it("decodes a snapshot with a history array", () => {
+    const withHistory = {
+      ...SAMPLE,
+      history: [
+        {
+          number: 337,
+          title: "backfilled txns uncategorized",
+          branch: "agent/issue-337",
+          phase: "merged",
+          completedAt: "2026-06-04T13:00:00.000Z",
+        },
+        {
+          number: 339,
+          title: "scope setUserEnabled to team",
+          branch: "agent/issue-339",
+          phase: "needs-human",
+          completedAt: "2026-06-04T13:15:00.000Z",
+        },
+        {
+          number: 340,
+          title: "retry deferred issue",
+          branch: "agent/issue-340",
+          phase: "deferred",
+          completedAt: "2026-06-04T14:00:00.000Z",
+        },
+        // same number as first entry — duplicates must be allowed
+        {
+          number: 337,
+          title: "backfilled txns uncategorized (retry)",
+          branch: "agent/issue-337",
+          phase: "needs-human",
+          completedAt: "2026-06-05T09:00:00.000Z",
+        },
+      ],
+    };
+    const decoded = Schema.decodeUnknownSync(SandcastleStatusSnapshot)(withHistory);
+    expect(decoded.history).toHaveLength(4);
+    expect(decoded.history?.[0]?.number).toBe(337);
+    expect(decoded.history?.[0]?.title).toBe("backfilled txns uncategorized");
+    expect(decoded.history?.[0]?.branch).toBe("agent/issue-337");
+    expect(decoded.history?.[0]?.phase).toBe("merged");
+    expect(decoded.history?.[0]?.completedAt).toBe("2026-06-04T13:00:00.000Z");
+    expect(decoded.history?.[1]?.phase).toBe("needs-human");
+    expect(decoded.history?.[2]?.phase).toBe("deferred");
+    // both entries with number 337 survive (no dedup)
+    expect(decoded.history?.filter((e) => e.number === 337)).toHaveLength(2);
+  });
+
+  it("rejects a history entry with a bogus phase", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(SandcastleStatusSnapshot)({
+        ...SAMPLE,
+        history: [
+          {
+            number: 1,
+            title: "x",
+            branch: "b",
+            phase: "bogus-phase",
+            completedAt: "2026-06-04T13:00:00.000Z",
+          },
+        ],
+      }),
+    ).toThrow();
+  });
+});
+
+describe("SandcastleStatusHistoryEntry", () => {
+  it("is exported and decodes standalone", () => {
+    const decoded = Schema.decodeUnknownSync(SandcastleStatusHistoryEntry)({
+      number: 42,
+      title: "standalone entry",
+      branch: "agent/issue-42",
+      phase: "merged",
+      completedAt: "2026-06-10T10:00:00.000Z",
+    });
+    expect(decoded.number).toBe(42);
+    expect(decoded.phase).toBe("merged");
+    expect(decoded.completedAt).toBe("2026-06-10T10:00:00.000Z");
   });
 });

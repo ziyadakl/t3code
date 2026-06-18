@@ -47,6 +47,15 @@ export const SandcastleRunState = Schema.Literals([
 ]);
 export type SandcastleRunState = typeof SandcastleRunState.Type;
 
+export const SandcastleStatusHistoryEntry = Schema.Struct({
+  number: Schema.Number,
+  title: Schema.String,
+  branch: Schema.String,
+  phase: SandcastleIssuePhase,
+  completedAt: Schema.String,
+});
+export type SandcastleStatusHistoryEntry = typeof SandcastleStatusHistoryEntry.Type;
+
 export const SandcastleStatusIssue = Schema.Struct({
   number: Schema.Number,
   title: Schema.String,
@@ -88,6 +97,7 @@ export const SandcastleStatusSnapshot = Schema.Struct({
   issues: Schema.Array(SandcastleStatusIssue),
   updatedAt: Schema.String,
   activity: Schema.optional(Schema.String),
+  history: Schema.optional(Schema.Array(SandcastleStatusHistoryEntry)),
 });
 export type SandcastleStatusSnapshot = typeof SandcastleStatusSnapshot.Type;
 
