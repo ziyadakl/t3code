@@ -6,6 +6,9 @@ import {
   SANDCASTLE_STATUS_SCHEMA_VERSION,
 } from "./sandcastle.ts";
 
+const decodeSnapshot = Schema.decodeUnknownSync(SandcastleStatusSnapshot);
+const decodeHistoryEntry = Schema.decodeUnknownSync(SandcastleStatusHistoryEntry);
+
 const SAMPLE = {
   schemaVersion: 1,
   state: "running",
@@ -41,7 +44,7 @@ const SAMPLE = {
 
 describe("SandcastleStatusSnapshot", () => {
   it("decodes a representative status.json", () => {
-    const decoded = Schema.decodeUnknownSync(SandcastleStatusSnapshot)(SAMPLE);
+    const decoded = decodeSnapshot(SAMPLE);
     expect(decoded.state).toBe("running");
     expect(decoded.issues).toHaveLength(2);
     expect(decoded.issues[1]?.phase).toBe("merged");
@@ -49,7 +52,7 @@ describe("SandcastleStatusSnapshot", () => {
   });
 
   it("decodes a snapshot with no issues and no activity", () => {
-    const decoded = Schema.decodeUnknownSync(SandcastleStatusSnapshot)({
+    const decoded = decodeSnapshot({
       ...SAMPLE,
       issues: [],
       activity: undefined,
@@ -59,7 +62,7 @@ describe("SandcastleStatusSnapshot", () => {
 
   it("rejects an unknown phase value", () => {
     expect(() =>
-      Schema.decodeUnknownSync(SandcastleStatusSnapshot)({
+      decodeSnapshot({
         ...SAMPLE,
         issues: [{ number: 1, title: "x", branch: "b", phase: "bogus-phase" }],
       }),
@@ -72,7 +75,7 @@ describe("SandcastleStatusSnapshot", () => {
 
   it("decodes a snapshot without history (backward compat)", () => {
     // SAMPLE has no `history` key — old runs must still decode
-    const decoded = Schema.decodeUnknownSync(SandcastleStatusSnapshot)(SAMPLE);
+    const decoded = decodeSnapshot(SAMPLE);
     expect(decoded.history).toBeUndefined();
   });
 
@@ -111,7 +114,7 @@ describe("SandcastleStatusSnapshot", () => {
         },
       ],
     };
-    const decoded = Schema.decodeUnknownSync(SandcastleStatusSnapshot)(withHistory);
+    const decoded = decodeSnapshot(withHistory);
     expect(decoded.history).toHaveLength(4);
     expect(decoded.history?.[0]?.number).toBe(337);
     expect(decoded.history?.[0]?.title).toBe("backfilled txns uncategorized");
@@ -126,7 +129,7 @@ describe("SandcastleStatusSnapshot", () => {
 
   it("rejects a history entry with a bogus phase", () => {
     expect(() =>
-      Schema.decodeUnknownSync(SandcastleStatusSnapshot)({
+      decodeSnapshot({
         ...SAMPLE,
         history: [
           {
@@ -144,7 +147,7 @@ describe("SandcastleStatusSnapshot", () => {
 
 describe("SandcastleStatusHistoryEntry", () => {
   it("is a standalone decodable schema (exported for consumers)", () => {
-    const decoded = Schema.decodeUnknownSync(SandcastleStatusHistoryEntry)({
+    const decoded = decodeHistoryEntry({
       number: 42,
       title: "standalone entry",
       branch: "agent/issue-42",
