@@ -1,6 +1,5 @@
 // apps/web/src/components/sandcastle/SandcastleDashboard.tsx
-import { useMemo, type ReactNode } from "react";
-import { CheckIcon, GitMergeIcon } from "lucide-react";
+import { useMemo } from "react";
 import { Link } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
 import type { EnvironmentId } from "@t3tools/contracts";
@@ -19,27 +18,19 @@ import {
   bannerTone,
   finishedRunAgeHint,
   pillVariant,
-  STATUS_PILL_CLASS,
 } from "./sandcastleView.ts";
+import {
+  SANDCASTLE_PILLS,
+  pillIcon,
+  type StatusPillSpec,
+} from "./statusPills.tsx";
 
 /** A status count badge: muted (gray) while its count is zero, taking its
  *  meaningful color once non-zero (so "0" doesn't read as a green success). */
-function CountBadge({
-  count,
-  icon,
-  activeVariant,
-}: {
-  count: number;
-  icon: ReactNode;
-  activeVariant: "success" | "warning" | "info" | "secondary";
-}) {
+function CountBadge({ spec, count }: { spec: StatusPillSpec; count: number }) {
   return (
-    <Badge
-      variant={pillVariant(count, activeVariant)}
-      size="lg"
-      className={STATUS_PILL_CLASS}
-    >
-      {icon}
+    <Badge variant={pillVariant(count, spec.variant)} size="xl">
+      {pillIcon(spec, count)}
       <span>{count}</span>
     </Badge>
   );
@@ -122,34 +113,20 @@ export function SandcastleDashboard() {
                   <div className="flex shrink-0 items-center gap-2">
                     {snap ? (
                       <>
-                        <CountBadge
-                          count={snap.totals.running}
-                          icon="▶"
-                          activeVariant="info"
-                        />
-                        <CountBadge
-                          count={snap.totals.merged}
-                          icon={
-                            snap.totals.merged > 0 ? (
-                              <CheckIcon />
-                            ) : (
-                              <GitMergeIcon />
-                            )
-                          }
-                          activeVariant="success"
-                        />
-                        <CountBadge
-                          count={snap.totals.needsHuman}
-                          icon="⚠"
-                          activeVariant="warning"
-                        />
+                        {[
+                          SANDCASTLE_PILLS.running,
+                          SANDCASTLE_PILLS.merged,
+                          SANDCASTLE_PILLS.needsHuman,
+                        ].map((spec) => (
+                          <CountBadge
+                            key={spec.key}
+                            spec={spec}
+                            count={snap.totals[spec.key]}
+                          />
+                        ))}
                       </>
                     ) : null}
-                    <Badge
-                      variant={bannerTone(banner.kind)}
-                      size="lg"
-                      className={STATUS_PILL_CLASS}
-                    >
+                    <Badge variant={bannerTone(banner.kind)} size="xl">
                       {banner.kind === "live" ? <LiveDot /> : null}
                       {banner.text}
                     </Badge>

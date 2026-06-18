@@ -1,6 +1,5 @@
 // apps/web/src/components/sandcastle/SandcastleProjectDetail.tsx
-import { useMemo, type ReactNode } from "react";
-import { CheckIcon, GitMergeIcon } from "lucide-react";
+import { useMemo } from "react";
 import { Link } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
 import { useStore, selectProjectsAcrossEnvironments } from "../../store.ts";
@@ -25,48 +24,45 @@ import {
   partitionIssuesByPhase,
   finishedRunAgeHint,
   pillVariant,
-  STATUS_PILL_CLASS,
 } from "./sandcastleView.ts";
 import { SandcastleIssueRow } from "./SandcastleIssueRow.tsx";
 import { LiveDot } from "./LiveDot.tsx";
-import { cn } from "~/lib/utils";
+import {
+  SANDCASTLE_PILLS,
+  pillIcon,
+  type StatusPillSpec,
+} from "./statusPills.tsx";
+import type { SandcastleIssuePhase } from "@t3tools/contracts";
 import type { HistoryLinkRow } from "./sandcastleView.ts";
 
 /** Clickable pill that opens a popover listing the history entries for a phase. */
 function PillPopover({
+  spec,
   count,
-  icon,
-  word,
-  activeVariant,
   rows,
 }: {
+  spec: StatusPillSpec;
   count: number;
-  icon: ReactNode;
-  word: string;
-  activeVariant: "success" | "warning" | "info" | "secondary";
   rows: HistoryLinkRow[];
 }) {
-  const srLabel = `${count} ${word}`;
+  const srLabel = `${count} ${spec.word}`;
   return (
     <Popover>
       <PopoverTrigger
         render={
           <button
             type="button"
-            className={cn(
-              badgeVariants({
-                variant: pillVariant(count, activeVariant),
-                size: "lg",
-              }),
-              STATUS_PILL_CLASS,
-            )}
+            className={badgeVariants({
+              variant: pillVariant(count, spec.variant),
+              size: "xl",
+            })}
             aria-label={`${srLabel}, view history`}
           />
         }
       >
-        {icon}
+        {pillIcon(spec, count)}
         <span>
-          {count} {word}
+          {count} {spec.word}
         </span>
       </PopoverTrigger>
       <PopoverPopup side="bottom" align="end" className="w-72">
@@ -100,6 +96,22 @@ function PillPopover({
     </Popover>
   );
 }
+
+/**
+ * The detail pills that open a history popover, paired with the history phase
+ * each lists. NOTE: there is no "requeued" history phase — requeued is a
+ * totals-only concept (issues released back to the queue). The popover falls
+ * back to "deferred", the closest phase, but requeued ≠ deferred; revisit once
+ * the loop writes a dedicated phase (sandcastle-loop PR #14).
+ */
+const DETAIL_POPOVER_PILLS: ReadonlyArray<{
+  spec: StatusPillSpec;
+  phase: SandcastleIssuePhase;
+}> = [
+  { spec: SANDCASTLE_PILLS.merged, phase: "merged" },
+  { spec: SANDCASTLE_PILLS.needsHuman, phase: "needs-human" },
+  { spec: SANDCASTLE_PILLS.requeued, phase: "deferred" },
+];
 
 export function SandcastleProjectDetail({
   environmentId,
@@ -163,11 +175,7 @@ export function SandcastleProjectDetail({
             </span>
           ) : null}
           {banner ? (
-            <Badge
-              variant={bannerTone(banner.kind)}
-              size="lg"
-              className={STATUS_PILL_CLASS}
-            >
+            <Badge variant={bannerTone(banner.kind)} size="xl">
               {banner.kind === "live" ? <LiveDot /> : null}
               {banner.text}
               {banner.kind === "live" && snap?.activity ? (
@@ -192,41 +200,18 @@ export function SandcastleProjectDetail({
             </span>
             <span className="text-muted-foreground">{snap.run.branch}</span>
             <div className="ms-auto flex gap-2">
-              <PillPopover
-                count={snap.totals.merged}
-                icon={
-                  snap.totals.merged > 0 ? <CheckIcon /> : <GitMergeIcon />
-                }
-                word="merged"
-                activeVariant="success"
-                rows={historyLinksForPhase(
-                  snap.history,
-                  "merged",
-                  project.repositoryIdentity ?? null,
-                )}
-              />
-              <PillPopover
-                count={snap.totals.needsHuman}
-                icon="⚠"
-                word="needs you"
-                activeVariant="warning"
-                rows={historyLinksForPhase(
-                  snap.history,
-                  "needs-human",
-                  project.repositoryIdentity ?? null,
-                )}
-              />
-              <PillPopover
-                count={snap.totals.requeued}
-                icon="↻"
-                word="requeued"
-                activeVariant="secondary"
-                rows={historyLinksForPhase(
-                  snap.history,
-                  "deferred",
-                  project.repositoryIdentity ?? null,
-                )}
-              />
+              {DETAIL_POPOVER_PILLS.map(({ spec, phase }) => (
+                <PillPopover
+                  key={spec.key}
+                  spec={spec}
+                  count={snap.totals[spec.key]}
+                  rows={historyLinksForPhase(
+                    snap.history,
+                    phase,
+                    project.repositoryIdentity ?? null,
+                  )}
+                />
+              ))}
             </div>
           </Card>
 
