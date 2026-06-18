@@ -143,7 +143,7 @@ describe("SandcastleStatusSnapshot", () => {
 });
 
 describe("SandcastleStatusHistoryEntry", () => {
-  it("is exported and decodes standalone", () => {
+  it("is a standalone decodable schema (exported for consumers)", () => {
     const decoded = Schema.decodeUnknownSync(SandcastleStatusHistoryEntry)({
       number: 42,
       title: "standalone entry",

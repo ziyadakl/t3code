@@ -97,6 +97,8 @@ export const SandcastleStatusSnapshot = Schema.Struct({
   issues: Schema.Array(SandcastleStatusIssue),
   updatedAt: Schema.String,
   activity: Schema.optional(Schema.String),
+  // Append-only outcome log added in sandcastle-loop PR #14 (upstream). Absent
+  // from the local Sandcastle checkout because that clone predates PR #14.
   history: Schema.optional(Schema.Array(SandcastleStatusHistoryEntry)),
 });
 export type SandcastleStatusSnapshot = typeof SandcastleStatusSnapshot.Type;
