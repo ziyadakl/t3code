@@ -7,7 +7,7 @@ import { Badge, badgeVariants } from "../ui/badge.tsx";
 import { Card } from "../ui/card.tsx";
 import {
   Popover,
-  PopoverContent,
+  PopoverPopup,
   PopoverTrigger,
 } from "../ui/popover.tsx";
 import {
@@ -31,10 +31,12 @@ import type { VariantProps } from "class-variance-authority";
 function PillPopover({
   variant,
   label,
+  srLabel,
   rows,
 }: {
   variant: NonNullable<VariantProps<typeof badgeVariants>["variant"]>;
   label: string;
+  srLabel: string;
   rows: HistoryLinkRow[];
 }) {
   return (
@@ -44,13 +46,13 @@ function PillPopover({
           <button
             type="button"
             className={badgeVariants({ variant, size: "sm" })}
-            aria-label={`${label} — click to see details`}
+            aria-label={`${srLabel}, view history`}
           />
         }
       >
         {label}
       </PopoverTrigger>
-      <PopoverContent side="bottom" align="end" className="w-72">
+      <PopoverPopup side="bottom" align="end" className="w-72">
         {rows.length === 0 ? (
           <p className="text-xs text-muted-foreground">Nothing recorded yet.</p>
         ) : (
@@ -77,7 +79,7 @@ function PillPopover({
             ))}
           </ul>
         )}
-      </PopoverContent>
+      </PopoverPopup>
     </Popover>
   );
 }
@@ -169,6 +171,7 @@ export function SandcastleProjectDetail({
               <PillPopover
                 variant="success"
                 label={`✓ ${snap.totals.merged} merged`}
+                srLabel={`${snap.totals.merged} merged`}
                 rows={historyLinksForPhase(
                   snap.history,
                   "merged",
@@ -178,6 +181,7 @@ export function SandcastleProjectDetail({
               <PillPopover
                 variant="warning"
                 label={`⚠ ${snap.totals.needsHuman} needs you`}
+                srLabel={`${snap.totals.needsHuman} needs you`}
                 rows={historyLinksForPhase(
                   snap.history,
                   "needs-human",
@@ -187,6 +191,7 @@ export function SandcastleProjectDetail({
               <PillPopover
                 variant="secondary"
                 label={`↻ ${snap.totals.requeued} requeued`}
+                srLabel={`${snap.totals.requeued} requeued`}
                 rows={historyLinksForPhase(
                   snap.history,
                   "deferred",
