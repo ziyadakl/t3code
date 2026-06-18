@@ -1,5 +1,6 @@
 // apps/web/src/components/sandcastle/SandcastleDashboard.tsx
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
+import { CheckIcon, GitMergeIcon } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
 import type { EnvironmentId } from "@t3tools/contracts";
@@ -7,6 +8,7 @@ import { useStore, selectProjectsAcrossEnvironments } from "../../store.ts";
 import { useSavedEnvironmentRegistryStore } from "../../environments/runtime";
 import { Badge } from "../ui/badge.tsx";
 import { Card } from "../ui/card.tsx";
+import { LiveDot } from "./LiveDot.tsx";
 import {
   useSandcastleStatuses,
   statusKey,
@@ -16,7 +18,32 @@ import {
   deriveBanner,
   bannerTone,
   finishedRunAgeHint,
+  pillVariant,
+  STATUS_PILL_CLASS,
 } from "./sandcastleView.ts";
+
+/** A status count badge: muted (gray) while its count is zero, taking its
+ *  meaningful color once non-zero (so "0" doesn't read as a green success). */
+function CountBadge({
+  count,
+  icon,
+  activeVariant,
+}: {
+  count: number;
+  icon: ReactNode;
+  activeVariant: "success" | "warning" | "info" | "secondary";
+}) {
+  return (
+    <Badge
+      variant={pillVariant(count, activeVariant)}
+      size="lg"
+      className={STATUS_PILL_CLASS}
+    >
+      {icon}
+      <span>{count}</span>
+    </Badge>
+  );
+}
 
 function EnvLabel({ environmentId }: { environmentId: EnvironmentId }) {
   const label = useSavedEnvironmentRegistryStore(
@@ -95,23 +122,35 @@ export function SandcastleDashboard() {
                   <div className="flex shrink-0 items-center gap-2">
                     {snap ? (
                       <>
-                        <Badge variant="info" size="lg">
-                          ▶ {snap.totals.running}
-                        </Badge>
-                        <Badge variant="success" size="lg">
-                          ✓ {snap.totals.merged}
-                        </Badge>
-                        <Badge
-                          variant={
-                            snap.totals.needsHuman > 0 ? "warning" : "secondary"
+                        <CountBadge
+                          count={snap.totals.running}
+                          icon="▶"
+                          activeVariant="info"
+                        />
+                        <CountBadge
+                          count={snap.totals.merged}
+                          icon={
+                            snap.totals.merged > 0 ? (
+                              <CheckIcon />
+                            ) : (
+                              <GitMergeIcon />
+                            )
                           }
-                          size="lg"
-                        >
-                          ⚠ {snap.totals.needsHuman}
-                        </Badge>
+                          activeVariant="success"
+                        />
+                        <CountBadge
+                          count={snap.totals.needsHuman}
+                          icon="⚠"
+                          activeVariant="warning"
+                        />
                       </>
                     ) : null}
-                    <Badge variant={bannerTone(banner.kind)} size="lg">
+                    <Badge
+                      variant={bannerTone(banner.kind)}
+                      size="lg"
+                      className={STATUS_PILL_CLASS}
+                    >
+                      {banner.kind === "live" ? <LiveDot /> : null}
                       {banner.text}
                     </Badge>
                   </div>

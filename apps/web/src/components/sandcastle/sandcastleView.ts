@@ -188,3 +188,17 @@ export function bannerTone(
       return "secondary";
   }
 }
+
+/** Roomier sizing for the Sandcastle status pills (overrides the Badge `lg`
+ *  padding/height so the label isn't cramped against the box edges). */
+export const STATUS_PILL_CLASS = "h-auto px-3 py-1 sm:h-auto";
+
+/** A status count pill is muted (secondary/gray) while its count is zero,
+ *  taking its meaningful color only once the count is non-zero — so e.g.
+ *  "0 merged" doesn't read as a green success. */
+export function pillVariant(
+  count: number,
+  activeVariant: "success" | "warning" | "info" | "secondary",
+): "success" | "warning" | "info" | "secondary" {
+  return count > 0 ? activeVariant : "secondary";
+}

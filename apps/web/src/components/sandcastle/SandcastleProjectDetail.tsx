@@ -1,5 +1,6 @@
 // apps/web/src/components/sandcastle/SandcastleProjectDetail.tsx
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
+import { CheckIcon, GitMergeIcon } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
 import { useStore, selectProjectsAcrossEnvironments } from "../../store.ts";
@@ -23,35 +24,50 @@ import {
   historyLinksForPhase,
   partitionIssuesByPhase,
   finishedRunAgeHint,
+  pillVariant,
+  STATUS_PILL_CLASS,
 } from "./sandcastleView.ts";
 import { SandcastleIssueRow } from "./SandcastleIssueRow.tsx";
+import { LiveDot } from "./LiveDot.tsx";
+import { cn } from "~/lib/utils";
 import type { HistoryLinkRow } from "./sandcastleView.ts";
-import type { VariantProps } from "class-variance-authority";
 
 /** Clickable pill that opens a popover listing the history entries for a phase. */
 function PillPopover({
-  variant,
-  label,
-  srLabel,
+  count,
+  icon,
+  word,
+  activeVariant,
   rows,
 }: {
-  variant: NonNullable<VariantProps<typeof badgeVariants>["variant"]>;
-  label: string;
-  srLabel: string;
+  count: number;
+  icon: ReactNode;
+  word: string;
+  activeVariant: "success" | "warning" | "info" | "secondary";
   rows: HistoryLinkRow[];
 }) {
+  const srLabel = `${count} ${word}`;
   return (
     <Popover>
       <PopoverTrigger
         render={
           <button
             type="button"
-            className={badgeVariants({ variant, size: "lg" })}
+            className={cn(
+              badgeVariants({
+                variant: pillVariant(count, activeVariant),
+                size: "lg",
+              }),
+              STATUS_PILL_CLASS,
+            )}
             aria-label={`${srLabel}, view history`}
           />
         }
       >
-        {label}
+        {icon}
+        <span>
+          {count} {word}
+        </span>
       </PopoverTrigger>
       <PopoverPopup side="bottom" align="end" className="w-72">
         {rows.length === 0 ? (
@@ -147,8 +163,18 @@ export function SandcastleProjectDetail({
             </span>
           ) : null}
           {banner ? (
-            <Badge variant={bannerTone(banner.kind)} size="lg">
+            <Badge
+              variant={bannerTone(banner.kind)}
+              size="lg"
+              className={STATUS_PILL_CLASS}
+            >
+              {banner.kind === "live" ? <LiveDot /> : null}
               {banner.text}
+              {banner.kind === "live" && snap?.activity ? (
+                <span className="font-normal opacity-70">
+                  · {snap.activity}…
+                </span>
+              ) : null}
             </Badge>
           ) : null}
         </div>
@@ -165,16 +191,14 @@ export function SandcastleProjectDetail({
               {snap.run.iterations.current}/{snap.run.iterations.total}
             </span>
             <span className="text-muted-foreground">{snap.run.branch}</span>
-            {snap.activity ? (
-              <Badge variant="info" size="lg">
-                {snap.activity}…
-              </Badge>
-            ) : null}
             <div className="ms-auto flex gap-2">
               <PillPopover
-                variant="success"
-                label={`✓ ${snap.totals.merged} merged`}
-                srLabel={`${snap.totals.merged} merged`}
+                count={snap.totals.merged}
+                icon={
+                  snap.totals.merged > 0 ? <CheckIcon /> : <GitMergeIcon />
+                }
+                word="merged"
+                activeVariant="success"
                 rows={historyLinksForPhase(
                   snap.history,
                   "merged",
@@ -182,9 +206,10 @@ export function SandcastleProjectDetail({
                 )}
               />
               <PillPopover
-                variant={snap.totals.needsHuman > 0 ? "warning" : "secondary"}
-                label={`⚠ ${snap.totals.needsHuman} needs you`}
-                srLabel={`${snap.totals.needsHuman} needs you`}
+                count={snap.totals.needsHuman}
+                icon="⚠"
+                word="needs you"
+                activeVariant="warning"
                 rows={historyLinksForPhase(
                   snap.history,
                   "needs-human",
@@ -192,21 +217,16 @@ export function SandcastleProjectDetail({
                 )}
               />
               <PillPopover
-                variant="secondary"
-                label={`↻ ${snap.totals.requeued} requeued`}
-                srLabel={`${snap.totals.requeued} requeued`}
+                count={snap.totals.requeued}
+                icon="↻"
+                word="requeued"
+                activeVariant="secondary"
                 rows={historyLinksForPhase(
                   snap.history,
                   "deferred",
                   project.repositoryIdentity ?? null,
                 )}
               />
-              <Badge
-                variant={snap.totals.running > 0 ? "info" : "secondary"}
-                size="lg"
-              >
-                ▶ {snap.totals.running} running
-              </Badge>
             </div>
           </Card>
 
