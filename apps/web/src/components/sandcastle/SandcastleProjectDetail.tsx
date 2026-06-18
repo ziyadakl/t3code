@@ -3,8 +3,13 @@ import { useMemo } from "react";
 import { Link } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
 import { useStore, selectProjectsAcrossEnvironments } from "../../store.ts";
-import { Badge } from "../ui/badge.tsx";
+import { Badge, badgeVariants } from "../ui/badge.tsx";
 import { Card } from "../ui/card.tsx";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "../ui/popover.tsx";
 import {
   useSandcastleStatuses,
   statusKey,
@@ -14,10 +19,68 @@ import {
   deriveBanner,
   bannerTone,
   githubIssueUrl,
+  historyLinksForPhase,
   partitionIssuesByPhase,
   finishedRunAgeHint,
 } from "./sandcastleView.ts";
 import { SandcastleIssueRow } from "./SandcastleIssueRow.tsx";
+import type { HistoryLinkRow } from "./sandcastleView.ts";
+import type { VariantProps } from "class-variance-authority";
+
+/** Clickable pill that opens a popover listing the history entries for a phase. */
+function PillPopover({
+  variant,
+  label,
+  rows,
+}: {
+  variant: NonNullable<VariantProps<typeof badgeVariants>["variant"]>;
+  label: string;
+  rows: HistoryLinkRow[];
+}) {
+  return (
+    <Popover>
+      <PopoverTrigger
+        render={
+          <button
+            type="button"
+            className={badgeVariants({ variant, size: "sm" })}
+            aria-label={`${label} — click to see details`}
+          />
+        }
+      >
+        {label}
+      </PopoverTrigger>
+      <PopoverContent side="bottom" align="end" className="w-72">
+        {rows.length === 0 ? (
+          <p className="text-xs text-muted-foreground">Nothing recorded yet.</p>
+        ) : (
+          <ul className="flex flex-col gap-1">
+            {rows.map((row, i) => (
+              // Duplicates are intentional (same issue can appear twice in history);
+              // no reordering/removal in this read-only popover list, so index key is correct.
+              // oxlint-disable-next-line react/no-array-index-key
+              <li key={`${row.number}-${i}`} className="flex gap-1.5 text-xs">
+                {row.href ? (
+                  <a
+                    href={row.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-medium underline underline-offset-2"
+                  >
+                    #{row.number}
+                  </a>
+                ) : (
+                  <span className="font-medium">#{row.number}</span>
+                )}
+                <span className="truncate text-muted-foreground">{row.title}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 export function SandcastleProjectDetail({
   environmentId,
@@ -103,15 +166,33 @@ export function SandcastleProjectDetail({
               </Badge>
             ) : null}
             <div className="ms-auto flex gap-2">
-              <Badge variant="success" size="sm">
-                ✓ {snap.totals.merged} merged
-              </Badge>
-              <Badge variant="warning" size="sm">
-                ⚠ {snap.totals.needsHuman} needs you
-              </Badge>
-              <Badge variant="secondary" size="sm">
-                ↻ {snap.totals.requeued} requeued
-              </Badge>
+              <PillPopover
+                variant="success"
+                label={`✓ ${snap.totals.merged} merged`}
+                rows={historyLinksForPhase(
+                  snap.history,
+                  "merged",
+                  project.repositoryIdentity ?? null,
+                )}
+              />
+              <PillPopover
+                variant="warning"
+                label={`⚠ ${snap.totals.needsHuman} needs you`}
+                rows={historyLinksForPhase(
+                  snap.history,
+                  "needs-human",
+                  project.repositoryIdentity ?? null,
+                )}
+              />
+              <PillPopover
+                variant="secondary"
+                label={`↻ ${snap.totals.requeued} requeued`}
+                rows={historyLinksForPhase(
+                  snap.history,
+                  "deferred",
+                  project.repositoryIdentity ?? null,
+                )}
+              />
               <Badge variant="info" size="sm">
                 ▶ {snap.totals.running} running
               </Badge>

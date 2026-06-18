@@ -3,6 +3,7 @@ import type {
   SandcastleIssuePhase,
   SandcastleRunState,
   SandcastleStatusEntry,
+  SandcastleStatusHistoryEntry,
   SandcastleStatusIssue,
 } from "@t3tools/contracts";
 import type { RepositoryIdentity } from "@t3tools/contracts";
@@ -133,6 +134,39 @@ export function partitionIssuesByPhase(issues: readonly SandcastleStatusIssue[])
     (TERMINAL_PHASES.has(i.phase) ? recent : active).push(i);
   }
   return { active, recent };
+}
+
+/** One display row produced by historyLinksForPhase. */
+export interface HistoryLinkRow {
+  readonly number: number;
+  readonly title: string;
+  /** GitHub deep-link, or null when the repo identity can't form a slug. */
+  readonly href: string | null;
+}
+
+/**
+ * Return the displayable rows for a pill popover: history entries that match
+ * `phase`, in original order, with duplicates preserved.
+ *
+ * Returns [] when `history` is undefined/empty or no entries match.
+ */
+export function historyLinksForPhase(
+  history: readonly SandcastleStatusHistoryEntry[] | undefined,
+  phase: SandcastleIssuePhase,
+  identity: RepositoryIdentity | null | undefined,
+): HistoryLinkRow[] {
+  if (!history || history.length === 0) return [];
+  const rows: HistoryLinkRow[] = [];
+  for (const entry of history) {
+    if (entry.phase === phase) {
+      rows.push({
+        number: entry.number,
+        title: entry.title,
+        href: githubIssueUrl(identity, entry.number),
+      });
+    }
+  }
+  return rows;
 }
 
 /** Badge variant for a banner kind — maps to ui/badge.tsx variants. */

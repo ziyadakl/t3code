@@ -8,11 +8,13 @@ import {
   partitionIssuesByPhase,
   formatRelativeAge,
   finishedRunAgeHint,
+  historyLinksForPhase,
   STALE_AFTER_MS,
 } from "./sandcastleView.ts";
 import type {
   RepositoryIdentity,
   SandcastleStatusEntry,
+  SandcastleStatusHistoryEntry,
   SandcastleStatusIssue,
 } from "@t3tools/contracts";
 
@@ -170,5 +172,72 @@ describe("finishedRunAgeHint", () => {
   it("returns null for active runs (running/restarting)", () => {
     expect(finishedRunAgeHint("running", elevenHoursAgo, now)).toBeNull();
     expect(finishedRunAgeHint("restarting", elevenHoursAgo, now)).toBeNull();
+  });
+});
+
+function historyEntry(
+  number: number,
+  phase: SandcastleStatusHistoryEntry["phase"],
+  title = `Issue ${number}`,
+): SandcastleStatusHistoryEntry {
+  return { number, title, branch: `issue-${number}`, phase, completedAt: "2026-06-14T12:00:00Z" };
+}
+
+describe("historyLinksForPhase", () => {
+  const id = identity({ owner: "acme", name: "widgets" });
+
+  it("returns [] when history is undefined", () => {
+    expect(historyLinksForPhase(undefined, "merged", id)).toEqual([]);
+  });
+
+  it("returns [] when history is empty", () => {
+    expect(historyLinksForPhase([], "merged", id)).toEqual([]);
+  });
+
+  it("returns [] when no entries match the phase", () => {
+    const hist = [historyEntry(1, "deferred"), historyEntry(2, "needs-human")];
+    expect(historyLinksForPhase(hist, "merged", id)).toEqual([]);
+  });
+
+  it("filters to the requested phase only", () => {
+    const hist = [
+      historyEntry(1, "merged"),
+      historyEntry(2, "deferred"),
+      historyEntry(3, "merged"),
+      historyEntry(4, "needs-human"),
+    ];
+    const rows = historyLinksForPhase(hist, "merged", id);
+    expect(rows.map((r) => r.number)).toEqual([1, 3]);
+  });
+
+  it("preserves duplicates (same issue number appearing more than once)", () => {
+    const hist = [historyEntry(7, "merged"), historyEntry(7, "merged")];
+    const rows = historyLinksForPhase(hist, "merged", id);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.number).toBe(7);
+    expect(rows[1]!.number).toBe(7);
+  });
+
+  it("builds correct GitHub href for a known identity", () => {
+    const hist = [historyEntry(42, "merged")];
+    const rows = historyLinksForPhase(hist, "merged", id);
+    expect(rows[0]!.href).toBe("https://github.com/acme/widgets/issues/42");
+    expect(rows[0]!.title).toBe("Issue 42");
+  });
+
+  it("produces null href when identity is null", () => {
+    const hist = [historyEntry(5, "deferred")];
+    const rows = historyLinksForPhase(hist, "deferred", null);
+    expect(rows[0]!.href).toBeNull();
+  });
+
+  it("preserves original order", () => {
+    const hist = [
+      historyEntry(10, "needs-human"),
+      historyEntry(3, "needs-human"),
+      historyEntry(7, "needs-human"),
+    ];
+    const rows = historyLinksForPhase(hist, "needs-human", id);
+    expect(rows.map((r) => r.number)).toEqual([10, 3, 7]);
   });
 });
