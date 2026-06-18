@@ -45,7 +45,7 @@ function PillPopover({
         render={
           <button
             type="button"
-            className={badgeVariants({ variant, size: "sm" })}
+            className={badgeVariants({ variant, size: "lg" })}
             aria-label={`${srLabel}, view history`}
           />
         }
@@ -157,13 +157,13 @@ export function SandcastleProjectDetail({
         </p>
       ) : (
         <>
-          <Card className="flex-row flex-wrap items-center gap-3 p-4 text-sm">
+          <Card className="flex-row flex-wrap items-center gap-3 px-4 py-6 text-sm">
             <span className="text-muted-foreground">
-              iter {snap.run.iterations.current}/{snap.run.iterations.total}
+              {snap.run.iterations.current}/{snap.run.iterations.total}
             </span>
             <span className="text-muted-foreground">{snap.run.branch}</span>
             {snap.activity ? (
-              <Badge variant="info" size="sm">
+              <Badge variant="info" size="lg">
                 {snap.activity}…
               </Badge>
             ) : null}
@@ -198,7 +198,7 @@ export function SandcastleProjectDetail({
                   project.repositoryIdentity ?? null,
                 )}
               />
-              <Badge variant="info" size="sm">
+              <Badge variant="info" size="lg">
                 ▶ {snap.totals.running} running
               </Badge>
             </div>
