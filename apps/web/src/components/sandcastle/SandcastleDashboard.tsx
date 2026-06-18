@@ -43,8 +43,8 @@ export function SandcastleDashboard() {
     .filter((r) => r.value?.entry.hasSandcastleDir);
 
   return (
-    <div className="flex h-full flex-col gap-4 overflow-auto p-6">
-      <header className="flex items-baseline justify-between">
+    <div className="flex h-full min-w-0 flex-1 flex-col gap-4 overflow-auto px-16 py-6">
+      <header className="mx-auto flex w-full max-w-5xl items-baseline justify-between px-4">
         <h1 className="text-lg font-semibold">Sandcastle</h1>
         <span className="text-xs text-muted-foreground">
           {rows.length} project{rows.length === 1 ? "" : "s"}
@@ -52,13 +52,13 @@ export function SandcastleDashboard() {
       </header>
 
       {rows.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
+        <p className="mx-auto w-full max-w-5xl text-sm text-muted-foreground">
           No Sandcastle runs found. Projects appear here once they have a
           <code className="mx-1 rounded bg-muted px-1 py-0.5">.sandcastle/</code>
           directory.
         </p>
       ) : (
-        <div className="grid gap-3">
+        <div className="mx-auto grid w-full max-w-5xl gap-3">
           {rows.map(({ project, value }) => {
             const entry = value!.entry;
             const banner = deriveBanner(entry, value!.serverNow);
@@ -95,18 +95,23 @@ export function SandcastleDashboard() {
                   <div className="flex shrink-0 items-center gap-2">
                     {snap ? (
                       <>
-                        <Badge variant="info" size="sm">
+                        <Badge variant="info" size="lg">
                           ▶ {snap.totals.running}
                         </Badge>
-                        <Badge variant="success" size="sm">
+                        <Badge variant="success" size="lg">
                           ✓ {snap.totals.merged}
                         </Badge>
-                        <Badge variant="warning" size="sm">
+                        <Badge
+                          variant={
+                            snap.totals.needsHuman > 0 ? "warning" : "secondary"
+                          }
+                          size="lg"
+                        >
                           ⚠ {snap.totals.needsHuman}
                         </Badge>
                       </>
                     ) : null}
-                    <Badge variant={bannerTone(banner.kind)} size="sm">
+                    <Badge variant={bannerTone(banner.kind)} size="lg">
                       {banner.text}
                     </Badge>
                   </div>
