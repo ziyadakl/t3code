@@ -733,10 +733,22 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // ------------------------------------------------------------------
   // Context window
   // ------------------------------------------------------------------
-  const activeContextWindow = useMemo(
+  const liveContextWindow = useMemo(
     () => deriveLatestContextWindowSnapshot(activeThreadActivities ?? []),
     [activeThreadActivities],
   );
+  // The meter must stay steady, like the CLI statusline. While a turn is running
+  // the provider streams *accumulated* token totals (summed across every internal
+  // API call), which balloon toward the window cap and read ~100% — that is NOT
+  // the conversation's real context size (see ClaudeAdapter completeTurn). Only
+  // the settled end-of-turn reading is window-accurate, so adopt a new snapshot
+  // only when a turn is not running; otherwise hold the last settled value.
+  const [activeContextWindow, setActiveContextWindow] = useState(liveContextWindow);
+  useEffect(() => {
+    if (phase !== "running") {
+      setActiveContextWindow(liveContextWindow);
+    }
+  }, [phase, liveContextWindow]);
 
   // ------------------------------------------------------------------
   // Composer-local state

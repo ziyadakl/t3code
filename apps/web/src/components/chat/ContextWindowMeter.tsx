@@ -95,6 +95,12 @@ export function ContextWindowMeter(props: { usage: ContextWindowSnapshot }) {
               {formatContextWindowTokens(usage.usedTokens)} tokens used so far
             </div>
           )}
+          {usage.maxTokens !== null && usage.remainingPercentage !== null ? (
+            <div className="whitespace-nowrap text-xs text-muted-foreground">
+              {formatPercentage(usage.remainingPercentage)} left ⋅{" "}
+              {formatContextWindowTokens(usage.remainingTokens)} remaining
+            </div>
+          ) : null}
           {(usage.totalProcessedTokens ?? null) !== null &&
           (usage.totalProcessedTokens ?? 0) > usage.usedTokens ? (
             <div className="text-xs text-muted-foreground">
