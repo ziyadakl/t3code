@@ -8,10 +8,14 @@
  * still displays. The model gets full prior context via the resume cursor
  * regardless of how much is displayed (see ResumeSeedReactor).
  *
- * Determinism: each command gets a `server:resume-replay:<sessionId>:<seq>`
- * commandId (so a re-run dedupes via command receipts) and a monotonic
- * `createdAt` (so the SQL projection, which orders by created_at, renders them
- * in transcript order and strictly before any later live message).
+ * Determinism: each command gets a `server:resume-replay:<threadId>:<sessionId>:<seq>`
+ * commandId and a monotonic `createdAt` (so the SQL projection, which orders by
+ * created_at, renders them in transcript order and strictly before any later
+ * live message). The id is scoped to the THREAD, not just the session: command
+ * receipts key on command_id (its PRIMARY KEY), so a session-only id made a
+ * second thread resuming the same session collide with the first thread's
+ * receipts and get deduped to near-empty. Per-thread ids keep a single thread's
+ * re-run idempotent while letting each thread replay the same session in full.
  *
  * @module transcriptReplay
  */
@@ -151,7 +155,7 @@ export function buildReplayCommands(
     const current = seq;
     seq += 1;
     return {
-      commandId: CommandId.make(`server:resume-replay:${ctx.sessionId}:${current}`),
+      commandId: CommandId.make(`server:resume-replay:${ctx.threadId}:${ctx.sessionId}:${current}`),
       createdAt: DateTime.formatIso(DateTime.makeUnsafe(ctx.baseTimeMs + current)),
     };
   };

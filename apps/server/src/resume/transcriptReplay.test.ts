@@ -23,7 +23,7 @@ describe("buildReplayCommands", () => {
       expect(command.threadId).toBe(ctx.threadId);
       expect(command.text).toBe("fix the budget calc");
       // deterministic id + monotonic timestamp for idempotent, ordered replay
-      expect(command.commandId).toBe(`server:resume-replay:${ctx.sessionId}:0`);
+      expect(command.commandId).toBe(`server:resume-replay:${ctx.threadId}:${ctx.sessionId}:0`);
       expect(command.createdAt).toBe("2026-01-01T00:00:00.000Z");
       // ADR-0002: the Claude transcript uuid is the rewind anchor.
       expect(command.providerMessageUuid).toBe("u1");
@@ -135,6 +135,36 @@ describe("buildReplayCommands", () => {
       c.type === "thread.message.user.record" ? [c.text] : [],
     );
     expect(texts).toEqual(["middle", "newest"]);
+  });
+
+  it("scopes command ids to the thread so two threads resuming one session do not collide", () => {
+    // Regression: command ids keyed only on sessionId made every thread's replay
+    // of the SAME session produce identical ids. orchestration_command_receipts
+    // has command_id as its PRIMARY KEY, so a second thread's identical commands
+    // were deduped away and that thread came up nearly empty. Scoping the id to
+    // the thread keeps a single thread's re-run idempotent while letting two
+    // threads each replay the same session in full.
+    const messages = [
+      { type: "user" as const, uuid: "u1", message: { role: "user", content: "first" } },
+      {
+        type: "assistant" as const,
+        uuid: "a1",
+        message: { role: "assistant", content: [{ type: "text", text: "reply" }] },
+      },
+    ];
+    const threadA = buildReplayCommands(messages, ctx);
+    const threadB = buildReplayCommands(messages, {
+      ...ctx,
+      threadId: ThreadId.make("thread-replay-2"),
+    });
+
+    const idsA = new Set(threadA.map((c) => c.commandId));
+    // no command id is shared between the two threads' replays of one session
+    expect(threadB.some((c) => idsA.has(c.commandId))).toBe(false);
+
+    // same thread + same input stays stable, so an idempotent re-run still dedupes
+    const threadAgain = buildReplayCommands(messages, ctx);
+    expect(threadAgain.map((c) => c.commandId)).toEqual(threadA.map((c) => c.commandId));
   });
 
   it("uses totalMessageCount for the notice when the caller pre-slices the array", () => {
