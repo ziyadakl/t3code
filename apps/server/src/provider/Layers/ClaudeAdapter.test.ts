@@ -1825,6 +1825,199 @@ describe("ClaudeAdapterLive", () => {
   );
 
   it.effect(
+    "reports true current context from the last assistant message, not the accumulated result total",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+
+        // Same event count as the result-only usage test: the assistant frame
+        // below carries empty content so it emits no item/delta events — it only
+        // records per-call usage. So the stream produces exactly 7 events.
+        const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 7).pipe(
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          runtimeMode: "full-access",
+        });
+
+        yield* adapter.sendTurn({
+          threadId: THREAD_ID,
+          input: "hello",
+          attachments: [],
+        });
+
+        // The final API call of the turn carried ~150k of resident context
+        // (input + cache_read). That is the TRUE context-window occupancy.
+        harness.query.emit({
+          type: "assistant",
+          session_id: "sdk-session-ctx",
+          uuid: "assistant-ctx-1",
+          parent_tool_use_id: null,
+          message: {
+            id: "assistant-message-ctx-1",
+            type: "message",
+            role: "assistant",
+            model: "claude-opus-4-6",
+            stop_reason: "end_turn",
+            content: [],
+            usage: {
+              input_tokens: 50000,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 100000,
+              output_tokens: 500,
+            },
+          },
+        } as unknown as SDKMessage);
+
+        // result.usage is the SDK's ACCUMULATED total across every internal call
+        // in the turn — it balloons past the window and must NOT drive usedTokens.
+        harness.query.emit({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          duration_ms: 1234,
+          duration_api_ms: 1200,
+          num_turns: 1,
+          result: "done",
+          stop_reason: "end_turn",
+          session_id: "sdk-session-ctx-result",
+          usage: {
+            total_tokens: 900000,
+          },
+          modelUsage: {
+            "claude-opus-4-6": {
+              contextWindow: 200000,
+              maxOutputTokens: 64000,
+            },
+          },
+        } as unknown as SDKMessage);
+        harness.query.finish();
+
+        const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+        const usageEvents = runtimeEvents.filter(
+          (event) => event.type === "thread.token-usage.updated",
+        );
+        const finalUsageEvent = usageEvents.at(-1);
+        assert.equal(finalUsageEvent?.type, "thread.token-usage.updated");
+        if (finalUsageEvent?.type === "thread.token-usage.updated") {
+          assert.deepEqual(finalUsageEvent.payload, {
+            usage: {
+              usedTokens: 150000,
+              lastUsedTokens: 150000,
+              totalProcessedTokens: 900000,
+              maxTokens: 200000,
+            },
+          });
+        }
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
+  it.effect(
+    "uses the last sampling iteration's tokens for current context, not the message-level sum",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+
+        const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 7).pipe(
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          runtimeMode: "full-access",
+        });
+
+        yield* adapter.sendTurn({
+          threadId: THREAD_ID,
+          input: "hello",
+          attachments: [],
+        });
+
+        // The message-level input_tokens (999_999) is itself rolled up across
+        // server-side tool-use iterations. The SDK exposes per-iteration usage;
+        // the LAST iteration (8000 + 12000 = 20000) is the real resident context.
+        harness.query.emit({
+          type: "assistant",
+          session_id: "sdk-session-iter",
+          uuid: "assistant-iter-1",
+          parent_tool_use_id: null,
+          message: {
+            id: "assistant-message-iter-1",
+            type: "message",
+            role: "assistant",
+            model: "claude-opus-4-6",
+            stop_reason: "end_turn",
+            content: [],
+            usage: {
+              input_tokens: 999999,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+              output_tokens: 10,
+              iterations: [
+                { input_tokens: 5000, cache_creation_input_tokens: 0, cache_read_input_tokens: 10000 },
+                { input_tokens: 8000, cache_creation_input_tokens: 0, cache_read_input_tokens: 12000 },
+              ],
+            },
+          },
+        } as unknown as SDKMessage);
+
+        harness.query.emit({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          duration_ms: 1234,
+          duration_api_ms: 1200,
+          num_turns: 1,
+          result: "done",
+          stop_reason: "end_turn",
+          session_id: "sdk-session-iter-result",
+          usage: {
+            total_tokens: 1500000,
+          },
+          modelUsage: {
+            "claude-opus-4-6": {
+              contextWindow: 200000,
+              maxOutputTokens: 64000,
+            },
+          },
+        } as unknown as SDKMessage);
+        harness.query.finish();
+
+        const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+        const finalUsageEvent = runtimeEvents
+          .filter((event) => event.type === "thread.token-usage.updated")
+          .at(-1);
+        assert.equal(finalUsageEvent?.type, "thread.token-usage.updated");
+        if (finalUsageEvent?.type === "thread.token-usage.updated") {
+          assert.deepEqual(finalUsageEvent.payload, {
+            usage: {
+              usedTokens: 20000,
+              lastUsedTokens: 20000,
+              totalProcessedTokens: 1500000,
+              maxTokens: 200000,
+            },
+          });
+        }
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
+  it.effect(
     "emits completion only after turn result when assistant frames arrive before deltas",
     () => {
       const harness = makeHarness();

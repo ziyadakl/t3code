@@ -186,6 +186,11 @@ interface ClaudeSessionContext {
   turnState: ClaudeTurnState | undefined;
   lastKnownContextWindow: number | undefined;
   lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
+  // True current context-window occupancy, captured from the last top-level
+  // assistant message's per-call usage (input + cache). Unlike the accumulated
+  // result.usage / task_progress totals, this reflects what is actually resident
+  // in the window — see currentContextTokensFromUsage.
+  lastAssistantContextUsage: ThreadTokenUsageSnapshot | undefined;
   lastAssistantUuid: string | undefined;
   lastThreadStartedId: string | undefined;
   // ADR-0002 conversation-rewind: true only while an intentional rewind anchor
@@ -350,6 +355,19 @@ function maxClaudeContextWindowFromModelUsage(
   return maxContextWindow;
 }
 
+// Resident context tokens = the prompt actually sent on a single API call:
+// input + both cache tiers. Shared by the snapshot normalizer and the per-call
+// current-context derivation so the arithmetic cannot drift between them.
+function sumResidentContextTokens(source: Record<string, unknown>): number {
+  const num = (input: unknown): number =>
+    typeof input === "number" && Number.isFinite(input) ? input : 0;
+  return (
+    num(source.input_tokens) +
+    num(source.cache_creation_input_tokens) +
+    num(source.cache_read_input_tokens)
+  );
+}
+
 function normalizeClaudeTokenUsage(
   value: unknown,
   contextWindow?: number,
@@ -359,18 +377,7 @@ function normalizeClaudeTokenUsage(
   }
 
   const usage = value as Record<string, unknown>;
-  const inputTokens =
-    (typeof usage.input_tokens === "number" && Number.isFinite(usage.input_tokens)
-      ? usage.input_tokens
-      : 0) +
-    (typeof usage.cache_creation_input_tokens === "number" &&
-    Number.isFinite(usage.cache_creation_input_tokens)
-      ? usage.cache_creation_input_tokens
-      : 0) +
-    (typeof usage.cache_read_input_tokens === "number" &&
-    Number.isFinite(usage.cache_read_input_tokens)
-      ? usage.cache_read_input_tokens
-      : 0);
+  const inputTokens = sumResidentContextTokens(usage);
   const outputTokens =
     typeof usage.output_tokens === "number" && Number.isFinite(usage.output_tokens)
       ? usage.output_tokens
@@ -405,6 +412,35 @@ function normalizeClaudeTokenUsage(
       ? { durationMs: usage.duration_ms }
       : {}),
   };
+}
+
+// The SDK's accumulated result.usage sums input/cache tokens across every
+// internal API call in a turn, so it balloons past the real window (and gets
+// clamped to the cap, reading a misleading "100%"). The TRUE current context
+// size is the prompt occupancy on the LAST sampling iteration of an assistant
+// message — `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`.
+// The SDK documents this on BetaUsage.iterations: "Calculate the true context
+// window size from the last iteration." We prefer the last iteration when
+// present and fall back to the message-level usage otherwise.
+function currentContextTokensFromUsage(value: unknown): number | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const usage = value as Record<string, unknown>;
+
+  const iterations = usage.iterations;
+  if (Array.isArray(iterations) && iterations.length > 0) {
+    const last = iterations[iterations.length - 1];
+    if (last && typeof last === "object") {
+      const fromIteration = sumResidentContextTokens(last as Record<string, unknown>);
+      if (fromIteration > 0) {
+        return fromIteration;
+      }
+    }
+  }
+
+  const fromMessage = sumResidentContextTokens(usage);
+  return fromMessage > 0 ? fromMessage : undefined;
 }
 
 function asCanonicalTurnId(value: TurnId): TurnId {
@@ -1542,7 +1578,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     );
     const accumulatedTotalProcessedTokens =
       accumulatedSnapshot?.totalProcessedTokens ?? accumulatedSnapshot?.usedTokens;
-    const lastGoodUsage = context.lastKnownTokenUsage;
+    // Prefer the true current context size captured from the last top-level
+    // assistant message; fall back to the last task_progress counter. Both beat
+    // the accumulated result.usage total, which over-counts the context window
+    // and clamps to the cap (the "100% at idle" bug). lastAssistantContextUsage
+    // is intentionally NOT reset between turns: if a turn ends without a
+    // top-level assistant message (interrupt/error), carrying the prior real
+    // reading forward is better than reverting to the inflated accumulated total.
+    const lastGoodUsage = context.lastAssistantContextUsage ?? context.lastKnownTokenUsage;
     const maxTokens = resultContextWindow ?? context.lastKnownContextWindow;
     const usageSnapshot: ThreadTokenUsageSnapshot | undefined = lastGoodUsage
       ? {
@@ -2139,6 +2182,29 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     if (context.turnState) {
       context.turnState.items.push(message.message);
       yield* backfillAssistantTextBlocksFromSnapshot(context, message);
+    }
+
+    // Record the true current context-window occupancy from this assistant
+    // message's per-call usage. Only top-level messages reflect the parent
+    // conversation's context — subagent messages carry their own usage and must
+    // not drive the parent meter. completeTurn prefers this over the accumulated
+    // result.usage total when emitting the settled context-window snapshot.
+    if (message.parent_tool_use_id == null && message.subagent_type === undefined) {
+      const contextTokens = currentContextTokensFromUsage(message.message?.usage);
+      if (contextTokens !== undefined) {
+        const maxTokens = context.lastKnownContextWindow;
+        const usedTokens =
+          typeof maxTokens === "number" && Number.isFinite(maxTokens) && maxTokens > 0
+            ? Math.min(contextTokens, maxTokens)
+            : contextTokens;
+        context.lastAssistantContextUsage = {
+          usedTokens,
+          lastUsedTokens: usedTokens,
+          ...(typeof maxTokens === "number" && Number.isFinite(maxTokens) && maxTokens > 0
+            ? { maxTokens }
+            : {}),
+        };
+      }
     }
 
     context.lastAssistantUuid = message.uuid;
@@ -3150,6 +3216,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         turnState: undefined,
         lastKnownContextWindow: undefined,
         lastKnownTokenUsage: undefined,
+        lastAssistantContextUsage: undefined,
         lastAssistantUuid: resumeState?.resumeSessionAt,
         lastThreadStartedId: undefined,
         // ADR-0002 conversation-rewind: carry the rewind marker into the live
