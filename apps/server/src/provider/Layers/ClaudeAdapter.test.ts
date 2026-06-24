@@ -117,10 +117,9 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
     this.setMaxThinkingTokensCalls.push(maxThinkingTokens);
   };
 
-  readonly enableRemoteControl = async (enabled: boolean, name?: string): Promise<unknown> => {
+  readonly enableRemoteControl = async (enabled: boolean, name?: string): Promise<void> => {
     this.enableRemoteControlCalls.push({ enabled, ...(name !== undefined ? { name } : {}) });
     this.resolveEnableRemoteControl?.();
-    return undefined;
   };
 
   readonly close = (): void => {

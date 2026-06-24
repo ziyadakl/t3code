@@ -208,8 +208,9 @@ interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
   readonly setMaxThinkingTokens: (maxThinkingTokens: number | null) => Promise<void>;
   // Runtime-only SDK method (not in the public Query types) that starts the Remote
   // Control bridge. Optional so the `query(...) as ClaudeQueryRuntime` cast stays
-  // valid and older SDKs that lack it degrade gracefully.
-  readonly enableRemoteControl?: (enabled: boolean, name?: string) => Promise<unknown>;
+  // valid and older SDKs that lack it degrade gracefully. The result is discarded,
+  // so it is typed `void` rather than `unknown`.
+  readonly enableRemoteControl?: (enabled: boolean, name?: string) => Promise<void>;
   readonly close: () => void;
 }
 
@@ -3308,12 +3309,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       // so invoke the runtime method directly now that the stream is consuming and
       // can carry the control response. Forked + best-effort: it must never block
       // session start, and failures (e.g. an API-key login, which Remote Control
-      // does not support) must not break the session.
+      // does not support) must not break the session. Bounded by a timeout so a
+      // promise that never settles cannot leave the detached fiber dangling.
       yield* Effect.forkDetach(
         Effect.tryPromise({
-          try: () => context.query.enableRemoteControl?.(true) ?? Promise.resolve(undefined),
+          try: () => context.query.enableRemoteControl?.(true) ?? Promise.resolve(),
           catch: (cause) => toRequestError(threadId, "session/enableRemoteControl", cause),
         }).pipe(
+          Effect.timeout("10 seconds"),
           Effect.catch((error) => Effect.logDebug("Claude remote control not started.", { error })),
         ),
       );
