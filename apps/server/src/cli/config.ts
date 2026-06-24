@@ -86,6 +86,12 @@ export const trustTailscaleFlag = Flag.boolean("trust-tailscale").pipe(
   ),
   Flag.optional,
 );
+export const trustLoopbackFlag = Flag.boolean("trust-loopback").pipe(
+  Flag.withDescription(
+    "Skip the pairing code for requests from loopback (127.0.0.1/::1) — e.g. a browser on the same machine, or traffic proxied in by Tailscale Serve.",
+  ),
+  Flag.optional,
+);
 
 const EnvServerConfig = Config.all({
   logLevel: Config.logLevel("T3CODE_LOG_LEVEL").pipe(Config.withDefault("Info")),
@@ -146,6 +152,10 @@ const EnvServerConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  trustLoopback: Config.boolean("T3CODE_TRUST_LOOPBACK").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
 });
 
 export interface CliServerFlags {
@@ -162,6 +172,7 @@ export interface CliServerFlags {
   readonly tailscaleServeEnabled: Option.Option<boolean>;
   readonly tailscaleServePort: Option.Option<number>;
   readonly trustTailscale: Option.Option<boolean>;
+  readonly trustLoopback: Option.Option<boolean>;
 }
 
 export interface CliAuthLocationFlags {
@@ -197,6 +208,7 @@ export const sharedServerCommandFlags = {
   tailscaleServeEnabled: tailscaleServeFlag,
   tailscaleServePort: tailscaleServePortFlag,
   trustTailscale: trustTailscaleFlag,
+  trustLoopback: trustLoopbackFlag,
 } as const;
 
 export const authLocationFlags = sharedServerLocationFlags;
@@ -243,6 +255,7 @@ export const resolveServerConfig = (
       tailscaleServeEnabled: flags.tailscaleServeEnabled ?? Option.none(),
       tailscaleServePort: flags.tailscaleServePort ?? Option.none(),
       trustTailscale: flags.trustTailscale ?? Option.none(),
+      trustLoopback: flags.trustLoopback ?? Option.none(),
     } satisfies CliServerFlags;
     const bootstrapFd = Option.getOrUndefined(normalizedFlags.bootstrapFd) ?? env.bootstrapFd;
     const bootstrapEnvelope =
@@ -350,6 +363,13 @@ export const resolveServerConfig = (
       ),
       () => false,
     );
+    const trustLoopback = Option.getOrElse(
+      resolveOptionPrecedence(
+        normalizedFlags.trustLoopback,
+        Option.fromUndefinedOr(env.trustLoopback),
+      ),
+      () => false,
+    );
     const staticDir = devUrl ? undefined : yield* resolveStaticDir();
     const host = Option.getOrElse(
       resolveOptionPrecedence(
@@ -395,6 +415,7 @@ export const resolveServerConfig = (
       tailscaleServeEnabled,
       tailscaleServePort,
       trustTailscale,
+      trustLoopback,
     };
 
     return config;
@@ -419,6 +440,7 @@ export const resolveCliAuthConfig = (
       tailscaleServeEnabled: Option.none(),
       tailscaleServePort: Option.none(),
       trustTailscale: Option.none(),
+      trustLoopback: Option.none(),
     },
     cliLogLevel,
   );

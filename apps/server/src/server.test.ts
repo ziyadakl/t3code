@@ -401,6 +401,7 @@ const buildAppUnderTest = (options?: {
       logWebSocketEvents: false,
       tailscaleServeEnabled: false,
       trustTailscale: false,
+      trustLoopback: false,
       tailscaleServePort: 443,
       ...options?.config,
     };

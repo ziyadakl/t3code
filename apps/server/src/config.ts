@@ -74,6 +74,7 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly tailscaleServeEnabled: boolean;
   readonly tailscaleServePort: number;
   readonly trustTailscale: boolean;
+  readonly trustLoopback: boolean;
 }
 
 export const deriveServerPaths = Effect.fn(function* (
@@ -170,6 +171,7 @@ export class ServerConfig extends Context.Service<ServerConfig, ServerConfigShap
           tailscaleServeEnabled: false,
           tailscaleServePort: 443,
           trustTailscale: false,
+          trustLoopback: false,
           port: 0,
           host: undefined,
           desktopBootstrapToken: undefined,

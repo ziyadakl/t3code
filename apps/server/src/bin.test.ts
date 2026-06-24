@@ -84,6 +84,7 @@ const makeCliTestServerConfig = (baseDir: string) =>
       logWebSocketEvents: false,
       tailscaleServeEnabled: false,
       trustTailscale: false,
+      trustLoopback: false,
       tailscaleServePort: 443,
     } satisfies ServerConfigShape;
   });

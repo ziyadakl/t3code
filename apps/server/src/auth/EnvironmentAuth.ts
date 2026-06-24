@@ -109,11 +109,11 @@ export interface EnvironmentAuthShape {
     ServerAuthInvalidCredentialError | ServerAuthInternalError
   >;
   /**
-   * Auto-issue a browser session for a request that arrived over the trusted
-   * Tailscale tailnet (carries a `Tailscale-User-Login` identity header), so it
-   * never has to enter a pairing code. Returns `none` unless `trustTailscale` is
-   * enabled AND a valid tailnet identity is present. No pairing credential is
-   * consumed.
+   * Auto-issue a browser session for a request from a trusted origin, so it
+   * never has to enter a pairing code: a Tailscale tailnet identity header
+   * (`--trust-tailscale`) or a loopback origin (`--trust-loopback` — the same
+   * machine, or traffic proxied in by Tailscale Serve). Returns `none` unless a
+   * trust rule matches. No pairing credential is consumed.
    */
   readonly autoIssueTrustedSession: (
     request: HttpServerRequest.HttpServerRequest,
@@ -420,36 +420,59 @@ export const make = Effect.fn("makeEnvironmentAuth")(function* () {
       Effect.withSpan("EnvironmentAuth.createBrowserSession"),
     );
 
+  const isLoopbackAddress = (address: string | undefined): boolean =>
+    address === "127.0.0.1" || address === "::1";
+
+  // Decide whether (and as whom) an uncredentialed request is trusted: a
+  // Tailscale tailnet identity header (--trust-tailscale), or an origin on
+  // loopback (--trust-loopback — the same machine, or traffic proxied in by
+  // Tailscale Serve, which connects to the backend from localhost).
+  const resolveTrustedGrant = (
+    request: HttpServerRequest.HttpServerRequest,
+    requestMetadata: AuthClientMetadata,
+  ): { readonly subject: string; readonly label: string } | undefined => {
+    if (config.trustTailscale) {
+      const identity = readTailscaleIdentity(request);
+      if (identity && isAllowedTailscaleLogin(identity.login)) {
+        return {
+          subject: `tailscale:${identity.login}`,
+          label: `Tailscale: ${identity.name ?? identity.login}`,
+        };
+      }
+    }
+    if (config.trustLoopback && isLoopbackAddress(requestMetadata.ipAddress)) {
+      return { subject: "loopback", label: "Trusted loopback" };
+    }
+    return undefined;
+  };
+
   const autoIssueTrustedSession: EnvironmentAuthShape["autoIssueTrustedSession"] = (
     request,
     requestMetadata,
   ) =>
     Effect.gen(function* () {
-      if (!config.trustTailscale) {
-        return Option.none();
-      }
-      const identity = readTailscaleIdentity(request);
-      if (!identity || !isAllowedTailscaleLogin(identity.login)) {
+      const grant = resolveTrustedGrant(request, requestMetadata);
+      if (!grant) {
         return Option.none();
       }
       const session = yield* sessions
         .issue({
           method: "browser-session-cookie",
-          subject: `tailscale:${identity.login}`,
+          subject: grant.subject,
           // Standard client scopes only — full app operation, but NOT
           // access-management (pairing/session admin). Least privilege for a
           // network-trust grant.
           scopes: AuthStandardClientScopes,
           client: {
             ...requestMetadata,
-            label: `Tailscale: ${identity.name ?? identity.login}`,
+            label: grant.label,
           },
         })
         .pipe(
           Effect.mapError(
             (cause) =>
               new ServerAuthInternalError({
-                message: "Failed to issue trusted Tailscale session.",
+                message: "Failed to issue trusted session.",
                 cause,
               }),
           ),

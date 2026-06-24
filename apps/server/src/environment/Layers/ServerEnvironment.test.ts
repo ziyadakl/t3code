@@ -37,6 +37,7 @@ const makeServerConfig = Effect.fn(function* (baseDir: string) {
     logWebSocketEvents: false,
     tailscaleServeEnabled: false,
     trustTailscale: false,
+    trustLoopback: false,
     tailscaleServePort: 443,
     port: 0,
     host: undefined,

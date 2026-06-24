@@ -160,6 +160,49 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
     }).pipe(Effect.provide(makeEnvironmentAuthLayer({ trustTailscale: true }))),
   );
 
+  it.effect("auto-issues a trusted session for a loopback request when trust-loopback is on", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+
+      const issued = yield* serverAuth.autoIssueTrustedSession(makeTailscaleRequest({}), {
+        ...requestMetadata,
+        ipAddress: "127.0.0.1",
+      });
+
+      expect(Option.isSome(issued)).toBe(true);
+      const value = Option.getOrThrow(issued);
+      expect(value.response.scopes).toContain("orchestration:operate");
+      expect(value.response.scopes).not.toContain("access:write");
+
+      const verified = yield* serverAuth.authenticateHttpRequest(
+        makeCookieRequest(value.sessionToken),
+      );
+      expect(verified.subject).toBe("loopback");
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer({ trustLoopback: true }))),
+  );
+
+  it.effect("does not auto-issue for a non-loopback origin when only trust-loopback is on", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const issued = yield* serverAuth.autoIssueTrustedSession(makeTailscaleRequest({}), {
+        ...requestMetadata,
+        ipAddress: "192.168.1.23",
+      });
+      expect(Option.isNone(issued)).toBe(true);
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer({ trustLoopback: true }))),
+  );
+
+  it.effect("does not auto-issue a loopback request when trust-loopback is off", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const issued = yield* serverAuth.autoIssueTrustedSession(makeTailscaleRequest({}), {
+        ...requestMetadata,
+        ipAddress: "127.0.0.1",
+      });
+      expect(Option.isNone(issued)).toBe(true);
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
+  );
+
   it.effect("does not exchange ordinary pairing grants for administrative access tokens", () =>
     Effect.gen(function* () {
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
