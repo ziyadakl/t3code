@@ -111,6 +111,7 @@ export const AuthAdministrativeScopes = [
 
 export const AuthTokenExchangeGrantType =
   "urn:ietf:params:oauth:grant-type:token-exchange" as const;
+export const AuthTrustedAttachGrantType = "urn:t3:params:oauth:grant-type:trusted-attach" as const;
 export const AuthAccessTokenType = "urn:ietf:params:oauth:token-type:access_token" as const;
 export const AuthEnvironmentBootstrapTokenType =
   "urn:t3:params:oauth:token-type:environment-bootstrap" as const;
@@ -173,9 +174,9 @@ export const AuthClientPresentationMetadata = Schema.Struct({
 export type AuthClientPresentationMetadata = typeof AuthClientPresentationMetadata.Type;
 
 export const AuthTokenExchangeRequest = Schema.Struct({
-  grant_type: Schema.Literal(AuthTokenExchangeGrantType),
-  subject_token: TrimmedNonEmptyString,
-  subject_token_type: Schema.Literal(AuthEnvironmentBootstrapTokenType),
+  grant_type: Schema.Literals([AuthTokenExchangeGrantType, AuthTrustedAttachGrantType]),
+  subject_token: Schema.optionalKey(TrimmedNonEmptyString),
+  subject_token_type: Schema.optionalKey(Schema.Literal(AuthEnvironmentBootstrapTokenType)),
   requested_token_type: Schema.Literal(AuthAccessTokenType),
   scope: Schema.optionalKey(TrimmedNonEmptyString),
   client_label: Schema.optionalKey(TrimmedNonEmptyString),

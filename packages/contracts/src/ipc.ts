@@ -76,10 +76,7 @@ import type {
   ResumeListImportableSessionsResult,
 } from "./resume.ts";
 import type { DevServerPayload, DevServerStatus, DevServerLogs } from "./devServer.ts";
-import type {
-  SandcastleStatusAllPayload,
-  SandcastleStatusAllResult,
-} from "./sandcastle.ts";
+import type { SandcastleStatusAllPayload, SandcastleStatusAllResult } from "./sandcastle.ts";
 import type { ClientSettings, ServerSettings, ServerSettingsPatch } from "./settings.ts";
 import type {
   SourceControlCloneRepositoryInput,
@@ -353,6 +350,7 @@ export const PersistedSavedEnvironmentRecordSchema = Schema.Struct({
       relayUrl: Schema.String,
     }),
   ),
+  trustedAttach: Schema.optionalKey(Schema.Boolean),
 });
 export type PersistedSavedEnvironmentRecord = typeof PersistedSavedEnvironmentRecordSchema.Type;
 

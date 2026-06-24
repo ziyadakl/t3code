@@ -22,6 +22,7 @@ export interface SavedEnvironmentRecord {
   readonly lastConnectedAt: string | null;
   readonly desktopSsh?: PersistedSavedEnvironmentRecord["desktopSsh"];
   readonly relayManaged?: PersistedSavedEnvironmentRecord["relayManaged"];
+  readonly trustedAttach?: boolean;
 }
 
 export const SavedEnvironmentCredential = Schema.Union([
@@ -71,6 +72,7 @@ export function toPersistedSavedEnvironmentRecord(
     lastConnectedAt: record.lastConnectedAt,
     ...(record.desktopSsh ? { desktopSsh: record.desktopSsh } : {}),
     ...(record.relayManaged ? { relayManaged: record.relayManaged } : {}),
+    ...(record.trustedAttach ? { trustedAttach: record.trustedAttach } : {}),
   };
 }
 

@@ -3,6 +3,7 @@ import {
   type AuthClientPresentationMetadata,
   AuthEnvironmentBootstrapTokenType,
   AuthTokenExchangeGrantType,
+  AuthTrustedAttachGrantType,
   type AuthEnvironmentScope,
   EnvironmentHttpApi,
   EnvironmentHttpCommonError,
@@ -211,25 +212,34 @@ export const bootstrapRemoteBearerSession = Effect.fn(
   "clientRuntime.remote.bootstrapRemoteBearerSession",
 )(function* (input: {
   readonly httpBaseUrl: string;
-  readonly credential: string;
+  readonly credential?: string;
   readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
   readonly clientMetadata?: AuthClientPresentationMetadata;
   readonly timeoutMs?: number;
 }) {
   const client = yield* makeEnvironmentHttpApiClient(input.httpBaseUrl);
+  const payload =
+    input.credential !== undefined
+      ? {
+          grant_type: AuthTokenExchangeGrantType,
+          subject_token: input.credential,
+          subject_token_type: AuthEnvironmentBootstrapTokenType,
+          requested_token_type: AuthAccessTokenType,
+          ...(input.scopes ? { scope: encodeOAuthScope(input.scopes) } : {}),
+          ...clientMetadataTokenExchangeFields(input.clientMetadata),
+        }
+      : {
+          grant_type: AuthTrustedAttachGrantType,
+          requested_token_type: AuthAccessTokenType,
+          ...(input.scopes ? { scope: encodeOAuthScope(input.scopes) } : {}),
+          ...clientMetadataTokenExchangeFields(input.clientMetadata),
+        };
   return yield* executeRemoteRequest(
     remoteEndpointUrl(input.httpBaseUrl, "/oauth/token"),
     input.timeoutMs ?? DEFAULT_REMOTE_REQUEST_TIMEOUT_MS,
     client.auth.token({
       headers: {},
-      payload: {
-        grant_type: AuthTokenExchangeGrantType,
-        subject_token: input.credential,
-        subject_token_type: AuthEnvironmentBootstrapTokenType,
-        requested_token_type: AuthAccessTokenType,
-        ...(input.scopes ? { scope: encodeOAuthScope(input.scopes) } : {}),
-        ...clientMetadataTokenExchangeFields(input.clientMetadata),
-      },
+      payload,
     }),
   );
 });

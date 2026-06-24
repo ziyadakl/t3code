@@ -203,6 +203,65 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
     }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
   );
 
+  it.effect("auto-issues a trusted bearer for a tailnet attach when trust-tailscale is on", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+
+      const issued = yield* serverAuth.autoIssueTrustedAccessToken(
+        makeTailscaleRequest({ "tailscale-user-login": "ziyad@example.com" }),
+        requestMetadata,
+      );
+
+      expect(Option.isSome(issued)).toBe(true);
+      const value = Option.getOrThrow(issued);
+      expect(value.token_type).toBe("Bearer");
+      // tailnet trust grants standard client scopes only — NOT access-management admin
+      expect(value.scope).toContain("orchestration:operate");
+      expect(value.scope).not.toContain("access:write");
+      expect(value.expires_in).toBeGreaterThan(0);
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer({ trustTailscale: true }))),
+  );
+
+  it.effect("auto-issues a trusted bearer for a loopback attach when trust-loopback is on", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+
+      const issued = yield* serverAuth.autoIssueTrustedAccessToken(makeTailscaleRequest({}), {
+        ...requestMetadata,
+        ipAddress: "127.0.0.1",
+      });
+
+      expect(Option.isSome(issued)).toBe(true);
+      const value = Option.getOrThrow(issued);
+      expect(value.token_type).toBe("Bearer");
+      expect(value.scope).toContain("orchestration:operate");
+      expect(value.scope).not.toContain("access:write");
+      expect(value.expires_in).toBeGreaterThan(0);
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer({ trustLoopback: true }))),
+  );
+
+  it.effect("does not auto-issue a trusted bearer for an untrusted origin", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const issued = yield* serverAuth.autoIssueTrustedAccessToken(makeTailscaleRequest({}), {
+        ...requestMetadata,
+        ipAddress: "192.168.1.23",
+      });
+      expect(Option.isNone(issued)).toBe(true);
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer({ trustTailscale: true }))),
+  );
+
+  it.effect("does not auto-issue a trusted bearer when trust flags are off", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const issued = yield* serverAuth.autoIssueTrustedAccessToken(
+        makeTailscaleRequest({ "tailscale-user-login": "ziyad@example.com" }),
+        requestMetadata,
+      );
+      expect(Option.isNone(issued)).toBe(true);
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
+  );
+
   it.effect("does not exchange ordinary pairing grants for administrative access tokens", () =>
     Effect.gen(function* () {
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;

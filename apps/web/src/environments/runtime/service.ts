@@ -864,6 +864,34 @@ async function issueDesktopSshBearerSession(record: SavedEnvironmentRecord): Pro
   };
 }
 
+async function reissueTrustedAttachBearerSession(record: SavedEnvironmentRecord): Promise<{
+  readonly bearerToken: string;
+  readonly scopes: ReadonlyArray<AuthEnvironmentScope> | null;
+} | null> {
+  let bearerSession;
+  try {
+    bearerSession = await webRuntime.runPromise(
+      bootstrapRemoteBearerSession({ httpBaseUrl: record.httpBaseUrl }),
+    );
+  } catch (error) {
+    if (isEnvironmentAuthInvalidError(error)) {
+      return null; // server says untrusted now → caller falls through to "add it again with a pairing code"
+    }
+    throw error; // network/timeout → bubble up, do NOT delete the token
+  }
+  const didPersist = await writeSavedEnvironmentBearerToken(
+    record.environmentId,
+    bearerSession.access_token,
+  );
+  if (!didPersist) {
+    throw new Error("Unable to persist saved environment credentials.");
+  }
+  return {
+    bearerToken: bearerSession.access_token,
+    scopes: readIssuedBearerScopes(bearerSession.scope),
+  };
+}
+
 function setRuntimeConnecting(environmentId: EnvironmentId) {
   useSavedEnvironmentRuntimeStore.getState().patch(environmentId, {
     connectionState: "connecting",
@@ -1453,6 +1481,7 @@ async function ensureSavedEnvironmentConnection(
     readonly scopes?: ReadonlyArray<AuthEnvironmentScope> | null;
     readonly serverConfig?: ServerConfig | null;
     readonly allowManagedRenewal?: boolean;
+    readonly allowTrustedReattach?: boolean;
   },
 ): Promise<EnvironmentConnection> {
   const existing = environmentConnections.get(record.environmentId);
@@ -1579,11 +1608,28 @@ async function ensureSavedEnvironmentConnection(
                 });
               }
             }
+            if (activeRecord.trustedAttach && options?.allowTrustedReattach !== false) {
+              const reissued = await reissueTrustedAttachBearerSession(activeRecord);
+              if (reissued) {
+                credential = { version: 1, method: "bearer", token: reissued.bearerToken };
+                scopeHint = reissued.scopes;
+                await connection.dispose().catch(() => undefined);
+                pendingSavedEnvironmentConnections.delete(activeRecord.environmentId);
+                return await ensureSavedEnvironmentConnection(activeRecord, {
+                  credential,
+                  scopes: scopeHint,
+                  serverConfig: options?.serverConfig ?? null,
+                  allowTrustedReattach: false,
+                });
+              }
+            }
             await removeSavedEnvironmentBearerToken(activeRecord.environmentId);
             throw new Error(
               activeCredential.current.method === "dpop"
                 ? "Managed tunnel credential expired. Connect it again from T3 Connect."
-                : "Saved environment credential expired. Pair it again.",
+                : activeRecord.trustedAttach
+                  ? "This device is no longer trusted by the backend. Add it again with a pairing code."
+                  : "Saved environment credential expired. Pair it again.",
               {
                 cause: error,
               },
@@ -1833,11 +1879,13 @@ export async function addSavedEnvironment(input: {
   readonly host?: string;
   readonly pairingCode?: string;
   readonly desktopSsh?: DesktopSshEnvironmentTarget;
+  readonly trustedAttach?: boolean;
 }): Promise<SavedEnvironmentRecord> {
   const resolvedTarget = resolveRemotePairingTarget({
     ...(input.pairingUrl !== undefined ? { pairingUrl: input.pairingUrl } : {}),
     ...(input.host !== undefined ? { host: input.host } : {}),
     ...(input.pairingCode !== undefined ? { pairingCode: input.pairingCode } : {}),
+    ...(input.trustedAttach ? { trustedAttach: true } : {}),
   });
   const descriptor = input.desktopSsh
     ? await fetchDesktopSshEnvironmentDescriptor(resolvedTarget.httpBaseUrl)
@@ -1855,11 +1903,11 @@ export async function addSavedEnvironment(input: {
     existingRecord && existingRecord.environmentId !== environmentId ? existingRecord : null;
 
   const bearerSession = input.desktopSsh
-    ? await bootstrapDesktopSshBearerSession(resolvedTarget.httpBaseUrl, resolvedTarget.credential)
+    ? await bootstrapDesktopSshBearerSession(resolvedTarget.httpBaseUrl, resolvedTarget.credential!)
     : await webRuntime.runPromise(
         bootstrapRemoteBearerSession({
           httpBaseUrl: resolvedTarget.httpBaseUrl,
-          credential: resolvedTarget.credential,
+          ...(resolvedTarget.credential ? { credential: resolvedTarget.credential } : {}),
         }),
       );
 
@@ -1873,6 +1921,7 @@ export async function addSavedEnvironment(input: {
     ...((input.desktopSsh ?? existingRecord?.desktopSsh)
       ? { desktopSsh: input.desktopSsh ?? existingRecord?.desktopSsh }
       : {}),
+    ...(input.trustedAttach ? { trustedAttach: true } : {}),
   };
 
   await persistSavedEnvironmentRecord(record);

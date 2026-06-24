@@ -7,6 +7,7 @@ import {
   AuthAccessTokenType,
   AuthEnvironmentBootstrapTokenType,
   AuthTokenExchangeGrantType,
+  AuthTrustedAttachGrantType,
   CommandId,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
@@ -958,6 +959,37 @@ const exchangeAccessToken = (
     };
   });
 
+const attachTrustedAccessToken = (options?: { readonly headers?: Record<string, string> }) =>
+  Effect.gen(function* () {
+    const tokenUrl = yield* getHttpServerUrl("/oauth/token");
+    const response = yield* fetchEffect(tokenUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        ...options?.headers,
+      },
+      body: new URLSearchParams({
+        grant_type: AuthTrustedAttachGrantType,
+        requested_token_type: AuthAccessTokenType,
+      }).toString(),
+    });
+    const body = yield* responseJsonEffect<{
+      readonly access_token?: string;
+      readonly issued_token_type?: string;
+      readonly token_type?: string;
+      readonly expires_in?: number;
+      readonly scope?: string;
+      readonly _tag?: string;
+      readonly code?: string;
+      readonly reason?: string;
+      readonly traceId?: string;
+    }>(response);
+    return {
+      response,
+      body,
+    };
+  });
+
 const makeDpopProof = (input: {
   readonly method: string;
   readonly url: string;
@@ -1461,6 +1493,39 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         "access:write",
         "relay:write",
       ]);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("attaches a trusted tailnet origin to a bearer token without a pairing code", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({ config: { trustTailscale: true } });
+
+      const { response, body } = yield* attachTrustedAccessToken({
+        headers: {
+          "tailscale-user-login": "ziyad@example.com",
+        },
+      });
+
+      assert.equal(response.status, 200);
+      assert.equal(typeof body.access_token, "string");
+      assert.equal(body.token_type, "Bearer");
+      assert.isString(body.scope);
+      assert.notInclude(body.scope ?? "", "access:write");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects a trusted-attach request when the trust flags are off", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const { response, body } = yield* attachTrustedAccessToken({
+        headers: {
+          "tailscale-user-login": "ziyad@example.com",
+        },
+      });
+
+      assert.equal(response.status, 401);
+      assert.equal(body.code, "auth_invalid");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

@@ -1059,4 +1059,127 @@ describe("addSavedEnvironment", () => {
 
     await resetEnvironmentServiceForTests();
   });
+
+  it("attaches a trusted host-only environment without a pairing code", async () => {
+    mockWriteSavedEnvironmentBearerToken.mockResolvedValue(true);
+    mockResolveRemotePairingTarget.mockImplementation((_input: { host?: string }) => ({
+      httpBaseUrl: "https://srv.tailnet.ts.net:10000/",
+      wsBaseUrl: "wss://srv.tailnet.ts.net:10000/",
+    }));
+
+    const { addSavedEnvironment, resetEnvironmentServiceForTests } = await import("./service");
+
+    await expect(
+      addSavedEnvironment({
+        label: "",
+        host: "srv.tailnet.ts.net:10000",
+        trustedAttach: true,
+      }),
+    ).resolves.toMatchObject({
+      environmentId: EnvironmentId.make("environment-1"),
+    });
+
+    expect(mockResolveRemotePairingTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        host: "srv.tailnet.ts.net:10000",
+        trustedAttach: true,
+      }),
+    );
+    const bootstrapArg = mockBootstrapRemoteBearerSession.mock.calls[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(bootstrapArg).toBeDefined();
+    expect("credential" in bootstrapArg).toBe(false);
+    expect(mockPersistSavedEnvironmentRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trustedAttach: true,
+      }),
+    );
+
+    await resetEnvironmentServiceForTests();
+  });
+
+  it("silently re-attaches a trusted environment on 401 and rewrites the token", async () => {
+    const environmentId = EnvironmentId.make("environment-1");
+    mockSavedRecords = [
+      {
+        environmentId,
+        label: "Trusted backend",
+        httpBaseUrl: "https://srv.tailnet.ts.net:10000/",
+        wsBaseUrl: "wss://srv.tailnet.ts.net:10000/",
+        createdAt: "2026-06-23T00:00:00.000Z",
+        lastConnectedAt: null,
+        trustedAttach: true,
+      },
+    ];
+    mockReadSavedEnvironmentBearerToken.mockResolvedValue("stale-bearer-token");
+    mockWriteSavedEnvironmentBearerToken.mockResolvedValue(true);
+    mockFetchRemoteSessionState
+      .mockReturnValueOnce(
+        Effect.fail(
+          decodeEnvironmentAuthInvalidError({
+            _tag: "EnvironmentAuthInvalidError",
+            code: "auth_invalid",
+            reason: "invalid_credential",
+            traceId: "trace-trusted-401",
+          }),
+        ),
+      )
+      .mockReturnValue(Effect.succeed({ authenticated: true, scopes: ["orchestration:read"] }));
+    mockBootstrapRemoteBearerSession.mockReturnValue(
+      Effect.succeed({
+        access_token: "fresh-trusted-token",
+        scope: "orchestration:read orchestration:operate terminal:operate review:write relay:read",
+      }),
+    );
+
+    const { reconnectSavedEnvironment, resetEnvironmentServiceForTests } =
+      await import("./service");
+    await reconnectSavedEnvironment(environmentId);
+
+    expect(mockWriteSavedEnvironmentBearerToken).toHaveBeenCalledWith(
+      environmentId,
+      "fresh-trusted-token",
+    );
+    expect(mockRemoveSavedEnvironmentBearerToken).not.toHaveBeenCalled();
+
+    await resetEnvironmentServiceForTests();
+  });
+
+  it("trusted re-attach refused when server says untrusted", async () => {
+    const environmentId = EnvironmentId.make("environment-1");
+    mockSavedRecords = [
+      {
+        environmentId,
+        label: "Trusted backend",
+        httpBaseUrl: "https://srv.tailnet.ts.net:10000/",
+        wsBaseUrl: "wss://srv.tailnet.ts.net:10000/",
+        createdAt: "2026-06-23T00:00:00.000Z",
+        lastConnectedAt: null,
+        trustedAttach: true,
+      },
+    ];
+    mockReadSavedEnvironmentBearerToken.mockResolvedValue("stale-bearer-token");
+    mockWriteSavedEnvironmentBearerToken.mockResolvedValue(true);
+    const authError = decodeEnvironmentAuthInvalidError({
+      _tag: "EnvironmentAuthInvalidError",
+      code: "auth_invalid",
+      reason: "invalid_credential",
+      traceId: "trace-trusted-untrusted",
+    });
+    mockFetchRemoteSessionState.mockReturnValueOnce(Effect.fail(authError));
+    mockBootstrapRemoteBearerSession.mockReturnValue(Effect.fail(authError));
+
+    const { reconnectSavedEnvironment, resetEnvironmentServiceForTests } =
+      await import("./service");
+
+    await expect(reconnectSavedEnvironment(environmentId)).rejects.toThrow(
+      /add it again with a pairing code/i,
+    );
+
+    expect(mockRemoveSavedEnvironmentBearerToken).toHaveBeenCalledWith(environmentId);
+
+    await resetEnvironmentServiceForTests();
+  });
 });

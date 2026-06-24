@@ -4,6 +4,7 @@ import {
   PlusIcon,
   QrCodeIcon,
   RefreshCwIcon,
+  ShieldCheckIcon,
   TerminalIcon,
   TriangleAlertIcon,
 } from "lucide-react";
@@ -1993,7 +1994,7 @@ export function ConnectionsSettings() {
   >(null);
   const [isRevokingOtherDesktopClients, setIsRevokingOtherDesktopClients] = useState(false);
   const [addBackendDialogOpen, setAddBackendDialogOpen] = useState(false);
-  const [savedBackendMode, setSavedBackendMode] = useState<"remote" | "ssh">("remote");
+  const [savedBackendMode, setSavedBackendMode] = useState<"remote" | "trusted" | "ssh">("remote");
   const [savedBackendHost, setSavedBackendHost] = useState("");
   const [savedBackendPairingCode, setSavedBackendPairingCode] = useState("");
   const [savedBackendSshHost, setSavedBackendSshHost] = useState("");
@@ -2265,6 +2266,49 @@ export function ConnectionsSettings() {
       } catch (error) {
         const message = formatDesktopSshConnectionError(error);
         setSavedBackendError(message);
+      } finally {
+        setIsAddingSavedBackend(false);
+      }
+      return;
+    }
+
+    if (savedBackendMode === "trusted") {
+      setIsAddingSavedBackend(true);
+      setSavedBackendError(null);
+      try {
+        const host = savedBackendHost.trim();
+        if (!host) {
+          throw new Error("Enter a backend host.");
+        }
+        const record = await addSavedEnvironment({ label: "", host, trustedAttach: true });
+        setSavedBackendHost("");
+        setSavedBackendPairingCode("");
+        setSavedBackendSshHost("");
+        setSavedBackendSshUsername("");
+        setSavedBackendSshPort("");
+        setAddBackendDialogOpen(false);
+        toastManager.add({
+          type: "success",
+          title: "Backend added",
+          description: `${record.label} is now saved and will reconnect on app startup.`,
+        });
+      } catch (error) {
+        const rawMessage = error instanceof Error ? error.message : "Failed to add backend.";
+        const isAuthInvalid =
+          (typeof (error as { _tag?: unknown })?._tag === "string" &&
+            (error as { _tag: string })._tag === "EnvironmentAuthInvalidError") ||
+          /auth_invalid|AuthInvalid|untrusted/i.test(rawMessage);
+        const message = isAuthInvalid
+          ? "This backend didn't accept a trusted attach. Use 'Remote link' with a pairing code instead."
+          : rawMessage;
+        setSavedBackendError(message);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not add backend",
+            description: message,
+          }),
+        );
       } finally {
         setIsAddingSavedBackend(false);
       }
@@ -2620,7 +2664,7 @@ export function ConnectionsSettings() {
   }, []);
 
   const renderConnectionModeCard = (input: {
-    readonly mode: "remote" | "ssh";
+    readonly mode: "remote" | "trusted" | "ssh";
     readonly title: string;
     readonly description: string;
     readonly icon?: ReactNode;
@@ -2695,6 +2739,35 @@ export function ConnectionsSettings() {
   const renderRemoteModeBody = () => (
     <div className="space-y-4">
       {renderRemoteFields()}
+      {savedBackendError ? <p className="text-xs text-destructive">{savedBackendError}</p> : null}
+      <Button
+        variant="outline"
+        className="w-full"
+        disabled={isAddingSavedBackend}
+        onClick={() => void handleAddSavedBackend()}
+      >
+        <PlusIcon className="size-3.5" />
+        {isAddingSavedBackend ? "Adding…" : "Add environment"}
+      </Button>
+    </div>
+  );
+  const renderTrustedModeBody = () => (
+    <div className="space-y-4">
+      <div className="space-y-3">
+        <label className="block">
+          <span className="mb-1.5 block text-xs font-medium text-foreground">Host</span>
+          <Input
+            value={savedBackendHost}
+            onChange={(event) => setSavedBackendHost(event.target.value)}
+            placeholder="backend.example.com"
+            disabled={isAddingSavedBackend}
+            spellCheck={false}
+          />
+        </label>
+        <span className="mt-1 block text-[11px] text-muted-foreground">
+          No pairing code needed on your tailnet.
+        </span>
+      </div>
       {savedBackendError ? <p className="text-xs text-destructive">{savedBackendError}</p> : null}
       <Button
         variant="outline"
@@ -3204,6 +3277,12 @@ export function ConnectionsSettings() {
                       description: "Enter a backend host and pairing code.",
                       icon: <ChevronsLeftRightEllipsisIcon aria-hidden className="size-4" />,
                     })}
+                    {renderConnectionModeCard({
+                      mode: "trusted",
+                      title: "Trusted tailnet",
+                      description: "Attach by host only — no pairing code on your tailnet.",
+                      icon: <ShieldCheckIcon aria-hidden className="size-4" />,
+                    })}
                     {desktopBridge
                       ? renderConnectionModeCard({
                           mode: "ssh",
@@ -3214,7 +3293,11 @@ export function ConnectionsSettings() {
                       : null}
                   </div>
                   <AnimatedHeight>
-                    {savedBackendMode === "ssh" ? renderSshFields() : renderRemoteModeBody()}
+                    {savedBackendMode === "ssh"
+                      ? renderSshFields()
+                      : savedBackendMode === "trusted"
+                        ? renderTrustedModeBody()
+                        : renderRemoteModeBody()}
                   </AnimatedHeight>
                 </div>
               </DialogPanel>

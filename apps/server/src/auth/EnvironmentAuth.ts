@@ -125,6 +125,20 @@ export interface EnvironmentAuthShape {
     }>,
     ServerAuthInternalError
   >;
+  /**
+   * Bearer analogue of {@link autoIssueTrustedSession}: mint a standard-scoped
+   * access token for a request from a trusted origin (Tailscale tailnet
+   * identity header, or loopback) without a pairing code. Returns `none` unless
+   * a trust rule matches. With a `proofKeyThumbprint`, issues a DPoP-bound,
+   * short-lived token; otherwise a 90-day bearer.
+   */
+  readonly autoIssueTrustedAccessToken: (
+    request: HttpServerRequest.HttpServerRequest,
+    requestMetadata: AuthClientMetadata,
+    input?: {
+      readonly proofKeyThumbprint?: string;
+    },
+  ) => Effect.Effect<Option.Option<AuthAccessTokenResult>, ServerAuthInternalError>;
   readonly exchangeBootstrapCredentialForAccessToken: (
     credential: string,
     requestedScopes: ReadonlyArray<AuthEnvironmentScope> | undefined,
@@ -488,6 +502,57 @@ export const make = Effect.fn("makeEnvironmentAuth")(function* () {
       });
     }).pipe(Effect.withSpan("EnvironmentAuth.autoIssueTrustedSession"));
 
+  const autoIssueTrustedAccessToken: EnvironmentAuthShape["autoIssueTrustedAccessToken"] = (
+    request,
+    requestMetadata,
+    input,
+  ) =>
+    Effect.gen(function* () {
+      const grant = resolveTrustedGrant(request, requestMetadata);
+      if (!grant) {
+        return Option.none();
+      }
+      const session = yield* sessions
+        .issue({
+          method: input?.proofKeyThumbprint ? "dpop-access-token" : "bearer-access-token",
+          subject: grant.subject,
+          // Standard client scopes only — full app operation, but NOT
+          // access-management (pairing/session admin). Least privilege for a
+          // network-trust grant.
+          scopes: AuthStandardClientScopes,
+          ...(input?.proofKeyThumbprint
+            ? {
+                proofKeyThumbprint: input.proofKeyThumbprint,
+                ttl: Duration.hours(1),
+              }
+            : { ttl: Duration.days(90) }),
+          client: {
+            ...requestMetadata,
+            label: grant.label,
+          },
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new ServerAuthInternalError({
+                message: "Failed to issue trusted access token.",
+                cause,
+              }),
+          ),
+        );
+      const now = yield* DateTime.now;
+      return Option.some({
+        access_token: session.token,
+        issued_token_type: AuthAccessTokenType,
+        token_type: input?.proofKeyThumbprint ? "DPoP" : "Bearer",
+        expires_in: Math.max(
+          0,
+          Math.floor((session.expiresAt.epochMilliseconds - now.epochMilliseconds) / 1000),
+        ),
+        scope: encodeOAuthScope(session.scopes),
+      } satisfies AuthAccessTokenResult);
+    }).pipe(Effect.withSpan("EnvironmentAuth.autoIssueTrustedAccessToken"));
+
   const exchangeBootstrapCredentialForAccessToken: EnvironmentAuthShape["exchangeBootstrapCredentialForAccessToken"] =
     (credential, requestedScopes, requestMetadata, input) =>
       bootstrapCredentials.consume(credential, input).pipe(
@@ -779,6 +844,7 @@ export const make = Effect.fn("makeEnvironmentAuth")(function* () {
     getSessionState,
     createBrowserSession,
     autoIssueTrustedSession,
+    autoIssueTrustedAccessToken,
     exchangeBootstrapCredentialForAccessToken,
     createPairingLink,
     issuePairingCredential,

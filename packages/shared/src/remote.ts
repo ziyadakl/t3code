@@ -49,7 +49,7 @@ const toWsBaseUrl = (url: URL): string => {
 };
 
 export interface ResolvedRemotePairingTarget {
-  readonly credential: string;
+  readonly credential?: string;
   readonly httpBaseUrl: string;
   readonly wsBaseUrl: string;
 }
@@ -108,6 +108,7 @@ export const resolveRemotePairingTarget = (input: {
   readonly pairingUrl?: string;
   readonly host?: string;
   readonly pairingCode?: string;
+  readonly trustedAttach?: boolean;
 }): ResolvedRemotePairingTarget => {
   const pairingUrl = input.pairingUrl?.trim() ?? "";
   if (pairingUrl.length > 0) {
@@ -138,13 +139,13 @@ export const resolveRemotePairingTarget = (input: {
   if (!host) {
     throw new Error("Enter a backend URL.");
   }
-  if (!pairingCode) {
+  if (!input.trustedAttach && !pairingCode) {
     throw new Error("Enter a pairing code.");
   }
 
   const normalizedHost = normalizeRemoteBaseUrl(host);
   return {
-    credential: pairingCode,
+    ...(input.trustedAttach ? {} : { credential: pairingCode }),
     httpBaseUrl: toHttpBaseUrl(normalizedHost),
     wsBaseUrl: toWsBaseUrl(normalizedHost),
   };

@@ -9,6 +9,7 @@ import {
   AuthRelayWriteScope,
   AuthReviewWriteScope,
   AuthTerminalOperateScope,
+  AuthTrustedAttachGrantType,
   EnvironmentAuthInvalidError,
   type EnvironmentAuthInvalidReason,
   EnvironmentHttpApi,
@@ -309,19 +310,38 @@ export const authHttpApiLayer = HttpApiBuilder.group(
                 )
               : undefined;
             yield* appendCredentialResponseHeaders;
+            const requestMetadata = deriveAuthClientMetadata({
+              request,
+              presented: {
+                ...(args.payload.client_label ? { label: args.payload.client_label } : {}),
+                ...(args.payload.client_device_type
+                  ? { deviceType: args.payload.client_device_type }
+                  : {}),
+                ...(args.payload.client_os ? { os: args.payload.client_os } : {}),
+              },
+            });
+            // Codeless trusted-attach: a request from a trusted origin (Tailscale
+            // tailnet identity header, or loopback) mints a standard-scoped token
+            // without a pairing code. No-op unless a trust flag is on and a trust
+            // rule matches; otherwise the credential is treated as invalid.
+            if (args.payload.grant_type === AuthTrustedAttachGrantType) {
+              const issued = yield* serverAuth.autoIssueTrustedAccessToken(
+                request,
+                requestMetadata,
+                proofKeyThumbprint ? { proofKeyThumbprint } : undefined,
+              );
+              if (Option.isNone(issued)) {
+                return yield* failEnvironmentAuthInvalid("invalid_credential");
+              }
+              return issued.value;
+            }
+            if (args.payload.subject_token === undefined) {
+              return yield* failEnvironmentInvalidRequest("invalid_command");
+            }
             return yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
               args.payload.subject_token,
               requestedScopes,
-              deriveAuthClientMetadata({
-                request,
-                presented: {
-                  ...(args.payload.client_label ? { label: args.payload.client_label } : {}),
-                  ...(args.payload.client_device_type
-                    ? { deviceType: args.payload.client_device_type }
-                    : {}),
-                  ...(args.payload.client_os ? { os: args.payload.client_os } : {}),
-                },
-              }),
+              requestMetadata,
               proofKeyThumbprint ? { proofKeyThumbprint } : undefined,
             );
           },
