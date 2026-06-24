@@ -1,15 +1,16 @@
 /**
- * SessionTitleReactor — writes a deliberate t3 thread rename through to the
- * underlying Claude CLI session's custom title, so resuming that session from
- * the terminal shows the new name.
+ * SessionTitleReactor — writes a t3 thread's title through to the underlying
+ * Claude CLI session's custom title, so the session is listed and named in the
+ * terminal `claude --resume` picker (which only surfaces sessions that carry a
+ * title record on disk).
  *
  * The Claude Agent SDK's `renameSession` appends a custom-title entry to the
- * session's JSONL file (exactly what the CLI `/rename` does). We call it ONLY
- * for deliberate USER renames of Claude-backed threads:
+ * session's JSONL file (exactly what the CLI `/rename` does). We call it for any
+ * t3-set title of a Claude-backed thread:
  *
  *  - `thread.meta-updated` with a non-empty `title`, and
- *  - `titleSource === "user"` — the load-bearing gate. Auto-titles are tagged
- *    `"auto"` and worktree-branch renames carry no title, so both are skipped.
+ *  - `titleSource === "user"` (a deliberate rename) OR `"auto"` (the first-turn
+ *    auto-title). Worktree-branch renames carry no title, so they are skipped.
  *
  * The write-through is forked and failures are logged, never propagated: a
  * CLI-file write must never block the in-app rename or tear down the event
@@ -96,6 +97,14 @@ export interface MetaUpdatedForRename {
 }
 
 /**
+ * Which title sources we mirror to the Claude session: a deliberate user rename
+ * (`"user"`) and the first-turn auto-title (`"auto"`). Worktree-branch renames
+ * carry no source and are excluded. Shared by both gate sites so they can't drift.
+ */
+const isWriteThroughSource = (titleSource: MetaUpdatedForRename["titleSource"]): boolean =>
+  titleSource === "user" || titleSource === "auto";
+
+/**
  * Resolve the workspace root (dir) for a thread's rename, best-effort. Any
  * miss — no thread shell, no project shell, or a projection read error —
  * degrades to `undefined` so the rename is never blocked on dir resolution.
@@ -117,9 +126,10 @@ const resolveThreadDir = (threadId: ThreadId) =>
 
 /**
  * React to a `thread.meta-updated`: write the new title through to the Claude
- * session, but ONLY for deliberate user renames of Claude-backed threads that
- * have actually run a session. Resolves dir best-effort, then FORKS the
- * write-through so a slow/failing CLI write never blocks the stream.
+ * session, but ONLY for t3-set titles (a user rename or the first-turn
+ * auto-title) of Claude-backed threads that have actually run a session.
+ * Resolves dir best-effort, then FORKS the write-through so a slow/failing CLI
+ * write never blocks the stream.
  *
  * `renameSession` is injected so this is unit-testable without the real SDK.
  */
@@ -129,7 +139,7 @@ export const handleMetaUpdated = (
 ) =>
   Effect.gen(function* () {
     const title = payload.title;
-    if (!title || payload.titleSource !== "user") {
+    if (!title || !isWriteThroughSource(payload.titleSource)) {
       return;
     }
 
@@ -149,16 +159,14 @@ export const handleMetaUpdated = (
     const dir = yield* resolveThreadDir(payload.threadId);
 
     yield* Effect.forkScoped(
-      deps
-        .renameSession(sessionId, title, dir ? { dir } : undefined)
-        .pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning("session title write-through failed", {
-              threadId: payload.threadId,
-              cause: Cause.pretty(cause),
-            }),
-          ),
+      deps.renameSession(sessionId, title, dir ? { dir } : undefined).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("session title write-through failed", {
+            threadId: payload.threadId,
+            cause: Cause.pretty(cause),
+          }),
         ),
+      ),
     );
   });
 
@@ -189,7 +197,7 @@ const make = Effect.gen(function* () {
           return Effect.void;
         }
         const payload = event.payload;
-        if (!payload.title || payload.titleSource !== "user") {
+        if (!payload.title || !isWriteThroughSource(payload.titleSource)) {
           return Effect.void;
         }
         return handleMetaUpdated(payload, { renameSession: liveRenameSessionWrite }).pipe(

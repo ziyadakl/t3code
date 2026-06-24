@@ -101,29 +101,27 @@ const seedClaudeBinding = (threadId: ThreadId, resumeCursor: unknown) =>
 it.layer(makeBaseLayers(SqlitePersistenceMemory, ThreadId.make("thread-fires")))(
   "SessionTitleReactor",
   (it) => {
-    it.effect(
-      "fires renameSession for a user rename of a Claude thread with a resume cursor",
-      () =>
-        Effect.gen(function* () {
-          const threadId = ThreadId.make("thread-fires");
-          yield* seedClaudeBinding(threadId, { resume: CLAUDE_SESSION_ID });
+    it.effect("fires renameSession for a user rename of a Claude thread with a resume cursor", () =>
+      Effect.gen(function* () {
+        const threadId = ThreadId.make("thread-fires");
+        yield* seedClaudeBinding(threadId, { resume: CLAUDE_SESSION_ID });
 
-          const { calls, renameSession } = makeRecorder();
-          yield* handleMetaUpdated(
-            { threadId, title: "Renamed by user", titleSource: "user" },
-            { renameSession },
-          );
-          // The write-through is forked; let the forked fiber run.
-          yield* Effect.yieldNow;
-          yield* Effect.yieldNow;
+        const { calls, renameSession } = makeRecorder();
+        yield* handleMetaUpdated(
+          { threadId, title: "Renamed by user", titleSource: "user" },
+          { renameSession },
+        );
+        // The write-through is forked; let the forked fiber run.
+        yield* Effect.yieldNow;
+        yield* Effect.yieldNow;
 
-          assert.equal(calls.length, 1);
-          assert.deepEqual(calls[0], {
-            sessionId: CLAUDE_SESSION_ID,
-            title: "Renamed by user",
-            dir: WORKSPACE_ROOT,
-          });
-        }),
+        assert.equal(calls.length, 1);
+        assert.deepEqual(calls[0], {
+          sessionId: CLAUDE_SESSION_ID,
+          title: "Renamed by user",
+          dir: WORKSPACE_ROOT,
+        });
+      }),
     );
 
     it.effect("falls back to the cursor's sessionId when there is no resume", () =>
@@ -137,13 +135,14 @@ it.layer(makeBaseLayers(SqlitePersistenceMemory, ThreadId.make("thread-fires")))
           { renameSession },
         );
         yield* Effect.yieldNow;
-          yield* Effect.yieldNow;
+        yield* Effect.yieldNow;
 
         assert.equal(calls.length, 1);
         assert.equal(calls[0]?.sessionId, CLAUDE_SESSION_ID);
-      }));
+      }),
+    );
 
-    it.effect("does NOT fire for an auto title", () =>
+    it.effect("fires renameSession for a first-turn auto title", () =>
       Effect.gen(function* () {
         const threadId = ThreadId.make("thread-fires");
         yield* seedClaudeBinding(threadId, { resume: CLAUDE_SESSION_ID });
@@ -153,11 +152,18 @@ it.layer(makeBaseLayers(SqlitePersistenceMemory, ThreadId.make("thread-fires")))
           { threadId, title: "Auto title", titleSource: "auto" },
           { renameSession },
         );
+        // The write-through is forked; let the forked fiber run.
         yield* Effect.yieldNow;
-          yield* Effect.yieldNow;
+        yield* Effect.yieldNow;
 
-        assert.equal(calls.length, 0);
-      }));
+        assert.equal(calls.length, 1);
+        assert.deepEqual(calls[0], {
+          sessionId: CLAUDE_SESSION_ID,
+          title: "Auto title",
+          dir: WORKSPACE_ROOT,
+        });
+      }),
+    );
 
     it.effect("does NOT fire when titleSource is absent", () =>
       Effect.gen(function* () {
@@ -165,15 +171,13 @@ it.layer(makeBaseLayers(SqlitePersistenceMemory, ThreadId.make("thread-fires")))
         yield* seedClaudeBinding(threadId, { resume: CLAUDE_SESSION_ID });
 
         const { calls, renameSession } = makeRecorder();
-        yield* handleMetaUpdated(
-          { threadId, title: "Branch rename" },
-          { renameSession },
-        );
+        yield* handleMetaUpdated({ threadId, title: "Branch rename" }, { renameSession });
         yield* Effect.yieldNow;
-          yield* Effect.yieldNow;
+        yield* Effect.yieldNow;
 
         assert.equal(calls.length, 0);
-      }));
+      }),
+    );
 
     it.effect("does NOT fire when there is no binding", () =>
       Effect.gen(function* () {
@@ -188,10 +192,11 @@ it.layer(makeBaseLayers(SqlitePersistenceMemory, ThreadId.make("thread-fires")))
           { renameSession },
         );
         yield* Effect.yieldNow;
-          yield* Effect.yieldNow;
+        yield* Effect.yieldNow;
 
         assert.equal(calls.length, 0);
-      }));
+      }),
+    );
 
     it.effect("does NOT fire for a non-Claude provider binding", () =>
       Effect.gen(function* () {
@@ -213,10 +218,11 @@ it.layer(makeBaseLayers(SqlitePersistenceMemory, ThreadId.make("thread-fires")))
           { renameSession },
         );
         yield* Effect.yieldNow;
-          yield* Effect.yieldNow;
+        yield* Effect.yieldNow;
 
         assert.equal(calls.length, 0);
-      }));
+      }),
+    );
 
     it.effect("does NOT fire when the cursor has no resume/sessionId", () =>
       Effect.gen(function* () {
@@ -229,10 +235,11 @@ it.layer(makeBaseLayers(SqlitePersistenceMemory, ThreadId.make("thread-fires")))
           { renameSession },
         );
         yield* Effect.yieldNow;
-          yield* Effect.yieldNow;
+        yield* Effect.yieldNow;
 
         assert.equal(calls.length, 0);
-      }));
+      }),
+    );
 
     it.effect("omits dir when the thread's workspace root cannot be resolved", () =>
       Effect.gen(function* () {
@@ -247,11 +254,12 @@ it.layer(makeBaseLayers(SqlitePersistenceMemory, ThreadId.make("thread-fires")))
           { renameSession },
         );
         yield* Effect.yieldNow;
-          yield* Effect.yieldNow;
+        yield* Effect.yieldNow;
 
         assert.equal(calls.length, 1);
         assert.equal(calls[0]?.dir, undefined);
-      }));
+      }),
+    );
 
     it.effect("still fires (dir omitted) when dir resolution ERRORS", () =>
       Effect.gen(function* () {
@@ -295,6 +303,7 @@ it.layer(makeBaseLayers(SqlitePersistenceMemory, ThreadId.make("thread-fires")))
 
         assert.equal(calls.length, 1);
         assert.equal(calls[0]?.dir, undefined);
-      }));
+      }),
+    );
   },
 );
