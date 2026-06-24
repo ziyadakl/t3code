@@ -138,4 +138,33 @@ describe("ChatMarkdown", () => {
       await screen.unmount();
     }
   });
+
+  it("does not treat a single tilde as GFM strikethrough", async () => {
+    const text = "at ~$1,012 all-in, mixing 2 DWS06 rears (~$570)";
+    const screen = await render(<ChatMarkdown text={text} cwd="/repo/project" />);
+
+    try {
+      // singleTilde: false — a lone ~...~ must not render as <del> strikethrough.
+      await expect.element(page.getByText(text)).toBeInTheDocument();
+      expect(document.querySelector("del")).toBeNull();
+      // The literal tildes are preserved verbatim, not stripped as markup.
+      const paragraph = document.querySelector(".chat-markdown p");
+      expect(paragraph?.textContent).toBe(text);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("still renders double-tilde as GFM strikethrough", async () => {
+    const screen = await render(<ChatMarkdown text="~~struck~~" cwd="/repo/project" />);
+
+    try {
+      await expect.element(page.getByText("struck")).toBeInTheDocument();
+      const del = document.querySelector("del");
+      expect(del).not.toBeNull();
+      expect(del?.textContent).toBe("struck");
+    } finally {
+      await screen.unmount();
+    }
+  });
 });
