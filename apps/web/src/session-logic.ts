@@ -233,6 +233,32 @@ function isStalePendingRequestFailureDetail(detail: string | undefined): boolean
   );
 }
 
+/**
+ * An approval or user-input submit can fail after the app restarts: the in-memory provider
+ * callback that would consume the answer does not survive a restart (or a recovered session).
+ * The backend reports this as a `provider.*.respond.failed` activity with a "stale pending"
+ * detail — but it is emitted with `turnId: null`, so it is filtered out of the work log and the
+ * pending card simply vanishes, leaving the submit to fail silently. Returns a plain-language
+ * notice to surface in the thread error banner, or null when the activity is not such a failure.
+ */
+export function staleProviderFailureNotice(activity: OrchestrationThreadActivity): string | null {
+  if (
+    activity.kind !== "provider.user-input.respond.failed" &&
+    activity.kind !== "provider.approval.respond.failed"
+  ) {
+    return null;
+  }
+  const payload =
+    activity.payload && typeof activity.payload === "object"
+      ? (activity.payload as Record<string, unknown>)
+      : null;
+  const detail = payload && typeof payload.detail === "string" ? payload.detail : undefined;
+  if (!isStalePendingRequestFailureDetail(detail)) {
+    return null;
+  }
+  return "This turn can't continue because the app restarted since it started. Send a new message to pick up where you left off.";
+}
+
 export function derivePendingApprovals(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): PendingApproval[] {
@@ -1236,10 +1262,7 @@ export function inferCheckpointTurnCountByTurnId(
  * No `node:path` dependency — intentionally pure string ops so it is safe in
  * both Node and browser contexts.
  */
-export function toRepoRelativePath(
-  p: string,
-  root: string | null | undefined,
-): string {
+export function toRepoRelativePath(p: string, root: string | null | undefined): string {
   const stripped = p.startsWith("./") ? p.slice(2) : p;
   if (!root || !stripped.startsWith("/")) return stripped;
   const base = root.endsWith("/") ? root : root + "/";
@@ -1275,10 +1298,7 @@ export function agentEditSetByTurnId(
   const result = new Map<TurnId, ReadonlyArray<string>>();
   for (const [turnId, turnActivities] of byTurn) {
     const rawPaths = agentEditSet(turnActivities);
-    result.set(
-      turnId,
-      root ? rawPaths.map((p) => toRepoRelativePath(p, root)) : rawPaths,
-    );
+    result.set(turnId, root ? rawPaths.map((p) => toRepoRelativePath(p, root)) : rawPaths);
   }
   return result;
 }
@@ -1294,10 +1314,7 @@ export function agentEditSetByTurnId(
  *
  * A leading `./` is stripped from `diffPath` before matching.
  */
-export function pathIsInAgentEditSet(
-  diffPath: string,
-  agentPaths: ReadonlyArray<string>,
-): boolean {
+export function pathIsInAgentEditSet(diffPath: string, agentPaths: ReadonlyArray<string>): boolean {
   // Strip a leading "./" that some tools emit.
   const normalized = diffPath.startsWith("./") ? diffPath.slice(2) : diffPath;
   return agentPaths.some((h) => h === normalized);

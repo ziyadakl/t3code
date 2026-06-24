@@ -1208,3 +1208,60 @@ describe("thread.conversation-rewound", () => {
     expect(thread?.proposedPlans).toHaveLength(2);
   });
 });
+
+describe("applyOrchestrationEvent — stale provider failure surfacing", () => {
+  const RECOVERY_NOTICE =
+    "This turn can't continue because the app restarted since it started. Send a new message to pick up where you left off.";
+
+  it("surfaces a thread error when a stale user-input respond failure is appended", () => {
+    const thread = makeThread();
+    const state = makeState(thread);
+
+    const next = applyOrchestrationEvent(
+      state,
+      makeEvent("thread.activity-appended", {
+        threadId: thread.id,
+        activity: {
+          id: EventId.make("activity-stale-failed"),
+          tone: "error",
+          kind: "provider.user-input.respond.failed",
+          summary: "Provider user input response failed",
+          payload: {
+            requestId: "req-user-input-stale-1",
+            detail:
+              "Stale pending user-input request: req-user-input-stale-1. Provider callback state does not survive app restarts or recovered sessions. Restart the turn to continue.",
+          },
+          turnId: null,
+          createdAt: "2026-02-27T00:00:01.000Z",
+        },
+      }),
+      localEnvironmentId,
+    );
+
+    expect(threadsOf(next)[0]?.error).toBe(RECOVERY_NOTICE);
+  });
+
+  it("leaves the thread error untouched for an ordinary appended activity", () => {
+    const thread = makeThread();
+    const state = makeState(thread);
+
+    const next = applyOrchestrationEvent(
+      state,
+      makeEvent("thread.activity-appended", {
+        threadId: thread.id,
+        activity: {
+          id: EventId.make("activity-ordinary"),
+          tone: "info",
+          kind: "step",
+          summary: "did a thing",
+          payload: {},
+          turnId: TurnId.make("turn-1"),
+          createdAt: "2026-02-27T00:00:01.000Z",
+        },
+      }),
+      localEnvironmentId,
+    );
+
+    expect(threadsOf(next)[0]?.error).toBeNull();
+  });
+});

@@ -37,6 +37,7 @@ import {
 import { resolveEnvironmentHttpUrl } from "./environments/runtime";
 import { sanitizeThreadErrorMessage } from "./rpc/transportError";
 import { getThreadFromEnvironmentState } from "./threadDerivation";
+import { staleProviderFailureNotice } from "./session-logic";
 const isProviderDriverKindValue = Schema.is(ProviderDriverKind);
 
 export interface EnvironmentState {
@@ -1635,9 +1636,7 @@ function applyEnvironmentOrchestrationEvent(
         // strictly-earlier rows: `createdAt < cut`. The payload carries no
         // checkpoint list, so this is a createdAt cut, not a turn-retain like
         // `thread.reverted`.
-        const target = thread.messages.find(
-          (message) => message.id === event.payload.messageId,
-        );
+        const target = thread.messages.find((message) => message.id === event.payload.messageId);
         if (target === undefined) {
           // Defensive no-op: target not in the local list (e.g. trimmed by the
           // MAX_THREAD_MESSAGES cap). Leave the thread untouched.
@@ -1700,9 +1699,14 @@ function applyEnvironmentOrchestrationEvent(
         ]
           .toSorted(compareActivities)
           .slice(-MAX_THREAD_ACTIVITIES);
+        // A stale-callback respond.failed (after an app restart) is emitted with turnId: null,
+        // so it never reaches the work log and the pending card silently disappears. Surface it
+        // in the error banner so the failed submit is not invisible.
+        const staleFailureNotice = staleProviderFailureNotice(event.payload.activity);
         return {
           ...thread,
           activities,
+          ...(staleFailureNotice ? { error: staleFailureNotice } : {}),
           updatedAt: event.occurredAt,
         };
       });

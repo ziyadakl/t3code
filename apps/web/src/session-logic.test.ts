@@ -21,6 +21,7 @@ import {
   hasToolActivityForTurn,
   isLatestTurnSettled,
   shouldMarkThreadVisited,
+  staleProviderFailureNotice,
   computeRevertTurnCountByUserMessageId,
   agentEditSetByTurnId,
   pathIsInAgentEditSet,
@@ -312,6 +313,65 @@ describe("derivePendingUserInputs", () => {
     ];
 
     expect(derivePendingUserInputs(activities)).toEqual([]);
+  });
+});
+
+describe("staleProviderFailureNotice", () => {
+  const RECOVERY_NOTICE =
+    "This turn can't continue because the app restarted since it started. Send a new message to pick up where you left off.";
+
+  it("returns a recovery notice for a stale user-input respond failure", () => {
+    const activity = makeActivity({
+      kind: "provider.user-input.respond.failed",
+      summary: "Provider user input response failed",
+      tone: "error",
+      payload: {
+        requestId: "req-user-input-stale-1",
+        detail:
+          "Stale pending user-input request: req-user-input-stale-1. Provider callback state does not survive app restarts or recovered sessions. Restart the turn to continue.",
+      },
+    });
+
+    expect(staleProviderFailureNotice(activity)).toBe(RECOVERY_NOTICE);
+  });
+
+  it("returns a recovery notice for a stale approval respond failure", () => {
+    const activity = makeActivity({
+      kind: "provider.approval.respond.failed",
+      summary: "Provider approval response failed",
+      tone: "error",
+      payload: {
+        requestId: "req-approval-stale-1",
+        detail:
+          "Stale pending approval request: req-approval-stale-1. Provider callback state does not survive app restarts or recovered sessions. Restart the turn to continue.",
+      },
+    });
+
+    expect(staleProviderFailureNotice(activity)).toBe(RECOVERY_NOTICE);
+  });
+
+  it("returns null for a respond failure that is not a stale-callback failure", () => {
+    const activity = makeActivity({
+      kind: "provider.user-input.respond.failed",
+      summary: "Provider user input response failed",
+      tone: "error",
+      payload: {
+        requestId: "req-1",
+        detail: "Some unrelated provider error",
+      },
+    });
+
+    expect(staleProviderFailureNotice(activity)).toBeNull();
+  });
+
+  it("returns null for unrelated activities", () => {
+    const activity = makeActivity({
+      kind: "user-input.requested",
+      summary: "User input requested",
+      payload: { requestId: "req-1" },
+    });
+
+    expect(staleProviderFailureNotice(activity)).toBeNull();
   });
 });
 
@@ -1531,15 +1591,15 @@ describe("shouldMarkThreadVisited", () => {
   });
 
   it("does not re-mark a thread already visited at or after the turn completed", () => {
-    expect(
-      shouldMarkThreadVisited({ ...base, lastVisitedAt: "2026-02-27T21:10:06.000Z" }),
-    ).toBe(false);
+    expect(shouldMarkThreadVisited({ ...base, lastVisitedAt: "2026-02-27T21:10:06.000Z" })).toBe(
+      false,
+    );
   });
 
   it("marks visited when the turn completed after the last visit", () => {
-    expect(
-      shouldMarkThreadVisited({ ...base, lastVisitedAt: "2026-02-27T21:10:00.000Z" }),
-    ).toBe(true);
+    expect(shouldMarkThreadVisited({ ...base, lastVisitedAt: "2026-02-27T21:10:00.000Z" })).toBe(
+      true,
+    );
   });
 
   it("does not mark visited when there is no completed turn", () => {
