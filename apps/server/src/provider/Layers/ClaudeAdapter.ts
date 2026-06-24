@@ -206,6 +206,10 @@ interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
   readonly setModel: (model?: string) => Promise<void>;
   readonly setPermissionMode: (mode: PermissionMode) => Promise<void>;
   readonly setMaxThinkingTokens: (maxThinkingTokens: number | null) => Promise<void>;
+  // Runtime-only SDK method (not in the public Query types) that starts the Remote
+  // Control bridge. Optional so the `query(...) as ClaudeQueryRuntime` cast stays
+  // valid and older SDKs that lack it degrade gracefully.
+  readonly enableRemoteControl?: (enabled: boolean, name?: string) => Promise<unknown>;
   readonly close: () => void;
 }
 
@@ -3297,6 +3301,22 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           context.streamFiber = undefined;
         }
       });
+
+      // Match the Claude Code CLI's `remoteControlAtStartup` default: start the
+      // Remote Control bridge so this session can be driven from claude.ai / the
+      // mobile app. The SDK setting is schema-only (not honored in headless mode),
+      // so invoke the runtime method directly now that the stream is consuming and
+      // can carry the control response. Forked + best-effort: it must never block
+      // session start, and failures (e.g. an API-key login, which Remote Control
+      // does not support) must not break the session.
+      yield* Effect.forkDetach(
+        Effect.tryPromise({
+          try: () => context.query.enableRemoteControl?.(true) ?? Promise.resolve(undefined),
+          catch: (cause) => toRequestError(threadId, "session/enableRemoteControl", cause),
+        }).pipe(
+          Effect.catch((error) => Effect.logDebug("Claude remote control not started.", { error })),
+        ),
+      );
 
       return {
         ...session,

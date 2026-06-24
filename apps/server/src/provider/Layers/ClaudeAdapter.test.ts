@@ -58,6 +58,13 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   public readonly setModelCalls: Array<string | undefined> = [];
   public readonly setPermissionModeCalls: Array<string> = [];
   public readonly setMaxThinkingTokensCalls: Array<number | null> = [];
+  public readonly enableRemoteControlCalls: Array<{ enabled: boolean; name?: string }> = [];
+  private resolveEnableRemoteControl: (() => void) | undefined;
+  // Resolves the first time enableRemoteControl is invoked, so tests can await the
+  // forked (non-blocking) startup call deterministically without depending on the clock.
+  public readonly enableRemoteControlInvoked: Promise<void> = new Promise((resolve) => {
+    this.resolveEnableRemoteControl = resolve;
+  });
   public closeCalls = 0;
 
   emit(message: SDKMessage): void {
@@ -108,6 +115,12 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
 
   readonly setMaxThinkingTokens = async (maxThinkingTokens: number | null): Promise<void> => {
     this.setMaxThinkingTokensCalls.push(maxThinkingTokens);
+  };
+
+  readonly enableRemoteControl = async (enabled: boolean, name?: string): Promise<unknown> => {
+    this.enableRemoteControlCalls.push({ enabled, ...(name !== undefined ? { name } : {}) });
+    this.resolveEnableRemoteControl?.();
+    return undefined;
   };
 
   readonly close = (): void => {
@@ -1966,8 +1979,16 @@ describe("ClaudeAdapterLive", () => {
               cache_read_input_tokens: 0,
               output_tokens: 10,
               iterations: [
-                { input_tokens: 5000, cache_creation_input_tokens: 0, cache_read_input_tokens: 10000 },
-                { input_tokens: 8000, cache_creation_input_tokens: 0, cache_read_input_tokens: 12000 },
+                {
+                  input_tokens: 5000,
+                  cache_creation_input_tokens: 0,
+                  cache_read_input_tokens: 10000,
+                },
+                {
+                  input_tokens: 8000,
+                  cache_creation_input_tokens: 0,
+                  cache_read_input_tokens: 12000,
+                },
               ],
             },
           },
@@ -2949,10 +2970,7 @@ describe("ClaudeAdapterLive", () => {
         resumeSessionAt: "assistant-99",
         turnCount: 3,
       });
-      assert.equal(
-        (session.resumeCursor as { rewindPending?: unknown }).rewindPending,
-        undefined,
-      );
+      assert.equal((session.resumeCursor as { rewindPending?: unknown }).rewindPending, undefined);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -2962,85 +2980,88 @@ describe("ClaudeAdapterLive", () => {
   // While the rewind is pending, `updateResumeCursor` must hold the anchor
   // instead of auto-advancing it; once a fresh assistant message lands, the
   // marker is cleared and the cursor advances to that new uuid.
-  it.effect("gates auto-advance on a rewind, then advances after the next assistant message", () => {
-    const harness = makeHarness();
-    const durableSessionId = "550e8400-e29b-41d4-a716-446655440000";
-    return Effect.gen(function* () {
-      const adapter = yield* ClaudeAdapter;
+  it.effect(
+    "gates auto-advance on a rewind, then advances after the next assistant message",
+    () => {
+      const harness = makeHarness();
+      const durableSessionId = "550e8400-e29b-41d4-a716-446655440000";
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
 
-      const drainFiber = yield* Stream.runDrain(adapter.streamEvents).pipe(Effect.forkChild);
+        const drainFiber = yield* Stream.runDrain(adapter.streamEvents).pipe(Effect.forkChild);
 
-      yield* adapter.startSession({
-        threadId: RESUME_THREAD_ID,
-        provider: ProviderDriverKind.make("claudeAgent"),
-        resumeCursor: {
+        yield* adapter.startSession({
           threadId: RESUME_THREAD_ID,
-          resume: durableSessionId,
-          resumeSessionAt: "assistant-anchor",
-          turnCount: 3,
-          rewindPending: true,
-        },
-        runtimeMode: "full-access",
-      });
+          provider: ProviderDriverKind.make("claudeAgent"),
+          resumeCursor: {
+            threadId: RESUME_THREAD_ID,
+            resume: durableSessionId,
+            resumeSessionAt: "assistant-anchor",
+            turnCount: 3,
+            rewindPending: true,
+          },
+          runtimeMode: "full-access",
+        });
 
-      // A durable init message fires `updateResumeCursor` before any assistant
-      // message; the anchor must survive (not be clobbered).
-      harness.query.emit({
-        type: "system",
-        subtype: "init",
-        apiKeySource: "none",
-        claude_code_version: "test",
-        cwd: "/tmp/claude-adapter-test",
-        tools: [],
-        mcp_servers: [],
-        model: "claude-sonnet-4-5",
-        permissionMode: "bypassPermissions",
-        slash_commands: [],
-        output_style: "default",
-        skills: [],
-        plugins: [],
-        session_id: durableSessionId,
-        uuid: "resume-init",
-      } as unknown as SDKMessage);
+        // A durable init message fires `updateResumeCursor` before any assistant
+        // message; the anchor must survive (not be clobbered).
+        harness.query.emit({
+          type: "system",
+          subtype: "init",
+          apiKeySource: "none",
+          claude_code_version: "test",
+          cwd: "/tmp/claude-adapter-test",
+          tools: [],
+          mcp_servers: [],
+          model: "claude-sonnet-4-5",
+          permissionMode: "bypassPermissions",
+          slash_commands: [],
+          output_style: "default",
+          skills: [],
+          plugins: [],
+          session_id: durableSessionId,
+          uuid: "resume-init",
+        } as unknown as SDKMessage);
 
-      yield* Effect.yieldNow;
-      yield* Effect.yieldNow;
-      yield* Effect.yieldNow;
+        yield* Effect.yieldNow;
+        yield* Effect.yieldNow;
+        yield* Effect.yieldNow;
 
-      const afterInit = yield* adapter.listSessions();
-      const afterInitCursor = afterInit[0]?.resumeCursor as
-        | { resumeSessionAt?: string }
-        | undefined;
-      assert.equal(afterInitCursor?.resumeSessionAt, "assistant-anchor");
+        const afterInit = yield* adapter.listSessions();
+        const afterInitCursor = afterInit[0]?.resumeCursor as
+          | { resumeSessionAt?: string }
+          | undefined;
+        assert.equal(afterInitCursor?.resumeSessionAt, "assistant-anchor");
 
-      // A fresh assistant message consumes the rewind: the cursor advances.
-      harness.query.emit({
-        type: "assistant",
-        session_id: durableSessionId,
-        uuid: "assistant-after-rewind",
-        parent_tool_use_id: null,
-        message: {
-          id: "assistant-message-after-rewind",
-          content: [{ type: "text", text: "rewound" }],
-        },
-      } as unknown as SDKMessage);
+        // A fresh assistant message consumes the rewind: the cursor advances.
+        harness.query.emit({
+          type: "assistant",
+          session_id: durableSessionId,
+          uuid: "assistant-after-rewind",
+          parent_tool_use_id: null,
+          message: {
+            id: "assistant-message-after-rewind",
+            content: [{ type: "text", text: "rewound" }],
+          },
+        } as unknown as SDKMessage);
 
-      yield* Effect.yieldNow;
-      yield* Effect.yieldNow;
-      yield* Effect.yieldNow;
+        yield* Effect.yieldNow;
+        yield* Effect.yieldNow;
+        yield* Effect.yieldNow;
 
-      const afterAssistant = yield* adapter.listSessions();
-      const afterAssistantCursor = afterAssistant[0]?.resumeCursor as
-        | { resumeSessionAt?: string }
-        | undefined;
-      assert.equal(afterAssistantCursor?.resumeSessionAt, "assistant-after-rewind");
+        const afterAssistant = yield* adapter.listSessions();
+        const afterAssistantCursor = afterAssistant[0]?.resumeCursor as
+          | { resumeSessionAt?: string }
+          | undefined;
+        assert.equal(afterAssistantCursor?.resumeSessionAt, "assistant-after-rewind");
 
-      yield* Fiber.interrupt(drainFiber);
-    }).pipe(
-      Effect.provideService(Random.Random, makeDeterministicRandomService()),
-      Effect.provide(harness.layer),
-    );
-  });
+        yield* Fiber.interrupt(drainFiber);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
 
   it.effect("preserves durable resume ids across Claude resume hooks", () => {
     const harness = makeHarness();
@@ -3267,6 +3288,28 @@ describe("ClaudeAdapterLive", () => {
       });
 
       assert.deepEqual(harness.query.setModelCalls, ["claude-opus-4-6"]);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("starts the remote control bridge on session start (matches CLI default)", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      // The startup call is forked (non-blocking); await its deterministic signal
+      // so the assertion does not race the forked daemon fiber.
+      yield* Effect.promise(() => harness.query.enableRemoteControlInvoked);
+
+      assert.deepEqual(harness.query.enableRemoteControlCalls, [{ enabled: true }]);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
