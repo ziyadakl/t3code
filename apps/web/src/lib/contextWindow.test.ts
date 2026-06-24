@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
-import { EventId, type OrchestrationThreadActivity, TurnId } from "@t3tools/contracts";
+import { EventId, type OrchestrationThreadActivity, ThreadId, TurnId } from "@t3tools/contracts";
 
-import { deriveLatestContextWindowSnapshot, formatContextWindowTokens } from "./contextWindow";
+import {
+  deriveLatestContextWindowSnapshot,
+  formatContextWindowTokens,
+  nextHeldContextWindow,
+} from "./contextWindow";
 
 function makeActivity(id: string, kind: string, payload: unknown): OrchestrationThreadActivity {
   return {
@@ -80,5 +84,76 @@ describe("contextWindow", () => {
 
     expect(snapshot?.usedTokens).toBe(81_659);
     expect(snapshot?.totalProcessedTokens).toBe(748_126);
+  });
+});
+
+describe("nextHeldContextWindow", () => {
+  const threadA = ThreadId.make("thread-a");
+  const threadB = ThreadId.make("thread-b");
+  const held = deriveLatestContextWindowSnapshot([
+    makeActivity("held", "context-window.updated", { usedTokens: 100, maxTokens: 1000 }),
+  ]);
+  const live = deriveLatestContextWindowSnapshot([
+    makeActivity("live", "context-window.updated", { usedTokens: 500, maxTokens: 1000 }),
+  ]);
+
+  it("adopts the new thread's live snapshot on a thread switch even while running (the leak fix)", () => {
+    expect(
+      nextHeldContextWindow({
+        previousThreadId: threadA,
+        activeThreadId: threadB,
+        held,
+        live,
+        phase: "running",
+      }),
+    ).toBe(live);
+  });
+
+  it("adopts the live snapshot on a thread switch when settled", () => {
+    expect(
+      nextHeldContextWindow({
+        previousThreadId: threadA,
+        activeThreadId: threadB,
+        held,
+        live,
+        phase: "ready",
+      }),
+    ).toBe(live);
+  });
+
+  it("holds the last settled value while a turn runs on the same thread (anti-balloon)", () => {
+    expect(
+      nextHeldContextWindow({
+        previousThreadId: threadA,
+        activeThreadId: threadA,
+        held,
+        live,
+        phase: "running",
+      }),
+    ).toBe(held);
+  });
+
+  it("adopts the live snapshot when settled on the same thread", () => {
+    expect(
+      nextHeldContextWindow({
+        previousThreadId: threadA,
+        activeThreadId: threadA,
+        held,
+        live,
+        phase: "ready",
+      }),
+    ).toBe(live);
+  });
+
+  it("treats a switch from a null thread as a thread change", () => {
+    expect(
+      nextHeldContextWindow({
+        previousThreadId: null,
+        activeThreadId: threadA,
+        held,
+        live,
+        phase: "running",
+      }),
+    ).toBe(live);
   });
 });

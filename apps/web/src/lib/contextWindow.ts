@@ -1,4 +1,10 @@
-import type { OrchestrationThreadActivity, ThreadTokenUsageSnapshot } from "@t3tools/contracts";
+import type {
+  OrchestrationThreadActivity,
+  ThreadId,
+  ThreadTokenUsageSnapshot,
+} from "@t3tools/contracts";
+
+import type { SessionPhase } from "../types";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
@@ -71,6 +77,28 @@ export function deriveLatestContextWindowSnapshot(
   }
 
   return null;
+}
+
+/**
+ * Choose which context-window snapshot the meter should display. The meter holds the last
+ * settled value WHILE A TURN IS RUNNING: mid-turn the provider streams accumulated token
+ * totals that balloon toward the cap and misread ~100% (see ClaudeAdapter completeTurn), so
+ * only an end-of-turn reading is window-accurate. Critically, that hold is PER-THREAD — on a
+ * thread switch we always adopt the new thread's live snapshot, even mid-run; otherwise a
+ * thread opened while running keeps showing the previously-viewed thread's value (the meter
+ * read the same number for every open thread).
+ */
+export function nextHeldContextWindow(args: {
+  readonly previousThreadId: ThreadId | null;
+  readonly activeThreadId: ThreadId | null;
+  readonly held: ContextWindowSnapshot | null;
+  readonly live: ContextWindowSnapshot | null;
+  readonly phase: SessionPhase;
+}): ContextWindowSnapshot | null {
+  if (args.previousThreadId !== args.activeThreadId) {
+    return args.live;
+  }
+  return args.phase === "running" ? args.held : args.live;
 }
 
 export function formatContextWindowTokens(value: number | null): string {
