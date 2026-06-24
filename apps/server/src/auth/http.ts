@@ -2,6 +2,7 @@ import {
   AuthAccessReadScope,
   AuthAccessWriteScope,
   AuthStandardClientScopes,
+  type AuthSessionState,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthRelayReadScope,
@@ -26,6 +27,7 @@ import { causeErrorTag } from "@t3tools/shared/observability";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Cookies from "effect/unstable/http/Cookies";
 import * as HttpEffect from "effect/unstable/http/HttpEffect";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
@@ -196,7 +198,41 @@ export const authHttpApiLayer = HttpApiBuilder.group(
           function* (args) {
             yield* annotateEnvironmentRequest(args.endpoint.name);
             const request = yield* HttpServerRequest.HttpServerRequest;
-            return yield* serverAuth.getSessionState(request);
+            const state = yield* serverAuth.getSessionState(request);
+            if (state.authenticated) {
+              return state;
+            }
+            // Trusted Tailscale tailnet: auto-pair (issue a session + set the
+            // cookie) so the browser never sees the pairing code. No-op unless
+            // `--trust-tailscale` is on and a Tailscale identity header is present.
+            const trusted = yield* serverAuth.autoIssueTrustedSession(
+              request,
+              deriveAuthClientMetadata({ request }),
+            );
+            if (Option.isNone(trusted)) {
+              return state;
+            }
+            const issued = trusted.value;
+            const sessionCookies = yield* Effect.fromResult(
+              Cookies.set(Cookies.empty, sessions.cookieName, issued.sessionToken, {
+                expires: DateTime.toDate(issued.response.expiresAt),
+                httpOnly: true,
+                path: "/",
+                sameSite: "lax",
+              }),
+            ).pipe(Effect.catch(() => failEnvironmentInternal("browser_session_cookie_failed")));
+            yield* HttpEffect.appendPreResponseHandler((_request, response) =>
+              Effect.succeed(HttpServerResponse.mergeCookies(response, sessionCookies)),
+            );
+            yield* appendCredentialResponseHeaders;
+            const descriptor = yield* serverAuth.getDescriptor();
+            return {
+              authenticated: true,
+              auth: descriptor,
+              scopes: issued.response.scopes,
+              sessionMethod: issued.response.sessionMethod,
+              expiresAt: issued.response.expiresAt,
+            } satisfies AuthSessionState;
           },
           Effect.catchTag("ServerAuthInternalError", (error) =>
             failEnvironmentInternal("internal_error", error),

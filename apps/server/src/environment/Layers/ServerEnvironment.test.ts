@@ -36,6 +36,7 @@ const makeServerConfig = Effect.fn(function* (baseDir: string) {
     autoBootstrapProjectFromCwd: false,
     logWebSocketEvents: false,
     tailscaleServeEnabled: false,
+    trustTailscale: false,
     tailscaleServePort: 443,
     port: 0,
     host: undefined,

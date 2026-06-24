@@ -32,7 +32,9 @@ import * as EnvironmentAuthPolicy from "./EnvironmentAuthPolicy.ts";
 import * as PairingGrantStore from "./PairingGrantStore.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as SessionStore from "./SessionStore.ts";
+import { isAllowedTailscaleLogin, readTailscaleIdentity } from "./TailscaleTrust.ts";
 import { verifyRequestDpopProof } from "./dpop.ts";
+import { ServerConfig } from "../config.ts";
 import { layerConfig as SqlitePersistenceLayer } from "../persistence/Layers/Sqlite.ts";
 
 export const DEFAULT_SESSION_SUBJECT = "cli-issued-session";
@@ -105,6 +107,23 @@ export interface EnvironmentAuthShape {
       readonly sessionToken: string;
     },
     ServerAuthInvalidCredentialError | ServerAuthInternalError
+  >;
+  /**
+   * Auto-issue a browser session for a request that arrived over the trusted
+   * Tailscale tailnet (carries a `Tailscale-User-Login` identity header), so it
+   * never has to enter a pairing code. Returns `none` unless `trustTailscale` is
+   * enabled AND a valid tailnet identity is present. No pairing credential is
+   * consumed.
+   */
+  readonly autoIssueTrustedSession: (
+    request: HttpServerRequest.HttpServerRequest,
+    requestMetadata: AuthClientMetadata,
+  ) => Effect.Effect<
+    Option.Option<{
+      readonly response: AuthBrowserSessionResult;
+      readonly sessionToken: string;
+    }>,
+    ServerAuthInternalError
   >;
   readonly exchangeBootstrapCredentialForAccessToken: (
     credential: string,
@@ -269,6 +288,7 @@ export const make = Effect.fn("makeEnvironmentAuth")(function* () {
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
   const crypto = yield* Crypto.Crypto;
   const descriptor = yield* policy.getDescriptor();
+  const config = yield* ServerConfig;
 
   const authenticateToken = (
     token: string,
@@ -399,6 +419,51 @@ export const make = Effect.fn("makeEnvironmentAuth")(function* () {
       ),
       Effect.withSpan("EnvironmentAuth.createBrowserSession"),
     );
+
+  const autoIssueTrustedSession: EnvironmentAuthShape["autoIssueTrustedSession"] = (
+    request,
+    requestMetadata,
+  ) =>
+    Effect.gen(function* () {
+      if (!config.trustTailscale) {
+        return Option.none();
+      }
+      const identity = readTailscaleIdentity(request);
+      if (!identity || !isAllowedTailscaleLogin(identity.login)) {
+        return Option.none();
+      }
+      const session = yield* sessions
+        .issue({
+          method: "browser-session-cookie",
+          subject: `tailscale:${identity.login}`,
+          // Standard client scopes only — full app operation, but NOT
+          // access-management (pairing/session admin). Least privilege for a
+          // network-trust grant.
+          scopes: AuthStandardClientScopes,
+          client: {
+            ...requestMetadata,
+            label: `Tailscale: ${identity.name ?? identity.login}`,
+          },
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new ServerAuthInternalError({
+                message: "Failed to issue trusted Tailscale session.",
+                cause,
+              }),
+          ),
+        );
+      return Option.some({
+        response: {
+          authenticated: true,
+          scopes: session.scopes,
+          sessionMethod: session.method,
+          expiresAt: DateTime.toUtc(session.expiresAt),
+        } satisfies AuthBrowserSessionResult,
+        sessionToken: session.token,
+      });
+    }).pipe(Effect.withSpan("EnvironmentAuth.autoIssueTrustedSession"));
 
   const exchangeBootstrapCredentialForAccessToken: EnvironmentAuthShape["exchangeBootstrapCredentialForAccessToken"] =
     (credential, requestedScopes, requestMetadata, input) =>
@@ -690,6 +755,7 @@ export const make = Effect.fn("makeEnvironmentAuth")(function* () {
       Effect.succeed(descriptor).pipe(Effect.withSpan("EnvironmentAuth.getDescriptor")),
     getSessionState,
     createBrowserSession,
+    autoIssueTrustedSession,
     exchangeBootstrapCredentialForAccessToken,
     createPairingLink,
     issuePairingCredential,

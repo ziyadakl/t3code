@@ -3,6 +3,7 @@ import { AuthAdministrativeScopes } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 
 import type { ServerConfigShape } from "../config.ts";
 import { ServerConfig } from "../config.ts";
@@ -39,6 +40,14 @@ const makeCookieRequest = (
       t3_session: sessionToken,
     },
     headers: {},
+  }) as unknown as Parameters<EnvironmentAuth.EnvironmentAuthShape["authenticateHttpRequest"]>[0];
+
+const makeTailscaleRequest = (
+  headers: Record<string, string>,
+): Parameters<EnvironmentAuth.EnvironmentAuthShape["authenticateHttpRequest"]>[0] =>
+  ({
+    cookies: {},
+    headers,
   }) as unknown as Parameters<EnvironmentAuth.EnvironmentAuthShape["authenticateHttpRequest"]>[0];
 
 const requestMetadata = {
@@ -101,6 +110,54 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
       ]);
       expect(verified.subject).toBe("one-time-token");
     }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
+  );
+
+  it.effect("auto-issues a trusted session for a tailnet request when trust-tailscale is on", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+
+      const issued = yield* serverAuth.autoIssueTrustedSession(
+        makeTailscaleRequest({ "tailscale-user-login": "ziyad@example.com" }),
+        requestMetadata,
+      );
+
+      expect(Option.isSome(issued)).toBe(true);
+      const value = Option.getOrThrow(issued);
+      expect(value.response.authenticated).toBe(true);
+      expect(value.response.sessionMethod).toBe("browser-session-cookie");
+      expect(value.sessionToken.length).toBeGreaterThan(0);
+      // tailnet trust grants standard client scopes only — NOT access-management admin
+      expect(value.response.scopes).toContain("orchestration:operate");
+      expect(value.response.scopes).not.toContain("access:write");
+
+      // the issued cookie authenticates subsequent requests, with a tailnet subject
+      const verified = yield* serverAuth.authenticateHttpRequest(
+        makeCookieRequest(value.sessionToken),
+      );
+      expect(verified.subject).toBe("tailscale:ziyad@example.com");
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer({ trustTailscale: true }))),
+  );
+
+  it.effect("does not auto-issue a trusted session when trust-tailscale is off", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const issued = yield* serverAuth.autoIssueTrustedSession(
+        makeTailscaleRequest({ "tailscale-user-login": "ziyad@example.com" }),
+        requestMetadata,
+      );
+      expect(Option.isNone(issued)).toBe(true);
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
+  );
+
+  it.effect("does not auto-issue a trusted session without a tailnet identity header", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const issued = yield* serverAuth.autoIssueTrustedSession(
+        makeTailscaleRequest({}),
+        requestMetadata,
+      );
+      expect(Option.isNone(issued)).toBe(true);
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer({ trustTailscale: true }))),
   );
 
   it.effect("does not exchange ordinary pairing grants for administrative access tokens", () =>

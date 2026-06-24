@@ -400,6 +400,7 @@ const buildAppUnderTest = (options?: {
       autoBootstrapProjectFromCwd: false,
       logWebSocketEvents: false,
       tailscaleServeEnabled: false,
+      trustTailscale: false,
       tailscaleServePort: 443,
       ...options?.config,
     };
@@ -673,8 +674,7 @@ const buildAppUnderTest = (options?: {
             status: () => Effect.succeed({ running: false, url: null }),
           }),
           Layer.mock(SandcastleStatusReader)({
-            statusAll: () =>
-              Effect.succeed({ serverNow: "1970-01-01T00:00:00.000Z", entries: [] }),
+            statusAll: () => Effect.succeed({ serverNow: "1970-01-01T00:00:00.000Z", entries: [] }),
           }),
         ),
       ),
