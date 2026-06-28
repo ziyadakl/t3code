@@ -101,6 +101,13 @@ export type SandcastleStatusSnapshot = typeof SandcastleStatusSnapshot.Type;
 // --- queue-ready count (NOT from status.json) ------------------------------
 
 /**
+ * Closed set of queue-ready failure markers (source of truth for the UI switch).
+ * The server maps a typed `GitHubCliError.reason` to one of these wire values.
+ */
+export const QueueReadyError = Schema.Literals(["gh-missing", "gh-unauthed", "query-failed"]);
+export type QueueReadyError = typeof QueueReadyError.Type;
+
+/**
  * How many issues are queued for Sandcastle to pick up — open GitHub issues
  * carrying the pickup label. This is NOT in status.json; t3's server queries
  * GitHub for it (cached) and attaches it per entry. `error` lets the UI show
@@ -114,8 +121,8 @@ export const QueueReadyStatus = Schema.Struct({
   label: Schema.String,
   /** ISO time of the GitHub query behind `count`; null while pending. */
   updatedAt: Schema.NullOr(Schema.String),
-  /** null | "gh-missing" | "gh-unauthed" | "query-failed". */
-  error: Schema.NullOr(Schema.String),
+  /** Failure marker, or null when the last query succeeded — see {@link QueueReadyError}. */
+  error: Schema.NullOr(QueueReadyError),
 });
 export type QueueReadyStatus = typeof QueueReadyStatus.Type;
 

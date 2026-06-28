@@ -20,7 +20,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
-import type { QueueReadyStatus } from "@t3tools/contracts";
+import type { QueueReadyError, QueueReadyStatus } from "@t3tools/contracts";
 
 import {
   GitHubCli,
@@ -69,11 +69,18 @@ export class QueueReadyCache extends Context.Service<QueueReadyCache, QueueReady
   "t3/sandcastle/QueueReadyCache",
 ) {}
 
-function classifyGhError(error: GitHubCliError): string {
-  const detail = error.detail.toLowerCase();
-  if (detail.includes("not available on path")) return "gh-missing";
-  if (detail.includes("not authenticated")) return "gh-unauthed";
-  return "query-failed";
+/** Map the typed `gh` failure category to the queue-ready wire marker. The
+ *  category is set at the boundary (GitHubCliError.reason) so we never re-derive
+ *  it from the human-readable detail string. */
+function reasonToWireError(reason: GitHubCliError["reason"]): QueueReadyError {
+  switch (reason) {
+    case "missing":
+      return "gh-missing";
+    case "unauthed":
+      return "gh-unauthed";
+    default:
+      return "query-failed";
+  }
 }
 
 function isFresh(
@@ -97,13 +104,23 @@ export const makeQueueReadyCache = (options: QueueReadyCacheOptions = {}) =>
     const freshTtlMs = Duration.toMillis(options.freshTtl ?? DEFAULT_FRESH_TTL);
     const errorTtlMs = Duration.toMillis(options.errorTtl ?? DEFAULT_ERROR_TTL);
 
+    /** Release this repo's in-flight slot if it's still claimed, leaving the
+     *  last-known status untouched. Idempotent: a no-op once the normal
+     *  success/failure path has already cleared the slot. */
+    const releaseInFlight = (repoKey: string): Effect.Effect<void> =>
+      SynchronizedRef.update(ref, (map) => {
+        const entry = map.get(repoKey);
+        if (!entry || !entry.inFlight) return map;
+        return new Map(map).set(repoKey, { ...entry, inFlight: false });
+      });
+
     const refresh = (cwd: string, label: string, repoKey: string): Effect.Effect<void> =>
       Effect.gen(function* () {
         const nowIso = DateTime.formatIso(yield* DateTime.now);
         const outcome = yield* gh.countOpenIssuesByLabel({ cwd, label }).pipe(
           Effect.map((count) => ({ ok: true as const, count })),
           Effect.catch((error) =>
-            Effect.succeed({ ok: false as const, error: classifyGhError(error) }),
+            Effect.succeed({ ok: false as const, error: reasonToWireError(error.reason) }),
           ),
         );
         yield* SynchronizedRef.update(ref, (map) => {
@@ -114,7 +131,13 @@ export const makeQueueReadyCache = (options: QueueReadyCacheOptions = {}) =>
             : { count: priorCount, label, updatedAt: nowIso, error: outcome.error };
           return new Map(map).set(repoKey, { status, inFlight: false });
         });
-      });
+      }).pipe(
+        // A DEFECT (die) in the refresh would skip the update above and strand the
+        // in-flight slot as `true` forever, permanently blocking future refreshes
+        // for this repo. `ensuring` runs on every exit (success/failure/die/
+        // interruption), so the slot is always released.
+        Effect.ensuring(releaseInFlight(repoKey)),
+      );
 
     const observe: QueueReadyCacheShape["observe"] = (cwd, label) =>
       Effect.gen(function* () {
@@ -123,7 +146,7 @@ export const makeQueueReadyCache = (options: QueueReadyCacheOptions = {}) =>
           return null;
         }
         const repoKey = identity.canonicalKey;
-        const nowMs = Date.parse(DateTime.formatIso(yield* DateTime.now));
+        const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
 
         const decision = yield* SynchronizedRef.modify(
           ref,

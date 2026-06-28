@@ -367,4 +367,99 @@ describe("GitHubCli.layer", () => {
       assert.equal(error.message.includes("Pull request not found"), true);
     }).pipe(Effect.provide(layer)),
   );
+
+  describe("classifies the failure reason", () => {
+    it.effect("missing — gh not on PATH", () =>
+      Effect.gen(function* () {
+        mockRun.mockReturnValueOnce(
+          Effect.fail(
+            new VcsProcessExitError({
+              operation: "GitHubCli.execute",
+              command: "gh issue list",
+              cwd: "/repo",
+              exitCode: 1,
+              detail: "spawn gh ENOENT",
+            }),
+          ),
+        );
+
+        const gh = yield* GitHubCli.GitHubCli;
+        const error = yield* gh
+          .countOpenIssuesByLabel({ cwd: "/repo", label: "ready-for-agent" })
+          .pipe(Effect.flip);
+
+        assert.equal(error.reason, "missing");
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("unauthed — gh not logged in", () =>
+      Effect.gen(function* () {
+        mockRun.mockReturnValueOnce(
+          Effect.fail(
+            new VcsProcessExitError({
+              operation: "GitHubCli.execute",
+              command: "gh issue list",
+              cwd: "/repo",
+              exitCode: 1,
+              detail: "You are not logged in. Run gh auth login to authenticate.",
+            }),
+          ),
+        );
+
+        const gh = yield* GitHubCli.GitHubCli;
+        const error = yield* gh
+          .countOpenIssuesByLabel({ cwd: "/repo", label: "ready-for-agent" })
+          .pipe(Effect.flip);
+
+        assert.equal(error.reason, "unauthed");
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("not-found — pull request does not exist", () =>
+      Effect.gen(function* () {
+        mockRun.mockReturnValueOnce(
+          Effect.fail(
+            new VcsProcessExitError({
+              operation: "GitHubCli.execute",
+              command: "gh pr view",
+              cwd: "/repo",
+              exitCode: 1,
+              detail:
+                "GraphQL: Could not resolve to a PullRequest with the number of 4888. (repository.pullRequest)",
+            }),
+          ),
+        );
+
+        const gh = yield* GitHubCli.GitHubCli;
+        const error = yield* gh
+          .getPullRequest({ cwd: "/repo", reference: "4888" })
+          .pipe(Effect.flip);
+
+        assert.equal(error.reason, "not-found");
+      }).pipe(Effect.provide(layer)),
+    );
+
+    it.effect("other — a generic query failure", () =>
+      Effect.gen(function* () {
+        mockRun.mockReturnValueOnce(
+          Effect.fail(
+            new VcsProcessExitError({
+              operation: "GitHubCli.execute",
+              command: "gh issue list",
+              cwd: "/repo",
+              exitCode: 1,
+              detail: "HTTP 500: something went wrong on github's side",
+            }),
+          ),
+        );
+
+        const gh = yield* GitHubCli.GitHubCli;
+        const error = yield* gh
+          .countOpenIssuesByLabel({ cwd: "/repo", label: "ready-for-agent" })
+          .pipe(Effect.flip);
+
+        assert.equal(error.reason, "other");
+      }).pipe(Effect.provide(layer)),
+    );
+  });
 });

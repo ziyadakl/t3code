@@ -184,6 +184,7 @@ function runGitSyncForFakeGh(cwd: string, args: readonly string[]): void {
   }
   throw new GitHubCliError({
     operation: "execute",
+    reason: "other",
     detail: `Failed to simulate gh checkout with git ${args.join(" ")}: ${result.stderr?.trim() || "unknown error"}`,
   });
 }
@@ -489,6 +490,7 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
             ? error
             : new GitHubCliError({
                 operation: "execute",
+                reason: "other",
                 detail:
                   error instanceof Error
                     ? `Failed to simulate gh checkout: ${error.message}`
@@ -505,6 +507,7 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
           return Effect.fail(
             new GitHubCliError({
               operation: "execute",
+              reason: "other",
               detail: `Unexpected repository lookup: ${repository}`,
             }),
           );
@@ -525,6 +528,7 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
     return Effect.fail(
       new GitHubCliError({
         operation: "execute",
+        reason: "other",
         detail: `Unexpected gh command: ${args.join(" ")}`,
       }),
     );
@@ -602,6 +606,7 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
         Effect.fail(
           new GitHubCliError({
             operation: "createRepository",
+            reason: "other",
             detail: `Unexpected repository create: ${input.repository}`,
           }),
         ),
@@ -609,6 +614,7 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
         Effect.fail(
           new GitHubCliError({
             operation: "countOpenIssuesByLabel",
+            reason: "other",
             detail: `Unexpected issue count for label: ${input.label}`,
           }),
         ),
@@ -1344,6 +1350,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         ghScenario: {
           failWith: new GitHubCliError({
             operation: "execute",
+            reason: "missing",
             detail: "GitHub CLI (`gh`) is required but not available on PATH.",
           }),
         },
@@ -2426,6 +2433,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         ghScenario: {
           failWith: new GitHubCliError({
             operation: "execute",
+            reason: "missing",
             detail: "GitHub CLI (`gh`) is required but not available on PATH.",
           }),
         },
@@ -2455,6 +2463,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         ghScenario: {
           failWith: new GitHubCliError({
             operation: "execute",
+            reason: "unauthed",
             detail: "GitHub CLI is not authenticated. Run `gh auth login` and retry.",
           }),
         },

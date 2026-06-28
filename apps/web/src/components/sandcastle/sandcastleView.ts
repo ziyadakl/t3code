@@ -1,5 +1,6 @@
 // apps/web/src/components/sandcastle/sandcastleView.ts
 import type {
+  QueueReadyError,
   QueueReadyStatus,
   SandcastleIssuePhase,
   SandcastleRunState,
@@ -237,13 +238,13 @@ export interface QueueReadyDisplay {
   readonly title: string;
 }
 
-function queueReadyErrorTitle(error: string): string {
+function queueReadyErrorTitle(error: QueueReadyError): string {
   switch (error) {
     case "gh-missing":
       return "GitHub CLI (gh) is not available on the server.";
     case "gh-unauthed":
       return "GitHub CLI is not signed in (run `gh auth login`).";
-    default:
+    case "query-failed":
       return "Couldn't query GitHub for the queue.";
   }
 }

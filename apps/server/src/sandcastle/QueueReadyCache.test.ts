@@ -30,6 +30,7 @@ const githubIdentity: RepositoryIdentity = {
 const unauthedError = () =>
   new GitHubCliError({
     operation: "countOpenIssuesByLabel",
+    reason: "unauthed",
     detail: "GitHub CLI is not authenticated. Run `gh auth login` and retry.",
   });
 
@@ -37,7 +38,7 @@ const unauthedError = () =>
  *  fail (they should never be called by QueueReadyCache). */
 function fakeGitHubCli(count: () => Effect.Effect<number, GitHubCliError>): GitHubCliShape {
   const unexpected = (operation: string) =>
-    Effect.fail(new GitHubCliError({ operation, detail: "unexpected call" }));
+    Effect.fail(new GitHubCliError({ operation, reason: "other", detail: "unexpected call" }));
   return {
     execute: () => unexpected("execute"),
     listOpenPullRequests: () => unexpected("listOpenPullRequests"),
@@ -129,5 +130,51 @@ describe("QueueReadyCache", () => {
         cacheLayer({ count, identity: githubIdentity, options: { freshTtl: Duration.millis(1) } }),
       ),
     );
+  });
+
+  it.live("classifies by error.reason, not by the human-readable detail text", () =>
+    Effect.gen(function* () {
+      const cache = yield* QueueReadyCache;
+      yield* cache.observe(CWD, LABEL);
+      yield* Effect.sleep("20 millis");
+      const status = yield* cache.observe(CWD, LABEL);
+      // The detail deliberately contains none of the old substrings; the wire
+      // marker must come from `reason: "missing"` alone.
+      assert.equal(status?.error, "gh-missing");
+    }).pipe(
+      Effect.provide(
+        cacheLayer({
+          count: () =>
+            Effect.fail(
+              new GitHubCliError({
+                operation: "countOpenIssuesByLabel",
+                reason: "missing",
+                detail: "an opaque boundary message",
+              }),
+            ),
+          identity: githubIdentity,
+        }),
+      ),
+    ),
+  );
+
+  it.live("releases the in-flight slot when a refresh dies (defect)", () => {
+    let calls = 0;
+    const count = () => {
+      calls += 1;
+      return Effect.die(new Error("boom"));
+    };
+    return Effect.gen(function* () {
+      const cache = yield* QueueReadyCache;
+      // First observe forks a refresh that dies before updating the status. The
+      // `ensuring` guard must still release the in-flight slot...
+      yield* cache.observe(CWD, LABEL);
+      yield* Effect.sleep("20 millis");
+      // ...so this second observe is free to fork another refresh. If the slot
+      // were stranded, count() would have been called only once.
+      yield* cache.observe(CWD, LABEL);
+      yield* Effect.sleep("20 millis");
+      assert.equal(calls, 2);
+    }).pipe(Effect.provide(cacheLayer({ count, identity: githubIdentity })));
   });
 });

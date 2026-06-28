@@ -16,8 +16,23 @@ import * as GitHubPullRequests from "./gitHubPullRequests.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
+/**
+ * Structured, typed category for a `gh` failure, captured WHERE IT IS KNOWN (at
+ * the boundary in `normalizeGitHubCliError`) so downstream code never has to
+ * re-derive it by substring-matching the human-readable `detail`.
+ *
+ * - `missing` — `gh` is not installed / not on PATH.
+ * - `unauthed` — `gh` is installed but not authenticated.
+ * - `not-found` — the referenced pull request does not exist.
+ * - `other` — any other failure (network, invalid JSON, unexpected exit, …).
+ */
+export const GitHubCliErrorReason = Schema.Literals(["missing", "unauthed", "not-found", "other"]);
+export type GitHubCliErrorReason = typeof GitHubCliErrorReason.Type;
+
 export class GitHubCliError extends Schema.TaggedErrorClass<GitHubCliError>()("GitHubCliError", {
   operation: Schema.String,
+  /** Typed failure category — the source of truth for downstream classification. */
+  reason: GitHubCliErrorReason,
   detail: Schema.String,
   cause: Schema.optional(Schema.Defect()),
 }) {
@@ -125,6 +140,7 @@ function normalizeGitHubCliError(
   if (lower.includes("command not found: gh") || lower.includes("enoent")) {
     return new GitHubCliError({
       operation,
+      reason: "missing",
       detail: "GitHub CLI (`gh`) is required but not available on PATH.",
       cause: error,
     });
@@ -138,6 +154,7 @@ function normalizeGitHubCliError(
   ) {
     return new GitHubCliError({
       operation,
+      reason: "unauthed",
       detail: "GitHub CLI is not authenticated. Run `gh auth login` and retry.",
       cause: error,
     });
@@ -151,6 +168,7 @@ function normalizeGitHubCliError(
   ) {
     return new GitHubCliError({
       operation,
+      reason: "not-found",
       detail: "Pull request not found. Check the PR number or URL and try again.",
       cause: error,
     });
@@ -158,6 +176,7 @@ function normalizeGitHubCliError(
 
   return new GitHubCliError({
     operation,
+    reason: "other",
     detail: text,
     cause: error,
   });
@@ -231,6 +250,7 @@ function decodeGitHubJson<S extends Schema.Top>(
       (error) =>
         new GitHubCliError({
           operation,
+          reason: "other",
           detail: `${invalidDetail}: ${SchemaIssue.makeFormatterDefault()(error.issue)}`,
           cause: error,
         }),
@@ -280,6 +300,7 @@ export const make = Effect.fn("makeGitHubCli")(function* () {
                     return Effect.fail(
                       new GitHubCliError({
                         operation: "listOpenPullRequests",
+                        reason: "other",
                         detail: `GitHub CLI returned invalid PR list JSON: ${GitHubPullRequests.formatGitHubJsonDecodeError(decoded.failure)}`,
                         cause: decoded.failure,
                       }),
@@ -342,6 +363,7 @@ export const make = Effect.fn("makeGitHubCli")(function* () {
                 return Effect.fail(
                   new GitHubCliError({
                     operation: "getPullRequest",
+                    reason: "other",
                     detail: `GitHub CLI returned invalid pull request JSON: ${GitHubPullRequests.formatGitHubJsonDecodeError(decoded.failure)}`,
                     cause: decoded.failure,
                   }),
