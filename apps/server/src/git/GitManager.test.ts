@@ -605,6 +605,13 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
             detail: `Unexpected repository create: ${input.repository}`,
           }),
         ),
+      countOpenIssuesByLabel: (input) =>
+        Effect.fail(
+          new GitHubCliError({
+            operation: "countOpenIssuesByLabel",
+            detail: `Unexpected issue count for label: ${input.label}`,
+          }),
+        ),
       checkoutPullRequest: (input) =>
         execute({
           cwd: input.cwd,

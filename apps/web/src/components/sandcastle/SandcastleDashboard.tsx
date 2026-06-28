@@ -8,22 +8,15 @@ import { useSavedEnvironmentRegistryStore } from "../../environments/runtime";
 import { Badge } from "../ui/badge.tsx";
 import { Card } from "../ui/card.tsx";
 import { LiveDot } from "./LiveDot.tsx";
-import {
-  useSandcastleStatuses,
-  statusKey,
-  type ProjectRef,
-} from "./useSandcastleStatuses.ts";
+import { useSandcastleStatuses, statusKey, type ProjectRef } from "./useSandcastleStatuses.ts";
 import {
   deriveBanner,
   bannerTone,
   finishedRunAgeHint,
+  queueReadyDisplay,
   pillVariant,
 } from "./sandcastleView.ts";
-import {
-  SANDCASTLE_PILLS,
-  pillIcon,
-  type StatusPillSpec,
-} from "./statusPills.tsx";
+import { SANDCASTLE_PILLS, pillIcon, type StatusPillSpec } from "./statusPills.tsx";
 
 /** A status count badge: muted (gray) while its count is zero, taking its
  *  meaningful color once non-zero (so "0" doesn't read as a green success). */
@@ -37,9 +30,7 @@ function CountBadge({ spec, count }: { spec: StatusPillSpec; count: number }) {
 }
 
 function EnvLabel({ environmentId }: { environmentId: EnvironmentId }) {
-  const label = useSavedEnvironmentRegistryStore(
-    (s) => s.byId[environmentId]?.label ?? "Local",
-  );
+  const label = useSavedEnvironmentRegistryStore((s) => s.byId[environmentId]?.label ?? "Local");
   return <span className="text-xs text-muted-foreground">{label}</span>;
 }
 
@@ -84,6 +75,7 @@ export function SandcastleDashboard() {
             const ageHint = snap
               ? finishedRunAgeHint(snap.state, snap.updatedAt, value!.serverNow)
               : null;
+            const queueReady = queueReadyDisplay(entry.queueReady);
             return (
               <Link
                 key={`${project.environmentId}-${project.id}`}
@@ -97,16 +89,24 @@ export function SandcastleDashboard() {
                 <Card className="flex-row items-center justify-between gap-4 p-4 transition-colors hover:bg-accent/40">
                   <div className="flex min-w-0 flex-col gap-1">
                     <div className="flex items-center gap-2">
-                      <span className="truncate text-sm font-medium">
-                        {project.name}
-                      </span>
+                      <span className="truncate text-sm font-medium">{project.name}</span>
                       <EnvLabel environmentId={project.environmentId} />
                     </div>
                     {snap ? (
                       <span className="truncate text-xs text-muted-foreground">
-                        iter {snap.run.iterations.current}/
-                        {snap.run.iterations.total} · {snap.run.branch}
+                        iter {snap.run.iterations.current}/{snap.run.iterations.total} ·{" "}
+                        {snap.run.branch}
                         {ageHint ? ` · updated ${ageHint}` : ""}
+                      </span>
+                    ) : null}
+                    {queueReady ? (
+                      <span
+                        className={`truncate text-xs ${
+                          queueReady.muted ? "text-muted-foreground/60" : "text-muted-foreground"
+                        }`}
+                        title={queueReady.title}
+                      >
+                        {queueReady.text}
                       </span>
                     ) : null}
                   </div>
@@ -118,11 +118,7 @@ export function SandcastleDashboard() {
                           SANDCASTLE_PILLS.merged,
                           SANDCASTLE_PILLS.needsHuman,
                         ].map((spec) => (
-                          <CountBadge
-                            key={spec.key}
-                            spec={spec}
-                            count={snap.totals[spec.key]}
-                          />
+                          <CountBadge key={spec.key} spec={spec} count={snap.totals[spec.key]} />
                         ))}
                       </>
                     ) : null}

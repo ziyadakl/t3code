@@ -267,6 +267,80 @@ describe("GitHubCli.layer", () => {
     }).pipe(Effect.provide(layer)),
   );
 
+  it.effect("counts open issues carrying a label", () =>
+    Effect.gen(function* () {
+      mockRun.mockReturnValueOnce(
+        Effect.succeed(
+          // @effect-diagnostics-next-line preferSchemaOverJson:off
+          processOutput(JSON.stringify([{ number: 493 }, { number: 501 }, { number: 502 }])),
+        ),
+      );
+
+      const gh = yield* GitHubCli.GitHubCli;
+      const count = yield* gh.countOpenIssuesByLabel({
+        cwd: "/repo",
+        label: "ready-for-agent",
+      });
+
+      assert.equal(count, 3);
+      expect(mockRun).toHaveBeenCalledWith({
+        operation: "GitHubCli.execute",
+        command: "gh",
+        args: [
+          "issue",
+          "list",
+          "--state",
+          "open",
+          "--label",
+          "ready-for-agent",
+          "--json",
+          "number",
+          "--limit",
+          "200",
+        ],
+        cwd: "/repo",
+        timeoutMs: 30_000,
+      });
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("returns 0 when no issues carry the label", () =>
+    Effect.gen(function* () {
+      mockRun.mockReturnValueOnce(Effect.succeed(processOutput("")));
+
+      const gh = yield* GitHubCli.GitHubCli;
+      const count = yield* gh.countOpenIssuesByLabel({
+        cwd: "/repo",
+        label: "ready-for-agent",
+      });
+
+      assert.equal(count, 0);
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("maps an unauthenticated gh failure to a friendly error", () =>
+    Effect.gen(function* () {
+      mockRun.mockReturnValueOnce(
+        Effect.fail(
+          new VcsProcessExitError({
+            operation: "GitHubCli.execute",
+            command: "gh issue list",
+            cwd: "/repo",
+            exitCode: 1,
+            detail: "You are not logged in. Run gh auth login to authenticate.",
+          }),
+        ),
+      );
+
+      const gh = yield* GitHubCli.GitHubCli;
+      const error = yield* gh
+        .countOpenIssuesByLabel({ cwd: "/repo", label: "ready-for-agent" })
+        .pipe(Effect.flip);
+
+      assert.equal(error.detail.includes("not authenticated"), true);
+    }).pipe(Effect.provide(layer)),
+  );
+
   it.effect("surfaces a friendly error when the pull request is not found", () =>
     Effect.gen(function* () {
       mockRun.mockReturnValueOnce(

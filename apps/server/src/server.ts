@@ -37,6 +37,7 @@ import { ProviderInstanceRegistryHydrationLive } from "./provider/Layers/Provide
 import { TerminalManagerLive } from "./terminal/Layers/Manager.ts";
 import { DevServerRunnerLive } from "./devServer/DevServerRunner.ts";
 import { SandcastleStatusReaderLive } from "./sandcastle/SandcastleStatusReader.ts";
+import { QueueReadyCacheLive } from "./sandcastle/QueueReadyCache.ts";
 import { layer as ProcessRunnerLive } from "./processRunner.ts";
 import * as GitManager from "./git/GitManager.ts";
 import { KeybindingsLive } from "./keybindings.ts";
@@ -284,9 +285,13 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(ProviderRuntimeLayerLive),
   Layer.provideMerge(TerminalLayerLive),
   Layer.provideMerge(DevServerRunnerLayerLive),
-  // SandcastleStatusReaderLive only needs FileSystem.FileSystem (provided by
-  // PlatformServicesLive, same as DevServerRunner relies on).
+  // SandcastleStatusReaderLive needs FileSystem.FileSystem (from
+  // PlatformServicesLive) and QueueReadyCache (provided just below, so it flows
+  // into the reader). QueueReadyCacheLive in turn needs RepositoryIdentityResolver
+  // — satisfied by RepositoryIdentityResolverLive later in this pipe (a later
+  // provideMerge provides to all earlier layers).
   Layer.provideMerge(SandcastleStatusReaderLive),
+  Layer.provideMerge(QueueReadyCacheLive),
   Layer.provideMerge(PersistenceLayerLive),
   Layer.provideMerge(KeybindingsLive),
   Layer.provideMerge(ProviderRegistryLive),

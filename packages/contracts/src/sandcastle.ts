@@ -39,12 +39,7 @@ export const SandcastleIssuePhase = Schema.Literals([
 ]);
 export type SandcastleIssuePhase = typeof SandcastleIssuePhase.Type;
 
-export const SandcastleRunState = Schema.Literals([
-  "running",
-  "done",
-  "stopped",
-  "restarting",
-]);
+export const SandcastleRunState = Schema.Literals(["running", "done", "stopped", "restarting"]);
 export type SandcastleRunState = typeof SandcastleRunState.Type;
 
 export const SandcastleStatusHistoryEntry = Schema.Struct({
@@ -103,6 +98,27 @@ export const SandcastleStatusSnapshot = Schema.Struct({
 });
 export type SandcastleStatusSnapshot = typeof SandcastleStatusSnapshot.Type;
 
+// --- queue-ready count (NOT from status.json) ------------------------------
+
+/**
+ * How many issues are queued for Sandcastle to pick up — open GitHub issues
+ * carrying the pickup label. This is NOT in status.json; t3's server queries
+ * GitHub for it (cached) and attaches it per entry. `error` lets the UI show
+ * "unavailable" instead of a wrong number when the query can't run.
+ */
+export const QueueReadyStatus = Schema.Struct({
+  /** Open issues carrying the label; null while the first query is pending or a
+   *  query failed before any successful count. */
+  count: Schema.NullOr(Schema.Number),
+  /** The label counted (default "ready-for-agent"), echoed for display. */
+  label: Schema.String,
+  /** ISO time of the GitHub query behind `count`; null while pending. */
+  updatedAt: Schema.NullOr(Schema.String),
+  /** null | "gh-missing" | "gh-unauthed" | "query-failed". */
+  error: Schema.NullOr(Schema.String),
+});
+export type QueueReadyStatus = typeof QueueReadyStatus.Type;
+
 // --- per-project entry returned to the client ------------------------------
 
 export const SandcastleStatusEntry = Schema.Struct({
@@ -116,6 +132,10 @@ export const SandcastleStatusEntry = Schema.Struct({
   schemaOutdated: Schema.Boolean,
   /** Human-readable read/parse failure, or null. */
   readError: Schema.NullOr(Schema.String),
+  /** Queue-ready count from GitHub, or null when the repo isn't GitHub / its
+   *  identity is unknown (feature N/A). Optional so older payloads predating
+   *  this field still decode. */
+  queueReady: Schema.optional(Schema.NullOr(QueueReadyStatus)),
 });
 export type SandcastleStatusEntry = typeof SandcastleStatusEntry.Type;
 
@@ -136,11 +156,8 @@ export type SandcastleStatusAllResult = typeof SandcastleStatusAllResult.Type;
 
 // --- RPC (unary — no `stream: true`) ---------------------------------------
 
-export const WsSandcastleStatusAllRpc = Rpc.make(
-  SANDCASTLE_WS_METHODS.sandcastleStatusAll,
-  {
-    payload: SandcastleStatusAllPayload,
-    success: SandcastleStatusAllResult,
-    error: EnvironmentAuthorizationError,
-  },
-);
+export const WsSandcastleStatusAllRpc = Rpc.make(SANDCASTLE_WS_METHODS.sandcastleStatusAll, {
+  payload: SandcastleStatusAllPayload,
+  success: SandcastleStatusAllResult,
+  error: EnvironmentAuthorizationError,
+});

@@ -1,10 +1,12 @@
 // apps/web/src/components/sandcastle/sandcastleView.ts
 import type {
+  QueueReadyStatus,
   SandcastleIssuePhase,
   SandcastleRunState,
   SandcastleStatusEntry,
   SandcastleStatusHistoryEntry,
   SandcastleStatusIssue,
+  SandcastleStatusSnapshot,
 } from "@t3tools/contracts";
 import type { RepositoryIdentity } from "@t3tools/contracts";
 import { parseGitHubRepositoryNameWithOwnerFromRemoteUrl } from "@t3tools/shared/git";
@@ -39,10 +41,7 @@ const ACTIVE_RUN_STATES = new Set<SandcastleRunState>(["running", "restarting"])
 
 /** Human relative age of a snapshot vs the reading server's clock, e.g. "11h ago".
  *  Skew-safe (uses serverNow, clamps future timestamps); null if unparseable. */
-export function formatRelativeAge(
-  updatedAtIso: string,
-  serverNowIso: string,
-): string | null {
+export function formatRelativeAge(updatedAtIso: string, serverNowIso: string): string | null {
   const updated = Date.parse(updatedAtIso);
   const now = Date.parse(serverNowIso);
   if (Number.isNaN(updated) || Number.isNaN(now)) return null;
@@ -91,8 +90,7 @@ export function githubIssueUrl(
   issueNumber: number,
 ): string | null {
   if (!identity) return null;
-  const fromParts =
-    identity.owner && identity.name ? `${identity.owner}/${identity.name}` : null;
+  const fromParts = identity.owner && identity.name ? `${identity.owner}/${identity.name}` : null;
   const slug =
     fromParts ??
     parseGitHubRepositoryNameWithOwnerFromRemoteUrl(identity.locator?.remoteUrl ?? null);
@@ -117,11 +115,7 @@ export function phaseLabel(phase: SandcastleIssuePhase): string {
 }
 
 /** Phases that mean an issue is finished (won't progress further this run). */
-export const TERMINAL_PHASES = new Set<SandcastleIssuePhase>([
-  "merged",
-  "needs-human",
-  "deferred",
-]);
+export const TERMINAL_PHASES = new Set<SandcastleIssuePhase>(["merged", "needs-human", "deferred"]);
 
 /** Split issues into still-in-flight (`active`) vs finished (`recent`). */
 export function partitionIssuesByPhase(issues: readonly SandcastleStatusIssue[]): {
@@ -134,6 +128,70 @@ export function partitionIssuesByPhase(issues: readonly SandcastleStatusIssue[])
     (TERMINAL_PHASES.has(i.phase) ? recent : active).push(i);
   }
   return { active, recent };
+}
+
+/** One finished-issue row for the "Recent" section. */
+export interface RecentFinishedRow {
+  readonly number: number;
+  readonly title: string;
+  readonly phase: SandcastleIssuePhase;
+  /** ISO completion time (from history); null for a current-batch terminal issue
+   *  not yet recorded to history (so no timestamp is known yet). */
+  readonly completedAt: string | null;
+}
+
+/**
+ * Finished issues to show in the "Recent" section, across ALL iterations,
+ * newest-first.
+ *
+ * `snap.issues` only ever holds the CURRENT iteration's batch (the loop
+ * overwrites it each iteration), so on its own "Recent" looks empty mid-run even
+ * after issues have merged. The cumulative record is `snap.history` (append-only).
+ * So: prefer history; union in any current-batch terminal issues not yet recorded
+ * there (the brief window between finishing and being appended — those sort to the
+ * top as freshest); sort the rest by `completedAt` descending.
+ *
+ * Falls back to the current-batch terminal issues when `history` is absent (older
+ * Sandcastle versions predating the history log) — no regression there.
+ *
+ * Not capped: the caller slices to its display limit so it can render "+N more".
+ */
+export function recentFinishedIssues(snap: SandcastleStatusSnapshot): RecentFinishedRow[] {
+  const currentBatchTerminal = partitionIssuesByPhase(snap.issues).recent;
+
+  if (!snap.history) {
+    return currentBatchTerminal.map((i) => ({
+      number: i.number,
+      title: i.title,
+      phase: i.phase,
+      completedAt: null,
+    }));
+  }
+
+  const rows: RecentFinishedRow[] = snap.history.map((e) => ({
+    number: e.number,
+    title: e.title,
+    phase: e.phase,
+    completedAt: e.completedAt,
+  }));
+
+  const seen = new Set(rows.map((r) => r.number));
+  for (const i of currentBatchTerminal) {
+    if (seen.has(i.number)) continue;
+    seen.add(i.number);
+    rows.push({ number: i.number, title: i.title, phase: i.phase, completedAt: null });
+  }
+
+  // Newest-first. A null completedAt means "just finished this batch, not yet
+  // logged", so it sorts ahead of any timestamped history entry.
+  rows.sort((a, b) => {
+    if (a.completedAt === null && b.completedAt === null) return 0;
+    if (a.completedAt === null) return -1;
+    if (b.completedAt === null) return 1;
+    return Date.parse(b.completedAt) - Date.parse(a.completedAt);
+  });
+
+  return rows;
 }
 
 /** One display row produced by historyLinksForPhase. */
@@ -167,6 +225,52 @@ export function historyLinksForPhase(
     }
   }
   return rows;
+}
+
+/** How to render the queue-ready count (open issues waiting for Sandcastle). */
+export interface QueueReadyDisplay {
+  /** Short label, e.g. "3 ready" or "queue unavailable". */
+  readonly text: string;
+  /** True when the number is stale or unavailable (render muted). */
+  readonly muted: boolean;
+  /** Tooltip detail. */
+  readonly title: string;
+}
+
+function queueReadyErrorTitle(error: string): string {
+  switch (error) {
+    case "gh-missing":
+      return "GitHub CLI (gh) is not available on the server.";
+    case "gh-unauthed":
+      return "GitHub CLI is not signed in (run `gh auth login`).";
+    default:
+      return "Couldn't query GitHub for the queue.";
+  }
+}
+
+/**
+ * Presentation for the queue-ready count, or null when there's nothing to show:
+ * the repo isn't GitHub (status null), or the first query is still pending
+ * (count null, no error) — we stay silent rather than flash a placeholder.
+ * A failed query with a prior count stays visible but muted (stale).
+ */
+export function queueReadyDisplay(
+  status: QueueReadyStatus | null | undefined,
+): QueueReadyDisplay | null {
+  if (!status) return null;
+  if (status.count === null) {
+    if (status.error === null) return null; // pending — show nothing yet
+    return { text: "queue unavailable", muted: true, title: queueReadyErrorTitle(status.error) };
+  }
+  const text = `${status.count} ready`;
+  if (status.error === null) {
+    return {
+      text,
+      muted: false,
+      title: `Open issues labeled "${status.label}" waiting for Sandcastle to pick up`,
+    };
+  }
+  return { text, muted: true, title: `Last known count — ${queueReadyErrorTitle(status.error)}` };
 }
 
 /** Badge variant for a banner kind — maps to ui/badge.tsx variants. */

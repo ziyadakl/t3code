@@ -6,32 +6,23 @@ import { useStore, selectProjectsAcrossEnvironments } from "../../store.ts";
 import { Badge, badgeVariants } from "../ui/badge.tsx";
 import { Card } from "../ui/card.tsx";
 import { Separator } from "../ui/separator.tsx";
-import {
-  Popover,
-  PopoverPopup,
-  PopoverTrigger,
-} from "../ui/popover.tsx";
-import {
-  useSandcastleStatuses,
-  statusKey,
-  type ProjectRef,
-} from "./useSandcastleStatuses.ts";
+import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover.tsx";
+import { useSandcastleStatuses, statusKey, type ProjectRef } from "./useSandcastleStatuses.ts";
 import {
   deriveBanner,
   bannerTone,
   githubIssueUrl,
   historyLinksForPhase,
   partitionIssuesByPhase,
+  recentFinishedIssues,
+  queueReadyDisplay,
+  formatRelativeAge,
   finishedRunAgeHint,
   pillVariant,
 } from "./sandcastleView.ts";
 import { SandcastleIssueRow } from "./SandcastleIssueRow.tsx";
 import { LiveDot } from "./LiveDot.tsx";
-import {
-  SANDCASTLE_PILLS,
-  pillIcon,
-  type StatusPillSpec,
-} from "./statusPills.tsx";
+import { SANDCASTLE_PILLS, pillIcon, type StatusPillSpec } from "./statusPills.tsx";
 import type { SandcastleIssuePhase } from "@t3tools/contracts";
 import type { HistoryLinkRow } from "./sandcastleView.ts";
 
@@ -113,6 +104,10 @@ const DETAIL_POPOVER_PILLS: ReadonlyArray<{
   { spec: SANDCASTLE_PILLS.requeued, phase: "deferred" },
 ];
 
+/** Max finished issues shown in "Recent"; the rest collapse into a "+N more"
+ *  line (the pills already carry the full cumulative counts). */
+const RECENT_LIMIT = 10;
+
 export function SandcastleProjectDetail({
   environmentId,
   projectId,
@@ -121,15 +116,10 @@ export function SandcastleProjectDetail({
   projectId: string;
 }) {
   const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
-  const project = projects.find(
-    (p) => p.environmentId === environmentId && p.id === projectId,
-  );
+  const project = projects.find((p) => p.environmentId === environmentId && p.id === projectId);
 
   const refs = useMemo<ProjectRef[]>(
-    () =>
-      project
-        ? [{ environmentId: project.environmentId, cwd: project.cwd }]
-        : [],
+    () => (project ? [{ environmentId: project.environmentId, cwd: project.cwd }] : []),
     [project],
   );
   const statuses = useSandcastleStatuses(refs);
@@ -149,39 +139,35 @@ export function SandcastleProjectDetail({
   const entry = value?.entry;
   const banner = entry ? deriveBanner(entry, value!.serverNow) : null;
   const snap = entry?.snapshot ?? null;
-  const ageHint = snap
-    ? finishedRunAgeHint(snap.state, snap.updatedAt, value!.serverNow)
-    : null;
+  const ageHint = snap ? finishedRunAgeHint(snap.state, snap.updatedAt, value!.serverNow) : null;
 
-  const { active, recent } = partitionIssuesByPhase(snap?.issues ?? []);
+  const active = partitionIssuesByPhase(snap?.issues ?? []).active;
+  // "Recent" reads the cumulative history log (across all iterations), not the
+  // current-iteration batch in snap.issues — see recentFinishedIssues.
+  const recentAll = snap ? recentFinishedIssues(snap) : [];
+  const recent = recentAll.slice(0, RECENT_LIMIT);
+  const recentMore = recentAll.length - recent.length;
+  const queueReady = queueReadyDisplay(entry?.queueReady);
 
-  const issueLink = (n: number) =>
-    githubIssueUrl(project.repositoryIdentity ?? null, n);
+  const issueLink = (n: number) => githubIssueUrl(project.repositoryIdentity ?? null, n);
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-hidden px-16 py-6">
       <header className="mx-auto flex w-full max-w-5xl shrink-0 items-center gap-3">
-        <Link
-          to="/sandcastle"
-          className="text-sm text-muted-foreground underline"
-        >
+        <Link to="/sandcastle" className="text-sm text-muted-foreground underline">
           ← Sandcastle
         </Link>
         <h1 className="text-lg font-semibold">{project.name}</h1>
         <div className="ms-auto me-4 flex items-center gap-3">
           {ageHint ? (
-            <span className="text-xs text-muted-foreground">
-              Updated {ageHint}
-            </span>
+            <span className="text-xs text-muted-foreground">Updated {ageHint}</span>
           ) : null}
           {banner ? (
             <Badge variant={bannerTone(banner.kind)} size="xl">
               {banner.kind === "live" ? <LiveDot /> : null}
               {banner.text}
               {banner.kind === "live" && snap?.activity ? (
-                <span className="font-normal opacity-70">
-                  · {snap.activity}…
-                </span>
+                <span className="font-normal opacity-70">· {snap.activity}…</span>
               ) : null}
             </Badge>
           ) : null}
@@ -199,6 +185,14 @@ export function SandcastleProjectDetail({
               {snap.run.iterations.current}/{snap.run.iterations.total}
             </span>
             <span className="text-muted-foreground">{snap.run.branch}</span>
+            {queueReady ? (
+              <span
+                className={queueReady.muted ? "text-muted-foreground/60" : "text-muted-foreground"}
+                title={queueReady.title}
+              >
+                · {queueReady.text}
+              </span>
+            ) : null}
             <div className="ms-auto flex gap-2">
               {DETAIL_POPOVER_PILLS.map(({ spec, phase }) => (
                 <PillPopover
@@ -237,18 +231,27 @@ export function SandcastleProjectDetail({
             <section className="flex flex-col gap-2">
               <h2 className="text-sm font-medium">Recent</h2>
               {recent.length === 0 ? (
-                <p className="text-xs text-muted-foreground">
-                  Nothing finished yet.
-                </p>
+                <p className="text-xs text-muted-foreground">Nothing finished yet.</p>
               ) : (
-                recent.map((i) => (
-                  <SandcastleIssueRow
-                    key={i.number}
-                    variant="recent"
-                    issue={i}
-                    href={issueLink(i.number)}
-                  />
-                ))
+                <>
+                  {recent.map((i, idx) => (
+                    <SandcastleIssueRow
+                      // History can list the same issue number more than once
+                      // (e.g. requeued then merged), so number alone isn't unique.
+                      // oxlint-disable-next-line react/no-array-index-key
+                      key={`${i.number}-${idx}`}
+                      variant="recent"
+                      issue={i}
+                      href={issueLink(i.number)}
+                      age={
+                        i.completedAt ? formatRelativeAge(i.completedAt, value!.serverNow) : null
+                      }
+                    />
+                  ))}
+                  {recentMore > 0 ? (
+                    <p className="px-1 text-xs text-muted-foreground">+{recentMore} more</p>
+                  ) : null}
+                </>
               )}
             </section>
           </Card>

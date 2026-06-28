@@ -57,6 +57,14 @@ export interface GitHubCliShape {
     readonly limit?: number;
   }) => Effect.Effect<ReadonlyArray<GitHubPullRequestSummary>, GitHubCliError>;
 
+  /** Count of OPEN issues carrying `label` (PRs excluded by `gh issue list`).
+   *  Saturates at `limit` (default 200) — treat `count === limit` as "limit+". */
+  readonly countOpenIssuesByLabel: (input: {
+    readonly cwd: string;
+    readonly label: string;
+    readonly limit?: number;
+  }) => Effect.Effect<number, GitHubCliError>;
+
   readonly getPullRequest: (input: {
     readonly cwd: string;
     readonly reference: string;
@@ -211,7 +219,11 @@ function deriveRepositoryCloneUrlsFromCreateOutput(
 function decodeGitHubJson<S extends Schema.Top>(
   raw: string,
   schema: S,
-  operation: "listOpenPullRequests" | "getPullRequest" | "getRepositoryCloneUrls",
+  operation:
+    | "listOpenPullRequests"
+    | "getPullRequest"
+    | "getRepositoryCloneUrls"
+    | "countOpenIssuesByLabel",
   invalidDetail: string,
 ): Effect.Effect<S["Type"], GitHubCliError, S["DecodingServices"]> {
   return Schema.decodeEffect(Schema.fromJsonString(schema))(raw).pipe(
@@ -281,6 +293,36 @@ export const make = Effect.fn("makeGitHubCli")(function* () {
               ),
         ),
       ),
+    countOpenIssuesByLabel: (input) => {
+      const limit = input.limit ?? 200;
+      return execute({
+        cwd: input.cwd,
+        args: [
+          "issue",
+          "list",
+          "--state",
+          "open",
+          "--label",
+          input.label,
+          "--json",
+          "number",
+          "--limit",
+          String(limit),
+        ],
+      }).pipe(
+        Effect.map((result) => result.stdout.trim()),
+        Effect.flatMap((raw) =>
+          raw.length === 0
+            ? Effect.succeed(0)
+            : decodeGitHubJson(
+                raw,
+                Schema.Array(Schema.Struct({ number: Schema.Number })),
+                "countOpenIssuesByLabel",
+                "GitHub CLI returned invalid issue list JSON.",
+              ).pipe(Effect.map((issues) => issues.length)),
+        ),
+      );
+    },
     getPullRequest: (input) =>
       execute({
         cwd: input.cwd,

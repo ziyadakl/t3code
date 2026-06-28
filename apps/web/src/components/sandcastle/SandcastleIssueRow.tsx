@@ -1,32 +1,39 @@
 // apps/web/src/components/sandcastle/SandcastleIssueRow.tsx
-import type { SandcastleStatusIssue } from "@t3tools/contracts";
+import type { SandcastleIssuePhase } from "@t3tools/contracts";
 import { Badge } from "../ui/badge.tsx";
 import { Card } from "../ui/card.tsx";
 import { phaseLabel } from "./sandcastleView.ts";
+
+/** The minimal issue shape this row renders — satisfied by both a live
+ *  `SandcastleStatusIssue` (Active) and a `RecentFinishedRow` (Recent). */
+interface IssueRowData {
+  readonly number: number;
+  readonly title: string;
+  readonly phase: SandcastleIssuePhase;
+  readonly detail?: string | undefined;
+  readonly attention?: boolean | undefined;
+}
 
 /**
  * One issue row in the Sandcastle project detail view. Shared between the
  * "Active" and "Recent" sections, which differ only in wrapper element,
  * classNames, whether the optional detail line shows, and badge variant.
+ * The Recent variant may show a relative completion `age` (e.g. "5m ago").
  */
 export function SandcastleIssueRow({
   issue: i,
   href,
   variant,
+  age,
 }: {
-  issue: SandcastleStatusIssue;
+  issue: IssueRowData;
   href: string | null;
   variant: "active" | "recent";
+  age?: string | null;
 }) {
-  const numberClass =
-    variant === "active" ? "text-sm font-medium" : "font-medium";
+  const numberClass = variant === "active" ? "text-sm font-medium" : "font-medium";
   const number = href ? (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer"
-      className={`${numberClass} underline`}
-    >
+    <a href={href} target="_blank" rel="noreferrer" className={`${numberClass} underline`}>
       #{i.number}
     </a>
   ) : (
@@ -41,9 +48,7 @@ export function SandcastleIssueRow({
             {number}
             <span className="truncate text-sm">{i.title}</span>
           </div>
-          {i.detail ? (
-            <span className="text-xs text-muted-foreground">{i.detail}</span>
-          ) : null}
+          {i.detail ? <span className="text-xs text-muted-foreground">{i.detail}</span> : null}
         </div>
         <Badge variant={i.attention ? "warning" : "secondary"} size="sm">
           {phaseLabel(i.phase)}
@@ -58,9 +63,12 @@ export function SandcastleIssueRow({
         {number}
         <span className="truncate text-muted-foreground">{i.title}</span>
       </div>
-      <Badge variant="secondary" size="sm">
-        {phaseLabel(i.phase)}
-      </Badge>
+      <div className="flex shrink-0 items-center gap-2">
+        {age ? <span className="text-xs text-muted-foreground">{age}</span> : null}
+        <Badge variant="secondary" size="sm">
+          {phaseLabel(i.phase)}
+        </Badge>
+      </div>
     </div>
   );
 }

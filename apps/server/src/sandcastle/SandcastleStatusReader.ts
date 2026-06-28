@@ -15,11 +15,10 @@ import type {
   SandcastleStatusEntry,
 } from "@t3tools/contracts";
 import { buildStatusEntry } from "./buildStatusEntry.ts";
+import { DEFAULT_QUEUE_READY_LABEL, QueueReadyCache } from "./QueueReadyCache.ts";
 
 export interface SandcastleStatusReaderShape {
-  statusAll(
-    payload: SandcastleStatusAllPayload,
-  ): Effect.Effect<SandcastleStatusAllResult>;
+  statusAll(payload: SandcastleStatusAllPayload): Effect.Effect<SandcastleStatusAllResult>;
 }
 
 export class SandcastleStatusReader extends Context.Service<
@@ -37,6 +36,7 @@ export function sandcastleStatusPath(cwd: string): string {
 
 const makeReader = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
+  const queueReadyCache = yield* QueueReadyCache;
 
   const readOne = (cwd: string): Effect.Effect<SandcastleStatusEntry> =>
     Effect.gen(function* () {
@@ -45,12 +45,19 @@ const makeReader = Effect.gen(function* () {
         .pipe(Effect.orElseSucceed(() => false));
 
       const rawJson = hasSandcastleDir
-        ? yield* fileSystem
-            .readFileString(sandcastleStatusPath(cwd))
-            .pipe(Effect.map((s): string | null => s), Effect.orElseSucceed(() => null))
+        ? yield* fileSystem.readFileString(sandcastleStatusPath(cwd)).pipe(
+            Effect.map((s): string | null => s),
+            Effect.orElseSucceed(() => null),
+          )
         : null;
 
-      return buildStatusEntry({ cwd, hasSandcastleDir, rawJson });
+      // Only Sandcastle projects get a queue-ready query; non-Sandcastle cwds
+      // skip the (cached) GitHub lookup entirely.
+      const queueReady = hasSandcastleDir
+        ? yield* queueReadyCache.observe(cwd, DEFAULT_QUEUE_READY_LABEL)
+        : null;
+
+      return { ...buildStatusEntry({ cwd, hasSandcastleDir, rawJson }), queueReady };
     });
 
   const statusAll = (
@@ -70,7 +77,4 @@ const makeReader = Effect.gen(function* () {
   return { statusAll } satisfies SandcastleStatusReaderShape;
 });
 
-export const SandcastleStatusReaderLive = Layer.effect(
-  SandcastleStatusReader,
-  makeReader,
-);
+export const SandcastleStatusReaderLive = Layer.effect(SandcastleStatusReader, makeReader);
