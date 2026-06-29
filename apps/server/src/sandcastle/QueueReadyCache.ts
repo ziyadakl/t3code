@@ -1,6 +1,9 @@
 /**
- * QueueReadyCache — how many issues are queued for Sandcastle to pick up (open
- * GitHub issues carrying the pickup label).
+ * QueueReadyCache — how many issues the Sandcastle loop can actually dispatch
+ * right now: open GitHub issues carrying the pickup label, narrowed by the same
+ * rules the loop's planner applies (the type: label rule when SANDCASTLE.md
+ * exists, and the `Blocked by: #N` rule against the repo's open-issue set). The
+ * narrowing itself lives in the pure `queueReadyDispatch` module.
  *
  * This is NOT in status.json, so it's queried from GitHub via the `gh` CLI. The
  * Sandcastle status RPC is polled every ~2s, so a naive `gh` call per poll would
@@ -18,6 +21,7 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
@@ -34,6 +38,7 @@ import {
 } from "../sourceControl/GitHubCli.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import { RepositoryIdentityResolver } from "../project/Services/RepositoryIdentityResolver.ts";
+import { countDispatchableIssues } from "./queueReadyDispatch.ts";
 
 /** Default Sandcastle pickup label (mirrors the loop's `--label` default). */
 export const DEFAULT_QUEUE_READY_LABEL = "ready-for-agent";
@@ -115,6 +120,7 @@ function isFresh(
 export const makeQueueReadyCache = (options: QueueReadyCacheOptions = {}) =>
   Effect.gen(function* () {
     const gh = yield* GitHubCli;
+    const fs = yield* FileSystem.FileSystem;
     const resolver = yield* RepositoryIdentityResolver;
     const ref = yield* SynchronizedRef.make(new Map<string, CacheEntry>());
     const freshTtlMs = Duration.toMillis(options.freshTtl ?? DEFAULT_FRESH_TTL);
@@ -144,10 +150,29 @@ export const makeQueueReadyCache = (options: QueueReadyCacheOptions = {}) =>
         return new Map(map).set(repoKey, { ...entry, inFlight: false });
       });
 
-    const refresh = (cwd: string, label: string, repoKey: string): Effect.Effect<void> =>
+    /** Does `<repoRoot>/SANDCASTLE.md` exist? Matches the loop's `existsSync`
+     *  semantics: an unstattable path (or unknown root) is treated as absent. */
+    const sandcastleMdExists = (repoRoot: string | undefined): Effect.Effect<boolean> =>
+      repoRoot
+        ? fs.exists(`${repoRoot}/SANDCASTLE.md`).pipe(Effect.orElseSucceed(() => false))
+        : Effect.succeed(false);
+
+    const refresh = (
+      cwd: string,
+      label: string,
+      repoKey: string,
+      repoRoot: string | undefined,
+    ): Effect.Effect<void> =>
       Effect.gen(function* () {
         const nowIso = DateTime.formatIso(yield* DateTime.now);
-        const outcome = yield* gh.countOpenIssuesByLabel({ cwd, label }).pipe(
+        const outcome = yield* gh.listDispatchCandidates({ cwd, label }).pipe(
+          Effect.flatMap(({ ready, openNumbers }) =>
+            sandcastleMdExists(repoRoot).pipe(
+              Effect.map((mdExists) =>
+                countDispatchableIssues({ ready, openNumbers, sandcastleMdExists: mdExists }),
+              ),
+            ),
+          ),
           Effect.map((count) => ({ ok: true as const, count })),
           Effect.catch((error) =>
             Effect.succeed({ ok: false as const, error: reasonToWireError(error.reason) }),
@@ -198,7 +223,7 @@ export const makeQueueReadyCache = (options: QueueReadyCacheOptions = {}) =>
         );
 
         if (decision.shouldRefresh) {
-          yield* Effect.forkDetach(refresh(cwd, label, repoKey));
+          yield* Effect.forkDetach(refresh(cwd, label, repoKey, identity.rootPath));
         }
         return decision.status;
       });

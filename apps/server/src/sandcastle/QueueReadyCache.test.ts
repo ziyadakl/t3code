@@ -1,6 +1,7 @@
 import { assert, it, describe } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import type { RepositoryIdentity } from "@t3tools/contracts";
 
@@ -14,6 +15,11 @@ import {
 
 const LABEL = "ready-for-agent";
 const CWD = "/repo";
+
+type DispatchCandidates = {
+  readonly ready: ReadonlyArray<{ number: number; body: string; labels: readonly string[] }>;
+  readonly openNumbers: ReadonlyArray<number>;
+};
 
 const githubIdentity: RepositoryIdentity = {
   canonicalKey: "github.com/acme/widgets",
@@ -29,20 +35,30 @@ const githubIdentity: RepositoryIdentity = {
 
 const unauthedError = () =>
   new GitHubCliError({
-    operation: "countOpenIssuesByLabel",
+    operation: "listDispatchCandidates",
     reason: "unauthed",
     detail: "GitHub CLI is not authenticated. Run `gh auth login` and retry.",
   });
 
-/** A GitHubCli whose only meaningful method is countOpenIssuesByLabel; the rest
+/** `n` clean ready issues (no labels, empty body, no blockers) so
+ *  countDispatchableIssues returns exactly `n` when SANDCASTLE.md is absent.
+ *  Lets the count-oriented tests below keep expressing expectations as a number. */
+const readyOfLength = (n: number): DispatchCandidates => ({
+  ready: Array.from({ length: n }, (_, i) => ({ number: i + 1, body: "", labels: [] as string[] })),
+  openNumbers: [],
+});
+
+/** A GitHubCli whose only meaningful method is listDispatchCandidates; the rest
  *  fail (they should never be called by QueueReadyCache). */
-function fakeGitHubCli(count: () => Effect.Effect<number, GitHubCliError>): GitHubCliShape {
+function fakeGitHubCli(
+  listDispatch: () => Effect.Effect<DispatchCandidates, GitHubCliError>,
+): GitHubCliShape {
   const unexpected = (operation: string) =>
     Effect.fail(new GitHubCliError({ operation, reason: "other", detail: "unexpected call" }));
   return {
     execute: () => unexpected("execute"),
     listOpenPullRequests: () => unexpected("listOpenPullRequests"),
-    countOpenIssuesByLabel: () => count(),
+    listDispatchCandidates: () => listDispatch(),
     getPullRequest: () => unexpected("getPullRequest"),
     getRepositoryCloneUrls: () => unexpected("getRepositoryCloneUrls"),
     createRepository: () => unexpected("createRepository"),
@@ -53,14 +69,28 @@ function fakeGitHubCli(count: () => Effect.Effect<number, GitHubCliError>): GitH
 }
 
 function cacheLayer(args: {
-  readonly count: () => Effect.Effect<number, GitHubCliError>;
+  /** Number-based dispatchable count for the SWR/identity/in-flight tests
+   *  (SANDCASTLE.md absent ⇒ this many dispatchable). Ignored when `dispatch` is set. */
+  readonly count?: () => Effect.Effect<number, GitHubCliError>;
+  /** Explicit candidates for the end-to-end dispatch test. Takes precedence over `count`. */
+  readonly dispatch?: () => Effect.Effect<DispatchCandidates, GitHubCliError>;
   readonly identity: RepositoryIdentity | null;
   readonly options?: QueueReadyCacheOptions;
   /** Optional counter incremented once per `resolve` invocation (memo-hit check). */
   readonly resolveCounter?: { calls: number };
+  /** What the fake FileSystem reports for `<rootPath>/SANDCASTLE.md` (default false). */
+  readonly sandcastleMdExists?: boolean;
 }): Layer.Layer<QueueReadyCache> {
+  const listDispatch =
+    args.dispatch ??
+    (() => (args.count ?? (() => Effect.succeed(0)))().pipe(Effect.map(readyOfLength)));
   return Layer.effect(QueueReadyCache, makeQueueReadyCache(args.options ?? {})).pipe(
-    Layer.provide(Layer.succeed(GitHubCli, fakeGitHubCli(args.count))),
+    Layer.provide(Layer.succeed(GitHubCli, fakeGitHubCli(listDispatch))),
+    Layer.provide(
+      FileSystem.layerNoop({
+        exists: () => Effect.succeed(args.sandcastleMdExists ?? false),
+      }),
+    ),
     Layer.provide(
       Layer.succeed(RepositoryIdentityResolver, {
         resolve: () => {
@@ -87,6 +117,37 @@ describe("QueueReadyCache", () => {
     }).pipe(
       Effect.provide(cacheLayer({ count: () => Effect.succeed(3), identity: githubIdentity })),
     ),
+  );
+
+  it.live(
+    "counts only the dispatchable issues end-to-end (type: + blocked-by rules, SANDCASTLE.md present)",
+    () =>
+      Effect.gen(function* () {
+        const cache = yield* QueueReadyCache;
+        yield* cache.observe(CWD, LABEL);
+        yield* Effect.sleep("20 millis");
+        const status = yield* cache.observe(CWD, LABEL);
+        // #10 typeless ⇒ excluded; #11 blocked by open #99 ⇒ excluded; #12 has one
+        // type: label and no open blocker ⇒ kept. So exactly one is dispatchable.
+        assert.equal(status?.count, 1);
+        assert.equal(status?.error, null);
+      }).pipe(
+        Effect.provide(
+          cacheLayer({
+            identity: { ...githubIdentity, rootPath: "/repo-root" },
+            sandcastleMdExists: true,
+            dispatch: () =>
+              Effect.succeed({
+                ready: [
+                  { number: 10, body: "", labels: ["ready-for-agent"] },
+                  { number: 11, body: "Blocked by: #99", labels: ["ready-for-agent", "type:feature"] },
+                  { number: 12, body: "", labels: ["ready-for-agent", "type:bug"] },
+                ],
+                openNumbers: [10, 11, 12, 99],
+              }),
+          }),
+        ),
+      ),
   );
 
   it.live("returns null for a project whose repo isn't GitHub", () =>
@@ -152,7 +213,7 @@ describe("QueueReadyCache", () => {
           count: () =>
             Effect.fail(
               new GitHubCliError({
-                operation: "countOpenIssuesByLabel",
+                operation: "listDispatchCandidates",
                 reason: "missing",
                 detail: "an opaque boundary message",
               }),

@@ -268,7 +268,7 @@ export function queueReadyDisplay(
     return {
       text,
       muted: false,
-      title: `Open issues labeled "${status.label}" waiting for Sandcastle to pick up`,
+      title: `Issues Sandcastle can pick up now (labeled "${status.label}", ready to dispatch)`,
     };
   }
   return { text, muted: true, title: `Last known count — ${queueReadyErrorTitle(status.error)}` };

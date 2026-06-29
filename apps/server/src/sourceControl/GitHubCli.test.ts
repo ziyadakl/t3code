@@ -267,54 +267,77 @@ describe("GitHubCli.layer", () => {
     }).pipe(Effect.provide(layer)),
   );
 
-  it.effect("counts open issues carrying a label", () =>
+  it.effect("lists dispatch candidates: ready rows (label names) + the open-issue set", () =>
     Effect.gen(function* () {
-      mockRun.mockReturnValueOnce(
-        Effect.succeed(
-          // @effect-diagnostics-next-line preferSchemaOverJson:off
-          processOutput(JSON.stringify([{ number: 493 }, { number: 501 }, { number: 502 }])),
-        ),
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      const readyJson = JSON.stringify([
+        {
+          number: 493,
+          body: "Blocked by: #2",
+          labels: [{ name: "ready-for-agent" }, { name: "type:feature" }],
+        },
+        { number: 501, body: "", labels: [{ name: "ready-for-agent" }] },
+      ]);
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      const openJson = JSON.stringify([{ number: 2 }, { number: 493 }, { number: 501 }]);
+      // The two gh calls are distinguished by `--label` (ready) vs not (open set),
+      // so the assertion doesn't hinge on which effect runs first.
+      mockRun.mockImplementation((input) =>
+        Effect.succeed(processOutput(input.args.includes("--label") ? readyJson : openJson)),
       );
 
       const gh = yield* GitHubCli.GitHubCli;
-      const count = yield* gh.countOpenIssuesByLabel({
+      const result = yield* gh.listDispatchCandidates({
         cwd: "/repo",
         label: "ready-for-agent",
       });
 
-      assert.equal(count, 3);
+      assert.deepStrictEqual(result, {
+        ready: [
+          { number: 493, body: "Blocked by: #2", labels: ["ready-for-agent", "type:feature"] },
+          { number: 501, body: "", labels: ["ready-for-agent"] },
+        ],
+        openNumbers: [2, 493, 501],
+      });
       expect(mockRun).toHaveBeenCalledWith({
         operation: "GitHubCli.execute",
         command: "gh",
         args: [
           "issue",
           "list",
-          "--state",
-          "open",
           "--label",
           "ready-for-agent",
+          "--state",
+          "open",
           "--json",
-          "number",
+          "number,body,labels",
           "--limit",
-          "200",
+          "100",
         ],
+        cwd: "/repo",
+        timeoutMs: 30_000,
+      });
+      expect(mockRun).toHaveBeenCalledWith({
+        operation: "GitHubCli.execute",
+        command: "gh",
+        args: ["issue", "list", "--state", "open", "--json", "number", "--limit", "200"],
         cwd: "/repo",
         timeoutMs: 30_000,
       });
     }).pipe(Effect.provide(layer)),
   );
 
-  it.effect("returns 0 when no issues carry the label", () =>
+  it.effect("returns empty ready + open sets when gh returns nothing", () =>
     Effect.gen(function* () {
-      mockRun.mockReturnValueOnce(Effect.succeed(processOutput("")));
+      mockRun.mockReturnValue(Effect.succeed(processOutput("")));
 
       const gh = yield* GitHubCli.GitHubCli;
-      const count = yield* gh.countOpenIssuesByLabel({
+      const result = yield* gh.listDispatchCandidates({
         cwd: "/repo",
         label: "ready-for-agent",
       });
 
-      assert.equal(count, 0);
+      assert.deepStrictEqual(result, { ready: [], openNumbers: [] });
     }).pipe(Effect.provide(layer)),
   );
 
@@ -334,7 +357,7 @@ describe("GitHubCli.layer", () => {
 
       const gh = yield* GitHubCli.GitHubCli;
       const error = yield* gh
-        .countOpenIssuesByLabel({ cwd: "/repo", label: "ready-for-agent" })
+        .listDispatchCandidates({ cwd: "/repo", label: "ready-for-agent" })
         .pipe(Effect.flip);
 
       assert.equal(error.detail.includes("not authenticated"), true);
@@ -385,7 +408,7 @@ describe("GitHubCli.layer", () => {
 
         const gh = yield* GitHubCli.GitHubCli;
         const error = yield* gh
-          .countOpenIssuesByLabel({ cwd: "/repo", label: "ready-for-agent" })
+          .listDispatchCandidates({ cwd: "/repo", label: "ready-for-agent" })
           .pipe(Effect.flip);
 
         assert.equal(error.reason, "missing");
@@ -408,7 +431,7 @@ describe("GitHubCli.layer", () => {
 
         const gh = yield* GitHubCli.GitHubCli;
         const error = yield* gh
-          .countOpenIssuesByLabel({ cwd: "/repo", label: "ready-for-agent" })
+          .listDispatchCandidates({ cwd: "/repo", label: "ready-for-agent" })
           .pipe(Effect.flip);
 
         assert.equal(error.reason, "unauthed");
@@ -455,7 +478,7 @@ describe("GitHubCli.layer", () => {
 
         const gh = yield* GitHubCli.GitHubCli;
         const error = yield* gh
-          .countOpenIssuesByLabel({ cwd: "/repo", label: "ready-for-agent" })
+          .listDispatchCandidates({ cwd: "/repo", label: "ready-for-agent" })
           .pipe(Effect.flip);
 
         assert.equal(error.reason, "other");

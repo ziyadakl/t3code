@@ -108,13 +108,17 @@ export const QueueReadyError = Schema.Literals(["gh-missing", "gh-unauthed", "qu
 export type QueueReadyError = typeof QueueReadyError.Type;
 
 /**
- * How many issues are queued for Sandcastle to pick up — open GitHub issues
- * carrying the pickup label. This is NOT in status.json; t3's server queries
- * GitHub for it (cached) and attaches it per entry. `error` lets the UI show
- * "unavailable" instead of a wrong number when the query can't run.
+ * How many issues the Sandcastle loop can dispatch right now — open GitHub
+ * issues carrying the pickup label, narrowed to the set the loop's planner will
+ * actually pick up (the type: label rule when SANDCASTLE.md exists, and the
+ * `Blocked by: #N` rule against the repo's open issues). NOT a raw label count.
+ * This is NOT in status.json; t3's server queries GitHub for it (cached) and
+ * attaches it per entry. `error` lets the UI show "unavailable" instead of a
+ * wrong number when the query can't run.
  */
 export const QueueReadyStatus = Schema.Struct({
-  /** Open issues carrying the label; null while the first query is pending or a
+  /** Issues the planner can dispatch now (ready-for-agent with the type: +
+   *  blocked-by rules applied); null while the first query is pending or a
    *  query failed before any successful count. */
   count: Schema.NullOr(Schema.Number),
   /** The label counted (default "ready-for-agent"), echoed for display. */

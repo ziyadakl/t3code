@@ -288,8 +288,9 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   // SandcastleStatusReaderLive needs FileSystem.FileSystem (from
   // PlatformServicesLive) and QueueReadyCache (provided just below, so it flows
   // into the reader). QueueReadyCacheLive in turn needs RepositoryIdentityResolver
-  // — satisfied by RepositoryIdentityResolverLive later in this pipe (a later
-  // provideMerge provides to all earlier layers).
+  // (satisfied by RepositoryIdentityResolverLive later in this pipe — a later
+  // provideMerge provides to all earlier layers) and FileSystem.FileSystem (for
+  // the SANDCASTLE.md check; same PlatformServicesLive source as the reader).
   Layer.provideMerge(SandcastleStatusReaderLive),
   Layer.provideMerge(QueueReadyCacheLive),
   Layer.provideMerge(PersistenceLayerLive),

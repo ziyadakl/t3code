@@ -610,12 +610,12 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
             detail: `Unexpected repository create: ${input.repository}`,
           }),
         ),
-      countOpenIssuesByLabel: (input) =>
+      listDispatchCandidates: (input) =>
         Effect.fail(
           new GitHubCliError({
-            operation: "countOpenIssuesByLabel",
+            operation: "listDispatchCandidates",
             reason: "other",
-            detail: `Unexpected issue count for label: ${input.label}`,
+            detail: `Unexpected dispatch-candidate query for label: ${input.label}`,
           }),
         ),
       checkoutPullRequest: (input) =>
