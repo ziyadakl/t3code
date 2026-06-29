@@ -13,6 +13,7 @@
  * `error` marker is set so the UI can show "unavailable" rather than a wrong
  * number. The cache never fails or blocks the poll.
  */
+import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -20,7 +21,11 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
-import type { QueueReadyError, QueueReadyStatus } from "@t3tools/contracts";
+import type {
+  QueueReadyError,
+  QueueReadyStatus,
+  RepositoryIdentity,
+} from "@t3tools/contracts";
 
 import {
   GitHubCli,
@@ -37,12 +42,23 @@ export const DEFAULT_QUEUE_READY_LABEL = "ready-for-agent";
 const DEFAULT_FRESH_TTL = Duration.seconds(45);
 /** Shorter window after a failed query so it retries sooner. */
 const DEFAULT_ERROR_TTL = Duration.seconds(15);
+/**
+ * How long a cwd's resolved repository identity is memoized. A working
+ * directory's repo identity is effectively stable, so this is far longer than
+ * the count TTL: it keeps `resolver.resolve` (whose cache-key step runs an
+ * UNCACHED `git rev-parse`) off the ~2s Sandcastle poll path.
+ */
+const DEFAULT_IDENTITY_TTL = Duration.minutes(5);
+/** Bound on distinct cwds whose identity is memoized at once. */
+const IDENTITY_CACHE_CAPACITY = 512;
 
 export interface QueueReadyCacheOptions {
   /** Trust window for a successful count (default 45s). Lowered in tests. */
   readonly freshTtl?: Duration.Input;
   /** Trust window after a failed query (default 15s). */
   readonly errorTtl?: Duration.Input;
+  /** How long a cwd's resolved identity is memoized (default 5m). Lowered in tests. */
+  readonly identityTtl?: Duration.Input;
 }
 
 interface CacheEntry {
@@ -103,6 +119,20 @@ export const makeQueueReadyCache = (options: QueueReadyCacheOptions = {}) =>
     const ref = yield* SynchronizedRef.make(new Map<string, CacheEntry>());
     const freshTtlMs = Duration.toMillis(options.freshTtl ?? DEFAULT_FRESH_TTL);
     const errorTtlMs = Duration.toMillis(options.errorTtl ?? DEFAULT_ERROR_TTL);
+    const identityTtl = options.identityTtl ?? DEFAULT_IDENTITY_TTL;
+
+    // Memoize cwd -> resolved identity. Without this, every poll re-runs the
+    // resolver, whose cache-key step spawns an UNCACHED `git rev-parse` per
+    // GitHub project every ~2s. A flat TTL memoizes BOTH the github identity
+    // and the null/non-github result, so non-github repos don't re-spawn git
+    // on every poll either.
+    const identityCache = yield* Cache.makeWith<string, RepositoryIdentity | null>(
+      (cwd) => resolver.resolve(cwd),
+      {
+        capacity: IDENTITY_CACHE_CAPACITY,
+        timeToLive: () => identityTtl,
+      },
+    );
 
     /** Release this repo's in-flight slot if it's still claimed, leaving the
      *  last-known status untouched. Idempotent: a no-op once the normal
@@ -141,7 +171,7 @@ export const makeQueueReadyCache = (options: QueueReadyCacheOptions = {}) =>
 
     const observe: QueueReadyCacheShape["observe"] = (cwd, label) =>
       Effect.gen(function* () {
-        const identity = yield* resolver.resolve(cwd);
+        const identity = yield* Cache.get(identityCache, cwd);
         if (!identity || identity.provider !== "github" || !identity.owner || !identity.name) {
           return null;
         }

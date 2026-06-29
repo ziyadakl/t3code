@@ -56,12 +56,17 @@ function cacheLayer(args: {
   readonly count: () => Effect.Effect<number, GitHubCliError>;
   readonly identity: RepositoryIdentity | null;
   readonly options?: QueueReadyCacheOptions;
+  /** Optional counter incremented once per `resolve` invocation (memo-hit check). */
+  readonly resolveCounter?: { calls: number };
 }): Layer.Layer<QueueReadyCache> {
   return Layer.effect(QueueReadyCache, makeQueueReadyCache(args.options ?? {})).pipe(
     Layer.provide(Layer.succeed(GitHubCli, fakeGitHubCli(args.count))),
     Layer.provide(
       Layer.succeed(RepositoryIdentityResolver, {
-        resolve: () => Effect.succeed(args.identity),
+        resolve: () => {
+          if (args.resolveCounter) args.resolveCounter.calls += 1;
+          return Effect.succeed(args.identity);
+        },
       }),
     ),
   );
@@ -156,6 +161,27 @@ describe("QueueReadyCache", () => {
         }),
       ),
     ),
+  );
+
+  it.effect(
+    "resolves a cwd's identity at most once across repeated observes within the identity TTL",
+    () => {
+      // The whole point of QueueReadyCache is to keep subprocesses off the ~2s
+      // poll path. `resolver.resolve` runs an uncached `git rev-parse`, so it
+      // must be memoized: many observes of the same cwd => exactly one resolve.
+      const resolveCounter = { calls: 0 };
+      return Effect.gen(function* () {
+        const cache = yield* QueueReadyCache;
+        yield* cache.observe(CWD, LABEL);
+        yield* cache.observe(CWD, LABEL);
+        yield* cache.observe(CWD, LABEL);
+        assert.equal(resolveCounter.calls, 1);
+      }).pipe(
+        Effect.provide(
+          cacheLayer({ count: () => Effect.succeed(0), identity: githubIdentity, resolveCounter }),
+        ),
+      );
+    },
   );
 
   it.live("releases the in-flight slot when a refresh dies (defect)", () => {
