@@ -267,7 +267,7 @@ describe("GitHubCli.layer", () => {
     }).pipe(Effect.provide(layer)),
   );
 
-  it.effect("lists dispatch candidates: ready rows (label names) + the open-issue set", () =>
+  it.effect("listOpenIssuesByLabel: decodes ready rows and maps label objects to names", () =>
     Effect.gen(function* () {
       // @effect-diagnostics-next-line preferSchemaOverJson:off
       const readyJson = JSON.stringify([
@@ -277,28 +277,22 @@ describe("GitHubCli.layer", () => {
           labels: [{ name: "ready-for-agent" }, { name: "type:feature" }],
         },
         { number: 501, body: "", labels: [{ name: "ready-for-agent" }] },
+        // GitHub can return a null body — it must normalize to "" rather than fail the decode.
+        { number: 502, body: null, labels: [{ name: "ready-for-agent" }] },
       ]);
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
-      const openJson = JSON.stringify([{ number: 2 }, { number: 493 }, { number: 501 }]);
-      // The two gh calls are distinguished by `--label` (ready) vs not (open set),
-      // so the assertion doesn't hinge on which effect runs first.
-      mockRun.mockImplementation((input) =>
-        Effect.succeed(processOutput(input.args.includes("--label") ? readyJson : openJson)),
-      );
+      mockRun.mockReturnValue(Effect.succeed(processOutput(readyJson)));
 
       const gh = yield* GitHubCli.GitHubCli;
-      const result = yield* gh.listDispatchCandidates({
+      const result = yield* gh.listOpenIssuesByLabel({
         cwd: "/repo",
         label: "ready-for-agent",
       });
 
-      assert.deepStrictEqual(result, {
-        ready: [
-          { number: 493, body: "Blocked by: #2", labels: ["ready-for-agent", "type:feature"] },
-          { number: 501, body: "", labels: ["ready-for-agent"] },
-        ],
-        openNumbers: [2, 493, 501],
-      });
+      assert.deepStrictEqual(result, [
+        { number: 493, body: "Blocked by: #2", labels: ["ready-for-agent", "type:feature"] },
+        { number: 501, body: "", labels: ["ready-for-agent"] },
+        { number: 502, body: "", labels: ["ready-for-agent"] },
+      ]);
       expect(mockRun).toHaveBeenCalledWith({
         operation: "GitHubCli.execute",
         command: "gh",
@@ -317,6 +311,30 @@ describe("GitHubCli.layer", () => {
         cwd: "/repo",
         timeoutMs: 30_000,
       });
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("listOpenIssuesByLabel: returns [] when gh returns nothing", () =>
+    Effect.gen(function* () {
+      mockRun.mockReturnValue(Effect.succeed(processOutput("")));
+
+      const gh = yield* GitHubCli.GitHubCli;
+      const result = yield* gh.listOpenIssuesByLabel({ cwd: "/repo", label: "ready-for-agent" });
+
+      assert.deepStrictEqual(result, []);
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("listOpenIssueNumbers: decodes the open-issue number set", () =>
+    Effect.gen(function* () {
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      const openJson = JSON.stringify([{ number: 2 }, { number: 493 }, { number: 501 }]);
+      mockRun.mockReturnValue(Effect.succeed(processOutput(openJson)));
+
+      const gh = yield* GitHubCli.GitHubCli;
+      const result = yield* gh.listOpenIssueNumbers({ cwd: "/repo" });
+
+      assert.deepStrictEqual(result, [2, 493, 501]);
       expect(mockRun).toHaveBeenCalledWith({
         operation: "GitHubCli.execute",
         command: "gh",
@@ -327,21 +345,18 @@ describe("GitHubCli.layer", () => {
     }).pipe(Effect.provide(layer)),
   );
 
-  it.effect("returns empty ready + open sets when gh returns nothing", () =>
+  it.effect("listOpenIssueNumbers: returns [] when gh returns nothing", () =>
     Effect.gen(function* () {
       mockRun.mockReturnValue(Effect.succeed(processOutput("")));
 
       const gh = yield* GitHubCli.GitHubCli;
-      const result = yield* gh.listDispatchCandidates({
-        cwd: "/repo",
-        label: "ready-for-agent",
-      });
+      const result = yield* gh.listOpenIssueNumbers({ cwd: "/repo" });
 
-      assert.deepStrictEqual(result, { ready: [], openNumbers: [] });
+      assert.deepStrictEqual(result, []);
     }).pipe(Effect.provide(layer)),
   );
 
-  it.effect("maps an unauthenticated gh failure to a friendly error", () =>
+  it.effect("listOpenIssuesByLabel: maps an unauthenticated gh failure to a friendly error", () =>
     Effect.gen(function* () {
       mockRun.mockReturnValueOnce(
         Effect.fail(
@@ -357,7 +372,7 @@ describe("GitHubCli.layer", () => {
 
       const gh = yield* GitHubCli.GitHubCli;
       const error = yield* gh
-        .listDispatchCandidates({ cwd: "/repo", label: "ready-for-agent" })
+        .listOpenIssuesByLabel({ cwd: "/repo", label: "ready-for-agent" })
         .pipe(Effect.flip);
 
       assert.equal(error.detail.includes("not authenticated"), true);
@@ -408,7 +423,7 @@ describe("GitHubCli.layer", () => {
 
         const gh = yield* GitHubCli.GitHubCli;
         const error = yield* gh
-          .listDispatchCandidates({ cwd: "/repo", label: "ready-for-agent" })
+          .listOpenIssuesByLabel({ cwd: "/repo", label: "ready-for-agent" })
           .pipe(Effect.flip);
 
         assert.equal(error.reason, "missing");
@@ -431,7 +446,7 @@ describe("GitHubCli.layer", () => {
 
         const gh = yield* GitHubCli.GitHubCli;
         const error = yield* gh
-          .listDispatchCandidates({ cwd: "/repo", label: "ready-for-agent" })
+          .listOpenIssuesByLabel({ cwd: "/repo", label: "ready-for-agent" })
           .pipe(Effect.flip);
 
         assert.equal(error.reason, "unauthed");
@@ -477,9 +492,7 @@ describe("GitHubCli.layer", () => {
         );
 
         const gh = yield* GitHubCli.GitHubCli;
-        const error = yield* gh
-          .listDispatchCandidates({ cwd: "/repo", label: "ready-for-agent" })
-          .pipe(Effect.flip);
+        const error = yield* gh.listOpenIssueNumbers({ cwd: "/repo" }).pipe(Effect.flip);
 
         assert.equal(error.reason, "other");
       }).pipe(Effect.provide(layer)),

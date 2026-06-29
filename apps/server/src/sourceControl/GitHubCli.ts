@@ -59,6 +59,19 @@ export interface GitHubRepositoryCloneUrls {
   readonly sshUrl: string;
 }
 
+/**
+ * One OPEN issue carrying the Sandcastle pickup label, with its body and the
+ * NAMES of its labels — enough for the dispatch selector's type:/blocked-by
+ * rules to run off-process. The producer (`listOpenIssuesByLabel`) owns this
+ * type; the pure `queueReadyDispatch` module imports it (type-only) so the
+ * shape is declared once and referenced everywhere.
+ */
+export interface DispatchReadyIssue {
+  readonly number: number;
+  readonly body: string;
+  readonly labels: readonly string[];
+}
+
 export interface GitHubCliShape {
   readonly execute: (input: {
     readonly cwd: string;
@@ -73,27 +86,23 @@ export interface GitHubCliShape {
   }) => Effect.Effect<ReadonlyArray<GitHubPullRequestSummary>, GitHubCliError>;
 
   /**
-   * Fetch the raw inputs the Sandcastle dispatch selector needs (PRs excluded by
-   * `gh issue list`):
-   *  - `ready`: OPEN issues carrying `label`, each with its body and the NAMES of
-   *    its labels (so the type:/blocked-by rules can be applied off-process).
-   *  - `openNumbers`: every OPEN issue number in the repo, used to resolve
-   *    `Blocked by: #N` directives (a blocker is resolved once it's no longer open).
+   * OPEN issues carrying `label`, each with its body and the NAMES of its labels
+   * (so the Sandcastle dispatch selector's type:/blocked-by rules can be applied
+   * off-process). PRs are excluded by `gh issue list`.
    */
-  readonly listDispatchCandidates: (input: {
+  readonly listOpenIssuesByLabel: (input: {
     readonly cwd: string;
     readonly label: string;
-  }) => Effect.Effect<
-    {
-      readonly ready: ReadonlyArray<{
-        readonly number: number;
-        readonly body: string;
-        readonly labels: readonly string[];
-      }>;
-      readonly openNumbers: ReadonlyArray<number>;
-    },
-    GitHubCliError
-  >;
+  }) => Effect.Effect<ReadonlyArray<DispatchReadyIssue>, GitHubCliError>;
+
+  /**
+   * Every OPEN issue number in the repo, used only to resolve `Blocked by: #N`
+   * directives (a blocker is resolved once it's no longer open). Worth fetching
+   * only when a ready issue actually declares a blocker, so the caller gates it.
+   */
+  readonly listOpenIssueNumbers: (input: {
+    readonly cwd: string;
+  }) => Effect.Effect<ReadonlyArray<number>, GitHubCliError>;
 
   readonly getPullRequest: (input: {
     readonly cwd: string;
@@ -204,11 +213,13 @@ const RawGitHubRepositoryCloneUrlsSchema = Schema.Struct({
 });
 
 /** `gh issue list --json number,body,labels` rows. `labels` is an array of
- *  objects; we keep only each label's `name`. `body` is "" for an empty body. */
+ *  objects; we keep only each label's `name`. `body` is usually "" for an empty
+ *  body, but the GitHub API can return null — accept it (normalized to "" at the
+ *  mapping site) so one null body can't fail the whole decode and blank the count. */
 const RawDispatchReadyIssuesSchema = Schema.Array(
   Schema.Struct({
     number: Schema.Number,
-    body: Schema.String,
+    body: Schema.NullOr(Schema.String),
     labels: Schema.Array(Schema.Struct({ name: Schema.String })),
   }),
 );
@@ -270,7 +281,8 @@ function decodeGitHubJson<S extends Schema.Top>(
     | "listOpenPullRequests"
     | "getPullRequest"
     | "getRepositoryCloneUrls"
-    | "listDispatchCandidates",
+    | "listOpenIssuesByLabel"
+    | "listOpenIssueNumbers",
   invalidDetail: string,
 ): Effect.Effect<S["Type"], GitHubCliError, S["DecodingServices"]> {
   return Schema.decodeEffect(Schema.fromJsonString(schema))(raw).pipe(
@@ -342,39 +354,9 @@ export const make = Effect.fn("makeGitHubCli")(function* () {
               ),
         ),
       ),
-    listDispatchCandidates: (input) => {
-      const decodeReady = (raw: string) =>
-        raw.length === 0
-          ? Effect.succeed(
-              [] as ReadonlyArray<{ number: number; body: string; labels: readonly string[] }>,
-            )
-          : decodeGitHubJson(
-              raw,
-              RawDispatchReadyIssuesSchema,
-              "listDispatchCandidates",
-              "GitHub CLI returned invalid issue list JSON.",
-            ).pipe(
-              Effect.map((issues) =>
-                issues.map((issue) => ({
-                  number: issue.number,
-                  body: issue.body,
-                  labels: issue.labels.map((label) => label.name),
-                })),
-              ),
-            );
-
-      const decodeOpenNumbers = (raw: string) =>
-        raw.length === 0
-          ? Effect.succeed([] as ReadonlyArray<number>)
-          : decodeGitHubJson(
-              raw,
-              RawIssueNumbersSchema,
-              "listDispatchCandidates",
-              "GitHub CLI returned invalid issue list JSON.",
-            ).pipe(Effect.map((issues) => issues.map((issue) => issue.number)));
-
-      // Mirrors `.sandcastle/plan-prompt.md:13` — ready issues carrying the label.
-      return execute({
+    // Mirrors `.sandcastle/plan-prompt.md:13` — ready issues carrying the label.
+    listOpenIssuesByLabel: (input) =>
+      execute({
         cwd: input.cwd,
         args: [
           "issue",
@@ -390,21 +372,44 @@ export const make = Effect.fn("makeGitHubCli")(function* () {
         ],
       }).pipe(
         Effect.map((result) => result.stdout.trim()),
-        Effect.flatMap(decodeReady),
-        // Only query the full open-issue set (mirrors `.sandcastle/plan-prompt.md:25`,
-        // used to resolve `Blocked by: #N`) once the ready query has succeeded.
-        Effect.flatMap((ready) =>
-          execute({
-            cwd: input.cwd,
-            args: ["issue", "list", "--state", "open", "--json", "number", "--limit", "200"],
-          }).pipe(
-            Effect.map((result) => result.stdout.trim()),
-            Effect.flatMap(decodeOpenNumbers),
-            Effect.map((openNumbers) => ({ ready, openNumbers })),
-          ),
+        Effect.flatMap((raw) =>
+          raw.length === 0
+            ? Effect.succeed([] as ReadonlyArray<DispatchReadyIssue>)
+            : decodeGitHubJson(
+                raw,
+                RawDispatchReadyIssuesSchema,
+                "listOpenIssuesByLabel",
+                "GitHub CLI returned invalid issue list JSON.",
+              ).pipe(
+                Effect.map((issues) =>
+                  issues.map((issue) => ({
+                    number: issue.number,
+                    body: issue.body ?? "",
+                    labels: issue.labels.map((label) => label.name),
+                  })),
+                ),
+              ),
         ),
-      );
-    },
+      ),
+    // Mirrors `.sandcastle/plan-prompt.md:25` — the full open-issue set used to
+    // resolve `Blocked by: #N`.
+    listOpenIssueNumbers: (input) =>
+      execute({
+        cwd: input.cwd,
+        args: ["issue", "list", "--state", "open", "--json", "number", "--limit", "200"],
+      }).pipe(
+        Effect.map((result) => result.stdout.trim()),
+        Effect.flatMap((raw) =>
+          raw.length === 0
+            ? Effect.succeed([] as ReadonlyArray<number>)
+            : decodeGitHubJson(
+                raw,
+                RawIssueNumbersSchema,
+                "listOpenIssueNumbers",
+                "GitHub CLI returned invalid issue list JSON.",
+              ).pipe(Effect.map((issues) => issues.map((issue) => issue.number))),
+        ),
+      ),
     getPullRequest: (input) =>
       execute({
         cwd: input.cwd,

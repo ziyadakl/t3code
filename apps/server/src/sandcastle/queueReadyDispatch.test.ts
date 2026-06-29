@@ -1,6 +1,11 @@
 import { describe, it, expect } from "@effect/vitest";
 
-import { countDispatchableIssues, parseBlockedBy } from "./queueReadyDispatch.ts";
+import type { DispatchReadyIssue } from "../sourceControl/GitHubCli.ts";
+import {
+  countDispatchableIssues,
+  parseBlockedBy,
+  readyHasBlockers,
+} from "./queueReadyDispatch.ts";
 
 describe("parseBlockedBy", () => {
   it("requires the colon — `Blocked by #5` (no colon) is not a directive", () => {
@@ -61,11 +66,31 @@ describe("parseBlockedBy", () => {
   });
 });
 
+describe("readyHasBlockers", () => {
+  const issue = (body: string): DispatchReadyIssue => ({ number: 1, body, labels: [] });
+
+  it("is true when any ready issue declares `Blocked by: #N`", () => {
+    expect(readyHasBlockers([issue(""), issue("Blocked by: #5")])).toBe(true);
+  });
+
+  it("is false when no ready issue declares a blocker", () => {
+    expect(readyHasBlockers([issue(""), issue("just a normal body, no directive")])).toBe(false);
+  });
+
+  it("is false for an empty ready set", () => {
+    expect(readyHasBlockers([])).toBe(false);
+  });
+
+  it("ignores a `Blocked by` missing the required colon (not a directive)", () => {
+    expect(readyHasBlockers([issue("Blocked by #5")])).toBe(false);
+  });
+});
+
 describe("countDispatchableIssues", () => {
   const issue = (
     number: number,
     over: { body?: string; labels?: readonly string[] } = {},
-  ): { number: number; body: string; labels: readonly string[] } => ({
+  ): DispatchReadyIssue => ({
     number,
     body: over.body ?? "",
     labels: over.labels ?? [],

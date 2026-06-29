@@ -38,7 +38,7 @@ import {
 } from "../sourceControl/GitHubCli.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import { RepositoryIdentityResolver } from "../project/Services/RepositoryIdentityResolver.ts";
-import { countDispatchableIssues } from "./queueReadyDispatch.ts";
+import { countDispatchableIssues, readyHasBlockers } from "./queueReadyDispatch.ts";
 
 /** Default Sandcastle pickup label (mirrors the loop's `--label` default). */
 export const DEFAULT_QUEUE_READY_LABEL = "ready-for-agent";
@@ -48,12 +48,14 @@ const DEFAULT_FRESH_TTL = Duration.seconds(45);
 /** Shorter window after a failed query so it retries sooner. */
 const DEFAULT_ERROR_TTL = Duration.seconds(15);
 /**
- * How long a cwd's resolved repository identity is memoized. A working
- * directory's repo identity is effectively stable, so this is far longer than
- * the count TTL: it keeps `resolver.resolve` (whose cache-key step runs an
- * UNCACHED `git rev-parse`) off the ~2s Sandcastle poll path.
+ * How long a cwd's resolved repository identity is memoized. Deliberately matches
+ * RepositoryIdentityResolver's own identity TTL (its DEFAULT_POSITIVE_CACHE_TTL /
+ * DEFAULT_NEGATIVE_CACHE_TTL, both 1 min) so a changed remote surfaces within the
+ * same ~1 min window rather than being pinned behind a longer stale window here.
+ * Still far longer than the count TTL: it keeps `resolver.resolve` (whose cache-key
+ * step runs an UNCACHED `git rev-parse`) off the ~2s Sandcastle poll path.
  */
-const DEFAULT_IDENTITY_TTL = Duration.minutes(5);
+const DEFAULT_IDENTITY_TTL = Duration.minutes(1);
 /** Bound on distinct cwds whose identity is memoized at once. */
 const IDENTITY_CACHE_CAPACITY = 512;
 
@@ -62,7 +64,7 @@ export interface QueueReadyCacheOptions {
   readonly freshTtl?: Duration.Input;
   /** Trust window after a failed query (default 15s). */
   readonly errorTtl?: Duration.Input;
-  /** How long a cwd's resolved identity is memoized (default 5m). Lowered in tests. */
+  /** How long a cwd's resolved identity is memoized (default 1m). Lowered in tests. */
   readonly identityTtl?: Duration.Input;
 }
 
@@ -165,14 +167,14 @@ export const makeQueueReadyCache = (options: QueueReadyCacheOptions = {}) =>
     ): Effect.Effect<void> =>
       Effect.gen(function* () {
         const nowIso = DateTime.formatIso(yield* DateTime.now);
-        const outcome = yield* gh.listDispatchCandidates({ cwd, label }).pipe(
-          Effect.flatMap(({ ready, openNumbers }) =>
-            sandcastleMdExists(repoRoot).pipe(
-              Effect.map((mdExists) =>
-                countDispatchableIssues({ ready, openNumbers, sandcastleMdExists: mdExists }),
-              ),
-            ),
-          ),
+        const outcome = yield* Effect.gen(function* () {
+          const ready = yield* gh.listOpenIssuesByLabel({ cwd, label });
+          // The open-issue set only resolves `Blocked by: #N`; skip its query
+          // entirely when no ready issue declares a blocker (the common case).
+          const openNumbers = readyHasBlockers(ready) ? yield* gh.listOpenIssueNumbers({ cwd }) : [];
+          const mdExists = yield* sandcastleMdExists(repoRoot);
+          return countDispatchableIssues({ ready, openNumbers, sandcastleMdExists: mdExists });
+        }).pipe(
           Effect.map((count) => ({ ok: true as const, count })),
           Effect.catch((error) =>
             Effect.succeed({ ok: false as const, error: reasonToWireError(error.reason) }),

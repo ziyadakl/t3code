@@ -24,6 +24,8 @@
  * results in here.
  */
 
+import type { DispatchReadyIssue } from "../sourceControl/GitHubCli.ts";
+
 /**
  * Mirrors ~/Dev/Sandcastle/.sandcastle/main.mts parseBlockedBy — keep in sync.
  *
@@ -49,12 +51,21 @@ export function parseBlockedBy(body: string): number[] {
 }
 
 /**
+ * Does any ready issue declare a `Blocked by: #N` directive? When false, the
+ * caller can skip the full open-issue query entirely (it exists only to resolve
+ * blockers), which is the common case.
+ */
+export function readyHasBlockers(ready: ReadonlyArray<DispatchReadyIssue>): boolean {
+  return ready.some((i) => parseBlockedBy(i.body).length > 0);
+}
+
+/**
  * Count the issues the Sandcastle planner would dispatch right now, applying the
  * type: and blocked-by rules to the ready set. See the module header for the
  * rule definitions and their sources.
  */
 export function countDispatchableIssues(input: {
-  ready: ReadonlyArray<{ number: number; body: string; labels: readonly string[] }>;
+  ready: ReadonlyArray<DispatchReadyIssue>;
   openNumbers: ReadonlyArray<number>;
   sandcastleMdExists: boolean;
 }): number {

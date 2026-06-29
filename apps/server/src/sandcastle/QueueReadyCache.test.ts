@@ -5,7 +5,12 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import type { RepositoryIdentity } from "@t3tools/contracts";
 
-import { GitHubCli, GitHubCliError, type GitHubCliShape } from "../sourceControl/GitHubCli.ts";
+import {
+  GitHubCli,
+  GitHubCliError,
+  type DispatchReadyIssue,
+  type GitHubCliShape,
+} from "../sourceControl/GitHubCli.ts";
 import { RepositoryIdentityResolver } from "../project/Services/RepositoryIdentityResolver.ts";
 import {
   QueueReadyCache,
@@ -17,9 +22,12 @@ const LABEL = "ready-for-agent";
 const CWD = "/repo";
 
 type DispatchCandidates = {
-  readonly ready: ReadonlyArray<{ number: number; body: string; labels: readonly string[] }>;
+  readonly ready: ReadonlyArray<DispatchReadyIssue>;
   readonly openNumbers: ReadonlyArray<number>;
 };
+
+/** Counts how many times each gh query method the cache uses was invoked. */
+type GhCallCounter = { byLabel: number; numbers: number };
 
 const githubIdentity: RepositoryIdentity = {
   canonicalKey: "github.com/acme/widgets",
@@ -35,7 +43,7 @@ const githubIdentity: RepositoryIdentity = {
 
 const unauthedError = () =>
   new GitHubCliError({
-    operation: "listDispatchCandidates",
+    operation: "listOpenIssuesByLabel",
     reason: "unauthed",
     detail: "GitHub CLI is not authenticated. Run `gh auth login` and retry.",
   });
@@ -48,17 +56,28 @@ const readyOfLength = (n: number): DispatchCandidates => ({
   openNumbers: [],
 });
 
-/** A GitHubCli whose only meaningful method is listDispatchCandidates; the rest
- *  fail (they should never be called by QueueReadyCache). */
+/** A GitHubCli whose only meaningful methods are the two dispatch queries; the
+ *  rest fail (they should never be called by QueueReadyCache). Both queries are
+ *  derived from a single `candidates` source so the count-oriented tests keep
+ *  expressing one outcome; `counter` records how often each was invoked so a test
+ *  can assert the open-issue-number query is skipped. */
 function fakeGitHubCli(
-  listDispatch: () => Effect.Effect<DispatchCandidates, GitHubCliError>,
+  candidates: () => Effect.Effect<DispatchCandidates, GitHubCliError>,
+  counter?: GhCallCounter,
 ): GitHubCliShape {
   const unexpected = (operation: string) =>
     Effect.fail(new GitHubCliError({ operation, reason: "other", detail: "unexpected call" }));
   return {
     execute: () => unexpected("execute"),
     listOpenPullRequests: () => unexpected("listOpenPullRequests"),
-    listDispatchCandidates: () => listDispatch(),
+    listOpenIssuesByLabel: () => {
+      if (counter) counter.byLabel += 1;
+      return candidates().pipe(Effect.map((c) => c.ready));
+    },
+    listOpenIssueNumbers: () => {
+      if (counter) counter.numbers += 1;
+      return candidates().pipe(Effect.map((c) => c.openNumbers));
+    },
     getPullRequest: () => unexpected("getPullRequest"),
     getRepositoryCloneUrls: () => unexpected("getRepositoryCloneUrls"),
     createRepository: () => unexpected("createRepository"),
@@ -78,14 +97,16 @@ function cacheLayer(args: {
   readonly options?: QueueReadyCacheOptions;
   /** Optional counter incremented once per `resolve` invocation (memo-hit check). */
   readonly resolveCounter?: { calls: number };
+  /** Optional counter recording each gh dispatch-query invocation (skip check). */
+  readonly ghCounter?: GhCallCounter;
   /** What the fake FileSystem reports for `<rootPath>/SANDCASTLE.md` (default false). */
   readonly sandcastleMdExists?: boolean;
 }): Layer.Layer<QueueReadyCache> {
-  const listDispatch =
+  const candidates =
     args.dispatch ??
     (() => (args.count ?? (() => Effect.succeed(0)))().pipe(Effect.map(readyOfLength)));
   return Layer.effect(QueueReadyCache, makeQueueReadyCache(args.options ?? {})).pipe(
-    Layer.provide(Layer.succeed(GitHubCli, fakeGitHubCli(listDispatch))),
+    Layer.provide(Layer.succeed(GitHubCli, fakeGitHubCli(candidates, args.ghCounter))),
     Layer.provide(
       FileSystem.layerNoop({
         exists: () => Effect.succeed(args.sandcastleMdExists ?? false),
@@ -148,6 +169,73 @@ describe("QueueReadyCache", () => {
           }),
         ),
       ),
+  );
+
+  it.live(
+    "skips the open-issue-number query when no ready issue declares a blocker",
+    () => {
+      // The open-issue set exists only to resolve `Blocked by: #N`; with no ready
+      // issue declaring one, that second gh subprocess is pure waste — it must not run.
+      const ghCounter: GhCallCounter = { byLabel: 0, numbers: 0 };
+      return Effect.gen(function* () {
+        const cache = yield* QueueReadyCache;
+        yield* cache.observe(CWD, LABEL);
+        yield* Effect.sleep("20 millis");
+        const status = yield* cache.observe(CWD, LABEL);
+        assert.equal(status?.count, 2); // both ready issues dispatchable
+        assert.equal(status?.error, null);
+        assert.equal(ghCounter.byLabel, 1);
+        assert.equal(ghCounter.numbers, 0); // open-issue-number query skipped
+      }).pipe(
+        Effect.provide(
+          cacheLayer({
+            identity: githubIdentity,
+            ghCounter,
+            dispatch: () =>
+              Effect.succeed({
+                ready: [
+                  { number: 1, body: "", labels: [] },
+                  { number: 2, body: "no blockers in this body", labels: [] },
+                ],
+                openNumbers: [1, 2],
+              }),
+          }),
+        ),
+      );
+    },
+  );
+
+  it.live(
+    "queries the open-issue-number set (and excludes the blocked issue) when a ready issue declares a blocker",
+    () => {
+      const ghCounter: GhCallCounter = { byLabel: 0, numbers: 0 };
+      return Effect.gen(function* () {
+        const cache = yield* QueueReadyCache;
+        yield* cache.observe(CWD, LABEL);
+        yield* Effect.sleep("20 millis");
+        const status = yield* cache.observe(CWD, LABEL);
+        // #1 is blocked by still-open #2 ⇒ excluded; #3 has no blocker ⇒ kept.
+        assert.equal(status?.count, 1);
+        assert.equal(status?.error, null);
+        assert.equal(ghCounter.byLabel, 1);
+        assert.equal(ghCounter.numbers, 1); // open-issue-number query performed
+      }).pipe(
+        Effect.provide(
+          cacheLayer({
+            identity: githubIdentity,
+            ghCounter,
+            dispatch: () =>
+              Effect.succeed({
+                ready: [
+                  { number: 1, body: "Blocked by: #2", labels: [] },
+                  { number: 3, body: "", labels: [] },
+                ],
+                openNumbers: [1, 2, 3],
+              }),
+          }),
+        ),
+      );
+    },
   );
 
   it.live("returns null for a project whose repo isn't GitHub", () =>
@@ -213,7 +301,7 @@ describe("QueueReadyCache", () => {
           count: () =>
             Effect.fail(
               new GitHubCliError({
-                operation: "listDispatchCandidates",
+                operation: "listOpenIssuesByLabel",
                 reason: "missing",
                 detail: "an opaque boundary message",
               }),
