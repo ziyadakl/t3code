@@ -17,6 +17,7 @@ import { Toggle } from "../ui/toggle";
 import { SidebarTrigger } from "../ui/sidebar";
 import { OpenInPicker } from "./OpenInPicker";
 import { DevServerToggle } from "./DevServerToggle";
+import { SandcastleStatusButton } from "./SandcastleStatusButton";
 import { usePrimaryEnvironmentId } from "../../environments/primary";
 
 interface ChatHeaderProps {
@@ -25,6 +26,7 @@ interface ChatHeaderProps {
   draftId?: DraftId;
   activeThreadTitle: string;
   activeProjectName: string | undefined;
+  activeProjectId: string | null;
   isGitRepo: boolean;
   openInCwd: string | null;
   activeProjectScripts: ProjectScript[] | undefined;
@@ -65,6 +67,7 @@ export const ChatHeader = memo(function ChatHeader({
   draftId,
   activeThreadTitle,
   activeProjectName,
+  activeProjectId,
   isGitRepo,
   openInCwd,
   activeProjectScripts,
@@ -147,6 +150,11 @@ export const ChatHeader = memo(function ChatHeader({
           environmentId={activeThreadEnvironmentId}
           threadId={activeThreadId}
           worktreePath={activeThreadWorktreePath}
+          projectCwd={activeProjectCwd}
+        />
+        <SandcastleStatusButton
+          environmentId={activeThreadEnvironmentId}
+          projectId={activeProjectId}
           projectCwd={activeProjectCwd}
         />
         <Tooltip>

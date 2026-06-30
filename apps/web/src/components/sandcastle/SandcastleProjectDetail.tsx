@@ -3,6 +3,7 @@ import { useMemo } from "react";
 import { Link } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
 import { useStore, selectProjectsAcrossEnvironments } from "../../store.ts";
+import { cn } from "../../lib/utils.ts";
 import { Badge, badgeVariants } from "../ui/badge.tsx";
 import { Card } from "../ui/card.tsx";
 import { Separator } from "../ui/separator.tsx";
@@ -111,9 +112,13 @@ const RECENT_LIMIT = 10;
 export function SandcastleProjectDetail({
   environmentId,
   projectId,
+  embedded = false,
 }: {
   environmentId: string;
   projectId: string;
+  /** Render inside a dialog/popup: drop the route back-links and the wide
+   *  page padding so the viewer fits a constrained container. */
+  embedded?: boolean;
 }) {
   const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
   const project = projects.find((p) => p.environmentId === environmentId && p.id === projectId);
@@ -128,9 +133,11 @@ export function SandcastleProjectDetail({
     return (
       <div className="p-6 text-sm text-muted-foreground">
         Project not found.{" "}
-        <Link to="/sandcastle" className="underline">
-          Back to dashboard
-        </Link>
+        {embedded ? null : (
+          <Link to="/sandcastle" className="underline">
+            Back to dashboard
+          </Link>
+        )}
       </div>
     );
   }
@@ -152,11 +159,18 @@ export function SandcastleProjectDetail({
   const issueLink = (n: number) => githubIssueUrl(project.repositoryIdentity ?? null, n);
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-hidden px-16 py-6">
+    <div
+      className={cn(
+        "flex h-full min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-hidden py-6",
+        embedded ? "px-4" : "px-16",
+      )}
+    >
       <header className="mx-auto flex w-full max-w-5xl shrink-0 items-center gap-3">
-        <Link to="/sandcastle" className="text-sm text-muted-foreground underline">
-          ← Sandcastle
-        </Link>
+        {embedded ? null : (
+          <Link to="/sandcastle" className="text-sm text-muted-foreground underline">
+            ← Sandcastle
+          </Link>
+        )}
         <h1 className="text-lg font-semibold">{project.name}</h1>
         <div className="ms-auto me-4 flex items-center gap-3">
           {ageHint ? (
