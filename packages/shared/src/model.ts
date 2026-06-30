@@ -10,6 +10,8 @@ import {
   type ProviderOptionSelection,
 } from "@t3tools/contracts";
 
+import { startsWithSlashCommandToken } from "./composerTrigger.ts";
+
 const DEFAULT_PROVIDER_DRIVER_KIND = ProviderDriverKind.make("codex");
 
 export interface SelectableModelOption {
@@ -361,6 +363,12 @@ export function applyClaudePromptEffortPrefix(
     return trimmed;
   }
   if (trimmed.startsWith("Ultrathink:")) {
+    return trimmed;
+  }
+  // Never prepend the prefix ahead of a leading `/command`: the Agent SDK only
+  // fires a slash command when it is the leading content, and `"Ultrathink:\n"`
+  // would displace it and silently turn it into prose. Keep the command leading.
+  if (startsWithSlashCommandToken(trimmed)) {
     return trimmed;
   }
   return `Ultrathink:\n${trimmed}`;

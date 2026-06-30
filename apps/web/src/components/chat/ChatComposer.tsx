@@ -369,6 +369,9 @@ export interface ChatComposerHandle {
     selectedProvider: ProviderDriverKind;
     selectedModel: string;
     selectedProviderModels: ReadonlyArray<ServerProvider["models"][number]>;
+    /** Recognized provider slash-command names (no leading `/`) for the active
+     * instance, so the send path can hoist an inline `/command` to the front. */
+    selectedProviderSlashCommandNames: ReadonlySet<string>;
   };
 }
 
@@ -670,6 +673,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const selectedProviderStatus = useMemo(
     () => selectedProviderEntry?.snapshot ?? null,
     [selectedProviderEntry],
+  );
+  // Names (no leading `/`) of the active instance's provider slash commands, so
+  // the send path can hoist an inline `/command` to the front before dispatch.
+  const selectedProviderSlashCommandNames = useMemo(
+    () => new Set((selectedProviderStatus?.slashCommands ?? []).map((command) => command.name)),
+    [selectedProviderStatus],
   );
   const selectedProviderModels = useMemo<ReadonlyArray<ServerProvider["models"][number]>>(
     () => selectedProviderEntry?.models ?? [],
@@ -1889,6 +1898,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         selectedProvider,
         selectedModel,
         selectedProviderModels,
+        selectedProviderSlashCommandNames,
       }),
     }),
     [
@@ -1908,6 +1918,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       selectedPromptEffort,
       selectedProvider,
       selectedProviderModels,
+      selectedProviderSlashCommandNames,
     ],
   );
 

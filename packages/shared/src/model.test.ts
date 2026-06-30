@@ -140,6 +140,22 @@ describe("misc helpers", () => {
     );
   });
 
+  it("does not prepend the ultrathink prefix ahead of a leading slash command", () => {
+    // Prepending would displace the command and stop the Agent SDK firing it.
+    expect(applyClaudePromptEffortPrefix("/grill-me on Phase 3", "ultrathink")).toBe(
+      "/grill-me on Phase 3",
+    );
+    // A path-shaped leading token is not a command, so the prefix still applies.
+    expect(applyClaudePromptEffortPrefix("/etc/hosts review", "ultrathink")).toBe(
+      "Ultrathink:\n/etc/hosts review",
+    );
+  });
+
+  it("leaves prompts unchanged without ultrathink effort", () => {
+    expect(applyClaudePromptEffortPrefix("Investigate", "high")).toBe("Investigate");
+    expect(applyClaudePromptEffortPrefix("/grill-me on Phase 3", null)).toBe("/grill-me on Phase 3");
+  });
+
   it("trims strings to null", () => {
     expect(trimOrNull("  hi  ")).toBe("hi");
     expect(trimOrNull("   ")).toBeNull();

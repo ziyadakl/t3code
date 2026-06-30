@@ -34,6 +34,7 @@ import {
   createModelSelection,
   resolvePromptInjectedEffort,
 } from "@t3tools/shared/model";
+import { hoistLeadingSlashCommand } from "@t3tools/shared/composerTrigger";
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
 import { truncate } from "@t3tools/shared/String";
 import { nextTerminalId, resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
@@ -3310,6 +3311,7 @@ export default function ChatView(props: ChatViewProps) {
       selectedProviderModels: ctxSelectedProviderModels,
       selectedPromptEffort: ctxSelectedPromptEffort,
       selectedModelSelection: ctxSelectedModelSelection,
+      selectedProviderSlashCommandNames: ctxSlashCommandNames,
     } = sendCtx;
     const promptForSend = promptRef.current;
     const {
@@ -3396,9 +3398,15 @@ export default function ChatView(props: ChatViewProps) {
 
     const composerImagesSnapshot = [...composerImages];
     const composerTerminalContextsSnapshot = [...sendableComposerTerminalContexts];
-    const messageTextForSend = appendTerminalContextsToPrompt(
-      promptForSend,
-      composerTerminalContextsSnapshot,
+    // Hoist an inline `/command` to the front so the Agent SDK actually fires
+    // it (the SDK only treats a leading command as a command). Done before the
+    // effort prefix so the command stays leading in the final delivered text
+    // (`applyClaudePromptEffortPrefix` skips the prefix for a leading command).
+    // `outgoingMessageText` is used for BOTH the optimistic transcript message
+    // and the dispatched turn, so the displayed and sent text stay identical.
+    const messageTextForSend = hoistLeadingSlashCommand(
+      appendTerminalContextsToPrompt(promptForSend, composerTerminalContextsSnapshot),
+      ctxSlashCommandNames,
     );
     const messageIdForSend = newMessageId();
     const messageCreatedAt = new Date().toISOString();
