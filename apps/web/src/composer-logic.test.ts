@@ -130,6 +130,37 @@ describe("detectComposerTrigger", () => {
     expect(trigger?.kind).toBe("path");
     expect(trigger?.query).toBe("");
   });
+
+  // detectComposerTrigger now lives in @t3tools/shared (see composerTrigger.test.ts
+  // for the exhaustive contract: mid-prompt slash, path/URL/date guards, etc.).
+  // Web only wraps it, so the cases below verify the wrapper's wiring — that it
+  // delegates to the shared function and injects web's placeholder-aware predicate.
+  it("delegates to the shared detector for a mid-prompt slash command", () => {
+    // CLI parity: `/grill-m` after existing text still opens the command/skill menu.
+    const text = "do you need to /grill-m";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "slash-command",
+      query: "grill-m",
+      rangeStart: "do you need to ".length,
+      rangeEnd: text.length,
+    });
+  });
+
+  it("treats an inline terminal-context placeholder as a token boundary", () => {
+    // Web-specific: its `isWhitespace` predicate (passed into the shared detector)
+    // counts the placeholder as a boundary, so `/gr` is its own token.
+    const text = `${INLINE_TERMINAL_CONTEXT_PLACEHOLDER}/gr`;
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "slash-command",
+      query: "gr",
+      rangeStart: INLINE_TERMINAL_CONTEXT_PLACEHOLDER.length,
+      rangeEnd: text.length,
+    });
+  });
 });
 
 describe("replaceTextRange", () => {

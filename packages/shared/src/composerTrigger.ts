@@ -1,5 +1,5 @@
-export type ComposerTriggerKind = "path" | "slash-command" | "slash-model" | "skill";
-export type ComposerSlashCommand = "model" | "plan" | "default";
+export type ComposerTriggerKind = "path" | "slash-command" | "skill";
+export type ComposerSlashCommand = "model" | "plan" | "default" | "resume";
 
 export interface ComposerTrigger {
   kind: ComposerTriggerKind;
@@ -29,8 +29,12 @@ function isWhitespace(char: string): boolean {
 /**
  * Detect an active trigger (@path, $skill, /command) at the cursor position.
  *
+ * All three triggers key off the whitespace-delimited token ending at the
+ * cursor, so a `/command` can be typed mid-prompt (e.g. "do you need to
+ * /grill-m"), matching the Claude Code CLI — not only at the start of a line.
+ *
  * Accepts an optional `isWhitespaceChar` override so callers with inline
- * placeholder characters (e.g. terminal context chips on web) can treat
+ * placeholder characters (e.g. terminal-context chips on web) can treat
  * those as token boundaries.
  */
 export function detectComposerTrigger(
@@ -39,48 +43,26 @@ export function detectComposerTrigger(
   isWhitespaceChar?: (char: string) => boolean,
 ): ComposerTrigger | null {
   const cursor = clampCursor(text, cursorInput);
-  const lineStart = text.lastIndexOf("\n", Math.max(0, cursor - 1)) + 1;
-  const linePrefix = text.slice(lineStart, cursor);
-
-  if (linePrefix.startsWith("/")) {
-    const commandMatch = /^\/(\S*)$/.exec(linePrefix);
-    if (commandMatch) {
-      const commandQuery = commandMatch[1] ?? "";
-      if (commandQuery.toLowerCase() === "model") {
-        return {
-          kind: "slash-model",
-          query: "",
-          rangeStart: lineStart,
-          rangeEnd: cursor,
-        };
-      }
-      return {
-        kind: "slash-command",
-        query: commandQuery,
-        rangeStart: lineStart,
-        rangeEnd: cursor,
-      };
-    }
-
-    const modelMatch = /^\/model(?:\s+(.*))?$/.exec(linePrefix);
-    if (modelMatch) {
-      return {
-        kind: "slash-model",
-        query: (modelMatch[1] ?? "").trim(),
-        rangeStart: lineStart,
-        rangeEnd: cursor,
-      };
-    }
-  }
-
   const wsCheck = isWhitespaceChar ?? isWhitespace;
+
   let tokenIdx = cursor - 1;
   while (tokenIdx >= 0 && !wsCheck(text[tokenIdx] ?? "")) {
     tokenIdx -= 1;
   }
   const tokenStart = tokenIdx + 1;
-
   const token = text.slice(tokenStart, cursor);
+
+  // A slash command is a single token with no path separator — `/grill-me`,
+  // not `/etc/hosts` or `https://host/path`. Requiring no further `/` keeps
+  // absolute paths and URLs from popping the command menu mid-prompt.
+  if (token.startsWith("/") && !token.includes("/", 1)) {
+    return {
+      kind: "slash-command",
+      query: token.slice(1),
+      rangeStart: tokenStart,
+      rangeEnd: cursor,
+    };
+  }
   if (token.startsWith("$")) {
     return {
       kind: "skill",
@@ -89,21 +71,21 @@ export function detectComposerTrigger(
       rangeEnd: cursor,
     };
   }
-  if (!token.startsWith("@")) {
-    return null;
+  if (token.startsWith("@")) {
+    return {
+      kind: "path",
+      query: token.slice(1),
+      rangeStart: tokenStart,
+      rangeEnd: cursor,
+    };
   }
 
-  return {
-    kind: "path",
-    query: token.slice(1),
-    rangeStart: tokenStart,
-    rangeEnd: cursor,
-  };
+  return null;
 }
 
 export function parseStandaloneComposerSlashCommand(
   text: string,
-): Exclude<ComposerSlashCommand, "model"> | null {
+): Exclude<ComposerSlashCommand, "model" | "resume"> | null {
   const match = /^\/(plan|default)\s*$/i.exec(text.trim());
   if (!match) {
     return null;
