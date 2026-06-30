@@ -19,6 +19,7 @@ import {
   ThreadStatusLabel,
 } from "./ThreadStatusIndicators";
 import { ProjectFavicon } from "./ProjectFavicon";
+import { ProjectIconPicker } from "./ProjectIconPicker";
 import { autoAnimate } from "@formkit/auto-animate";
 import React, { useCallback, useEffect, memo, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -183,6 +184,7 @@ import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { CommandDialogTrigger } from "./ui/command";
 import { readEnvironmentApi } from "../environmentApi";
 import { useSettings, useUpdateSettings } from "~/hooks/useSettings";
+import { colorOverrideStyle, useProjectColorOverride } from "../hooks/useProjectColorOverride";
 import { useServerKeybindings } from "../rpc/serverState";
 import {
   derivePhysicalProjectKey,
@@ -928,11 +930,15 @@ interface SidebarProjectItemProps {
   suppressProjectClickForContextMenuRef: React.RefObject<boolean>;
   isManualProjectSorting: boolean;
   dragHandleProps: SortableProjectHandleProps | null;
+  // True for the final project group in the list — suppresses the trailing
+  // divider so there's no rule after the last group.
+  isLast: boolean;
 }
 
 const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjectItemProps) {
   const {
     project,
+    isLast,
     isThreadListExpanded,
     activeRouteThreadKey,
     newThreadShortcutLabel,
@@ -962,6 +968,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     (settings) => settings.defaultThreadEnvMode,
   );
   const projectGroupingSettings = useSettings(selectProjectGroupingSettings);
+  // Per-project tint shared by the favicon icon and the title (see ProjectFavicon).
+  const projectColorOverride = useProjectColorOverride(project.environmentId, project.cwd);
   const { updateSettings } = useUpdateSettings();
   const { archiveProject } = useProjectActions();
   const sidebarThreadPreviewCount = useSettings<SidebarThreadPreviewCount>(
@@ -2095,7 +2103,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           )}
           <ProjectFavicon environmentId={project.environmentId} cwd={project.cwd} />
           <span className="flex min-w-0 flex-1 items-center gap-2">
-            <span className="truncate text-xs font-medium text-foreground/90">
+            <span
+              className="truncate text-xs font-medium text-foreground/90"
+              style={colorOverrideStyle(projectColorOverride)}
+            >
               {project.displayName}
             </span>
             {project.groupedProjectCount > 1 ? (
@@ -2220,6 +2231,18 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                 }}
               />
             </div>
+            {projectRenameTarget ? (
+              <div className="grid gap-1.5">
+                <span className="text-xs font-medium text-foreground">Project icon</span>
+                {/* Key the icon/color off the representative project (the one
+                    the collapsed group row renders) so a customization set from
+                    any member's rename dialog shows on the group row. */}
+                <ProjectIconPicker
+                  environmentId={project.environmentId}
+                  cwd={project.cwd}
+                />
+              </div>
+            ) : null}
             {projectRenameTarget?.environmentLabel ? (
               <p className="text-xs text-muted-foreground">
                 Environment: {projectRenameTarget.environmentLabel}
@@ -2305,13 +2328,22 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           </DialogFooter>
         </DialogPopup>
       </Dialog>
+      {/* Divider between top-level project groups, shown only when this group is
+          expanded (so it gets breathing room) and never after the last group.
+          Lives inside the group's <li> so auto-animate moves it with the row. */}
+      {projectExpanded && !isLast ? <SidebarSeparator className="mt-1.5" /> : null}
     </>
   );
 });
 
 const SidebarProjectListRow = memo(function SidebarProjectListRow(props: SidebarProjectItemProps) {
+  // Only an EXPANDED project gets breathing room around it (so its thread list
+  // doesn't crowd neighbours); collapsed projects stay tight against each other.
+  const projectExpanded = useUiStateStore(
+    (state) => state.projectExpandedById[props.project.projectKey] ?? true,
+  );
   return (
-    <SidebarMenuItem className="rounded-md">
+    <SidebarMenuItem className={`rounded-md ${projectExpanded ? "my-1.5" : ""}`}>
       <SidebarProjectItem {...props} />
     </SidebarMenuItem>
   );
@@ -2809,11 +2841,12 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                 items={sortedProjects.map((project) => project.projectKey)}
                 strategy={verticalListSortingStrategy}
               >
-                {sortedProjects.map((project) => (
+                {sortedProjects.map((project, index) => (
                   <SortableProjectItem key={project.projectKey} projectId={project.projectKey}>
                     {(dragHandleProps) => (
                       <SidebarProjectItem
                         project={project}
+                        isLast={index === sortedProjects.length - 1}
                         isThreadListExpanded={expandedThreadListsByProject.has(project.projectKey)}
                         activeRouteThreadKey={
                           activeRouteProjectKey === project.projectKey ? routeThreadKey : null
@@ -2842,10 +2875,11 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
           </DndContext>
         ) : (
           <SidebarMenu ref={attachProjectListAutoAnimateRef}>
-            {sortedProjects.map((project) => (
+            {sortedProjects.map((project, index) => (
               <SidebarProjectListRow
                 key={project.projectKey}
                 project={project}
+                isLast={index === sortedProjects.length - 1}
                 isThreadListExpanded={expandedThreadListsByProject.has(project.projectKey)}
                 activeRouteThreadKey={
                   activeRouteProjectKey === project.projectKey ? routeThreadKey : null

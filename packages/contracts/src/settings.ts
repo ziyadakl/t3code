@@ -83,6 +83,20 @@ export const ClientSettingsSchema = Schema.Struct({
     TrimmedNonEmptyString,
     SidebarProjectGroupingMode,
   ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  // Per-project custom sidebar icon, keyed by physical project key
+  // (`${environmentId}:${normalizedCwd}` — see derivePhysicalProjectKeyFromPath).
+  // Value is a kebab-case lucide icon name (what lucide-react/dynamic uses).
+  // When set, it overrides the /api/project-favicon scan in ProjectFavicon.
+  projectIconOverrides: Schema.Record(TrimmedNonEmptyString, Schema.String).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
+  // Per-project sidebar tint color, keyed by the same physical project key as
+  // projectIconOverrides. Value is a CSS hex color string (e.g. "#3b82f6").
+  // When set, ProjectFavicon tints the lucide icon and the sidebar tints the
+  // project title with this color. Independent of projectIconOverrides.
+  projectColorOverrides: Schema.Record(TrimmedNonEmptyString, Schema.String).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
   sidebarProjectSortOrder: SidebarProjectSortOrder.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_PROJECT_SORT_ORDER)),
   ),
@@ -540,6 +554,12 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
   sidebarProjectGroupingOverrides: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, SidebarProjectGroupingMode),
+  ),
+  projectIconOverrides: Schema.optionalKey(
+    Schema.Record(TrimmedNonEmptyString, Schema.String),
+  ),
+  projectColorOverrides: Schema.optionalKey(
+    Schema.Record(TrimmedNonEmptyString, Schema.String),
   ),
   sidebarProjectSortOrder: Schema.optionalKey(SidebarProjectSortOrder),
   sidebarThreadSortOrder: Schema.optionalKey(SidebarThreadSortOrder),
