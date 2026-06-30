@@ -12,6 +12,7 @@ import { RewindReactor } from "../Services/RewindReactor.ts";
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
 import { ResumeSeedReactor } from "../../resume/ResumeSeedReactor.ts";
 import { SessionTitleReactor } from "../../resume/SessionTitleReactor.ts";
+import { SdkTitleReactor } from "../../resume/SdkTitleReactor.ts";
 import * as AgentAwarenessRelay from "../../relay/AgentAwarenessRelay.ts";
 
 export const makeOrchestrationReactor = Effect.gen(function* () {
@@ -22,6 +23,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
   const threadDeletionReactor = yield* ThreadDeletionReactor;
   const resumeSeedReactor = yield* ResumeSeedReactor;
   const sessionTitleReactor = yield* SessionTitleReactor;
+  const sdkTitleReactor = yield* SdkTitleReactor;
   const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
 
   const start: OrchestrationReactorShape["start"] = Effect.fn("start")(function* () {
@@ -32,6 +34,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
     yield* threadDeletionReactor.start();
     yield* resumeSeedReactor.start();
     yield* sessionTitleReactor.start();
+    yield* sdkTitleReactor.start();
     yield* agentAwarenessRelay.start();
   });
 

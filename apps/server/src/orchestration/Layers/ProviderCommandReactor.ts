@@ -41,6 +41,7 @@ import {
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+import { canReplaceThreadTitle, defersTitleToSdk } from "../../resume/threadTitleRules.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 
@@ -86,7 +87,6 @@ const turnStartKeyForEvent = (event: ProviderIntentEvent): string =>
 const HANDLED_TURN_START_KEY_MAX = 10_000;
 const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
 const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
-const DEFAULT_THREAD_TITLE = "New thread";
 
 export function providerErrorLabel(value: string | undefined): string {
   const normalized = value?.trim();
@@ -101,18 +101,6 @@ export function providerErrorLabelFromInstanceHint(input: {
   return providerErrorLabel(
     input.instanceId ?? input.modelSelectionInstanceId ?? input.sessionProvider,
   );
-}
-
-function canReplaceThreadTitle(currentTitle: string, titleSeed?: string): boolean {
-  const trimmedCurrentTitle = currentTitle.trim();
-  if (trimmedCurrentTitle === DEFAULT_THREAD_TITLE) {
-    return true;
-  }
-
-  const trimmedTitleSeed = titleSeed?.trim();
-  return trimmedTitleSeed !== undefined && trimmedTitleSeed.length > 0
-    ? trimmedCurrentTitle === trimmedTitleSeed
-    : false;
 }
 
 function findProviderAdapterRequestError(
@@ -783,7 +771,17 @@ const make = Effect.gen(function* () {
         ...generationInput,
       }).pipe(Effect.forkScoped);
 
-      if (canReplaceThreadTitle(thread.title, event.payload.titleSeed)) {
+      // Claude-backed threads get their title from the Agent SDK's own session
+      // summary (SdkTitleReactor reads getSessionInfo after the first turn), so
+      // skip the separate generation here. For Claude it would route through
+      // textGenerationModelSelection and, when that provider is unavailable, fall
+      // back to a `claude -p` subprocess that can hang for minutes.
+      const titleProviderDriver = (yield* providerRegistry.getProviders).find(
+        (candidate) => candidate.instanceId === thread.modelSelection.instanceId,
+      )?.driver;
+      const sdkProvidesTitle = defersTitleToSdk(titleProviderDriver);
+
+      if (!sdkProvidesTitle && canReplaceThreadTitle(thread.title, event.payload.titleSeed)) {
         yield* maybeGenerateThreadTitleForFirstTurn({
           threadId: event.payload.threadId,
           cwd: generationCwd,
