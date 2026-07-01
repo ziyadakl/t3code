@@ -29,6 +29,7 @@ function statusDotClass(kind: BannerKind): string {
     case "stale":
     case "outdated":
       return "bg-warning";
+    case "unhealthy":
     case "error":
       return "bg-destructive";
     case "done":

@@ -39,8 +39,24 @@ describe("buildStatusEntry", () => {
     expect(e.readError).toBeNull();
   });
 
-  it("flags schemaOutdated when version differs and does not throw", () => {
-    const future = JSON.stringify({ ...JSON.parse(VALID), schemaVersion: 2 });
+  it("decodes a v2 status.json (v2 is readable, not outdated)", () => {
+    const v2 = JSON.stringify({ ...JSON.parse(VALID), schemaVersion: 2 });
+    const e = buildStatusEntry({ cwd: "/p", hasSandcastleDir: true, rawJson: v2 });
+    expect(e.schemaOutdated).toBe(false);
+    expect(e.snapshot?.state).toBe("running");
+    expect(e.readError).toBeNull();
+  });
+
+  it("decodes a v2 snapshot with the terminal 'unhealthy' state", () => {
+    const v2 = JSON.stringify({ ...JSON.parse(VALID), schemaVersion: 2, state: "unhealthy" });
+    const e = buildStatusEntry({ cwd: "/p", hasSandcastleDir: true, rawJson: v2 });
+    expect(e.schemaOutdated).toBe(false);
+    expect(e.snapshot?.state).toBe("unhealthy");
+    expect(e.readError).toBeNull();
+  });
+
+  it("flags schemaOutdated only when the file is newer than t3 understands (v3+)", () => {
+    const future = JSON.stringify({ ...JSON.parse(VALID), schemaVersion: 3 });
     const e = buildStatusEntry({ cwd: "/p", hasSandcastleDir: true, rawJson: future });
     expect(e.schemaOutdated).toBe(true);
     expect(e.snapshot).toBeNull();

@@ -40,8 +40,11 @@ export function buildStatusEntry(input: BuildStatusEntryInput): SandcastleStatus
     return { ...base, readError: `Invalid JSON: ${(err as Error).message}` };
   }
 
+  // Only a file NEWER than t3 understands is outdated. SANDCASTLE_STATUS_SCHEMA_VERSION
+  // is the HIGHEST version we can read, so v1 and v2 both decode below; a v3+ file is
+  // flagged so the viewer says "update t3" instead of silently mis-reading it.
   const version = (parsed as { schemaVersion?: unknown })?.schemaVersion;
-  if (typeof version === "number" && version !== SANDCASTLE_STATUS_SCHEMA_VERSION) {
+  if (typeof version === "number" && version > SANDCASTLE_STATUS_SCHEMA_VERSION) {
     return { ...base, schemaOutdated: true };
   }
 

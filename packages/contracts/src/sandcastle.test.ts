@@ -69,8 +69,13 @@ describe("SandcastleStatusSnapshot", () => {
     ).toThrow();
   });
 
-  it("pins the known schema version to 1", () => {
-    expect(SANDCASTLE_STATUS_SCHEMA_VERSION).toBe(1);
+  it("pins the highest readable schema version to 2", () => {
+    expect(SANDCASTLE_STATUS_SCHEMA_VERSION).toBe(2);
+  });
+
+  it("decodes a v2 snapshot with the terminal 'unhealthy' state", () => {
+    const decoded = decodeSnapshot({ ...SAMPLE, schemaVersion: 2, state: "unhealthy" });
+    expect(decoded.state).toBe("unhealthy");
   });
 
   it("decodes a snapshot without history (backward compat)", () => {

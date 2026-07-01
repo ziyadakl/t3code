@@ -2,6 +2,7 @@
 import { describe, it, expect } from "vite-plus/test";
 import {
   deriveBanner,
+  bannerTone,
   isStale,
   githubIssueUrl,
   phaseLabel,
@@ -102,6 +103,17 @@ describe("deriveBanner", () => {
     expect(
       deriveBanner(entry({ snapshot: { ...runningSnapshot, state: "stopped" } }), now).kind,
     ).toBe("stopped");
+  });
+  it("unhealthy state (terminal failure)", () => {
+    expect(
+      deriveBanner(entry({ snapshot: { ...runningSnapshot, state: "unhealthy" } }), now).kind,
+    ).toBe("unhealthy");
+  });
+});
+
+describe("bannerTone", () => {
+  it("maps unhealthy to error (red)", () => {
+    expect(bannerTone("unhealthy")).toBe("error");
   });
 });
 

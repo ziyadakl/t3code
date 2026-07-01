@@ -16,8 +16,10 @@ import * as Rpc from "effect/unstable/rpc/Rpc";
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { EnvironmentAuthorizationError } from "./auth.ts";
 
-/** Bump in lockstep with Sandcastle's STATUS_SCHEMA_VERSION. Mismatch ⇒ "outdated". */
-export const SANDCASTLE_STATUS_SCHEMA_VERSION = 1;
+/** Highest status.json schema version t3 can read. A status.json whose
+ *  `schemaVersion` is GREATER than this ⇒ "outdated" (genuinely newer than we
+ *  understand); anything at or below decodes (v1 and v2 both read fine). */
+export const SANDCASTLE_STATUS_SCHEMA_VERSION = 2;
 
 // Stable method-id constant (mirrors DEV_SERVER_WS_METHODS in devServer.ts).
 export const SANDCASTLE_WS_METHODS = {
@@ -39,7 +41,16 @@ export const SandcastleIssuePhase = Schema.Literals([
 ]);
 export type SandcastleIssuePhase = typeof SandcastleIssuePhase.Type;
 
-export const SandcastleRunState = Schema.Literals(["running", "done", "stopped", "restarting"]);
+export const SandcastleRunState = Schema.Literals([
+  "running",
+  "done",
+  "stopped",
+  "restarting",
+  // Terminal FAILURE (schema v2): the run finished but left merged+reviewed work
+  // stranded because the final fast-forward promotion refused — must NOT read as
+  // done/success.
+  "unhealthy",
+]);
 export type SandcastleRunState = typeof SandcastleRunState.Type;
 
 export const SandcastleStatusHistoryEntry = Schema.Struct({

@@ -21,7 +21,8 @@ export type BannerKind =
   | "stale" // running, no update within STALE_AFTER_MS
   | "done"
   | "stopped"
-  | "outdated" // schemaVersion mismatch
+  | "unhealthy" // terminal failure: finished but left merged work stranded
+  | "outdated" // schemaVersion newer than t3 understands
   | "error"; // read/parse failure
 
 export interface Banner {
@@ -77,6 +78,8 @@ export function deriveBanner(entry: SandcastleStatusEntry, serverNowIso: string)
       return { kind: "done", text: "Done" };
     case "stopped":
       return { kind: "stopped", text: "Stopped" };
+    case "unhealthy":
+      return { kind: "unhealthy", text: "Unhealthy — needs attention" };
     case "running":
     case "restarting":
       return isStale(snap.updatedAt, serverNowIso)
@@ -284,6 +287,7 @@ export function bannerTone(
     case "stale":
     case "outdated":
       return "warning";
+    case "unhealthy":
     case "error":
       return "error";
     case "done":
