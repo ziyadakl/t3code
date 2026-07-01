@@ -323,11 +323,14 @@ describe("MessagesTimeline", () => {
 
 describe("MessagesTimeline — in-flight prompt rewind (Feature C)", () => {
   const ACTIVE_TURN = TurnId.make("turn-active");
-  const PRIOR_TURN = TurnId.make("turn-prior");
   const ACTIVE_MESSAGE = MessageId.make("message-active");
   const PRIOR_MESSAGE = MessageId.make("message-prior");
 
-  function buildUserEntryOnTurn(entryId: string, messageId: MessageId, turnId: TurnId) {
+  // Production-accurate: user prompts are ALWAYS persisted with turnId null
+  // (decider.ts stamps role:"user" events with turnId: null). The in-flight
+  // prompt is therefore the LAST user row while a turn runs — never a turnId
+  // match. See MessagesTimeline.logic.ts:isInFlightPrompt.
+  function buildUserEntry(entryId: string, messageId: MessageId) {
     return {
       id: entryId,
       kind: "message" as const,
@@ -336,14 +339,14 @@ describe("MessagesTimeline — in-flight prompt rewind (Feature C)", () => {
         id: messageId,
         role: "user" as const,
         text: `prompt for ${entryId}`,
-        turnId,
+        turnId: null,
         createdAt: MESSAGE_CREATED_AT,
         streaming: false,
       },
     };
   }
 
-  it("enables only the active-turn prompt's rewind and routes it to interrupt-and-rewind", async () => {
+  it("enables the last user prompt's rewind (in-flight) and routes it to interrupt-and-rewind", async () => {
     rewindMenuProps.length = 0;
     const onRewindConversation = vi.fn();
     const onInterruptAndRewind = vi.fn();
@@ -358,8 +361,8 @@ describe("MessagesTimeline — in-flight prompt rewind (Feature C)", () => {
         onRewindConversation={onRewindConversation}
         onInterruptAndRewind={onInterruptAndRewind}
         timelineEntries={[
-          buildUserEntryOnTurn("entry-prior", PRIOR_MESSAGE, PRIOR_TURN),
-          buildUserEntryOnTurn("entry-active", ACTIVE_MESSAGE, ACTIVE_TURN),
+          buildUserEntry("entry-prior", PRIOR_MESSAGE),
+          buildUserEntry("entry-active", ACTIVE_MESSAGE),
         ]}
       />,
     );
@@ -370,9 +373,10 @@ describe("MessagesTimeline — in-flight prompt rewind (Feature C)", () => {
       throw new Error("expected rewind controls for both user prompts");
     }
 
-    // Prior (non-active-turn) prompt stays disabled while a turn runs.
+    // Earlier prompt stays disabled while a turn runs.
     expect(priorProps.disabled).toBe(true);
-    // Active-turn (just-sent) prompt is clickable so it can interrupt+rewind.
+    // The last (just-sent, in-flight) prompt is clickable so it can
+    // interrupt+rewind — even though its turnId is null.
     expect(activeProps.disabled).toBe(false);
 
     // Clicking the enabled control routes to interrupt-and-rewind, not the
@@ -382,7 +386,36 @@ describe("MessagesTimeline — in-flight prompt rewind (Feature C)", () => {
     expect(onInterruptAndRewind).toHaveBeenCalledWith(ACTIVE_MESSAGE);
     expect(onRewindConversation).not.toHaveBeenCalled();
 
-    // The prior prompt still routes through the ordinary conversation rewind.
+    // The earlier prompt still routes through the ordinary conversation rewind.
     expect(priorProps.onRestoreConversation).toBe(onRewindConversation);
+  });
+
+  it("leaves every prompt clickable through the ordinary rewind when idle", async () => {
+    rewindMenuProps.length = 0;
+    const onRewindConversation = vi.fn();
+    const onInterruptAndRewind = vi.fn();
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+
+    renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        onRewindConversation={onRewindConversation}
+        onInterruptAndRewind={onInterruptAndRewind}
+        timelineEntries={[
+          buildUserEntry("entry-prior", PRIOR_MESSAGE),
+          buildUserEntry("entry-active", ACTIVE_MESSAGE),
+        ]}
+      />,
+    );
+
+    const activeProps = rewindMenuProps.find((p) => p.messageId === ACTIVE_MESSAGE);
+    if (!activeProps) {
+      throw new Error("expected rewind control for the last user prompt");
+    }
+
+    // Idle: even the last prompt is a normal conversation rewind, not interrupt.
+    expect(activeProps.disabled).toBe(false);
+    expect(activeProps.onRestoreConversation).toBe(onRewindConversation);
+    expect(onInterruptAndRewind).not.toHaveBeenCalled();
   });
 });

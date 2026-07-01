@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vite-plus/test";
-import { TurnId } from "@t3tools/contracts";
 import {
   computeStableMessagesTimelineRows,
   computeMessageDurationStart,
@@ -11,28 +10,16 @@ import {
 } from "./MessagesTimeline.logic";
 
 describe("isInFlightPrompt", () => {
-  const turnA = TurnId.make("turn-a");
-  const turnB = TurnId.make("turn-b");
-
-  it("is true only when working AND the message turn matches the active turn", () => {
-    expect(isInFlightPrompt(turnA, turnA, true)).toBe(true);
+  it("is true only for the last user row while working", () => {
+    expect(isInFlightPrompt(true, true)).toBe(true);
   });
 
-  it("is false when not working, even if the turn ids match", () => {
-    expect(isInFlightPrompt(turnA, turnA, false)).toBe(false);
+  it("is false when not working, even for the last user row", () => {
+    expect(isInFlightPrompt(true, false)).toBe(false);
   });
 
-  it("is false when the message turn id is null/undefined", () => {
-    expect(isInFlightPrompt(null, turnA, true)).toBe(false);
-    expect(isInFlightPrompt(undefined, turnA, true)).toBe(false);
-  });
-
-  it("is false when the turn ids do not match", () => {
-    expect(isInFlightPrompt(turnB, turnA, true)).toBe(false);
-  });
-
-  it("is false when there is no active turn", () => {
-    expect(isInFlightPrompt(turnA, null, true)).toBe(false);
+  it("is false for earlier user rows while working", () => {
+    expect(isInFlightPrompt(false, true)).toBe(false);
   });
 });
 
@@ -430,6 +417,72 @@ describe("deriveMessagesTimelineRows", () => {
 
     expect(userRow?.revertTurnCount).toBe(1);
     expect(assistantRow?.assistantTurnDiffSummary).toBe(assistantTurnDiffSummary);
+  });
+
+  it("flags only the last user row as in-flight-eligible (turnId is always null)", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "user-1-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:00Z",
+          message: {
+            id: "user-1" as never,
+            role: "user",
+            text: "First",
+            turnId: null,
+            createdAt: "2026-01-01T00:00:00Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "assistant-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:10Z",
+          message: {
+            id: "assistant-1" as never,
+            role: "assistant",
+            text: "ok",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:10Z",
+            completedAt: "2026-01-01T00:00:11Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "user-2-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:20Z",
+          message: {
+            id: "user-2" as never,
+            role: "user",
+            text: "Second",
+            turnId: null,
+            createdAt: "2026-01-01T00:00:20Z",
+            streaming: false,
+          },
+        },
+      ],
+      completionDividerBeforeEntryId: null,
+      isWorking: true,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    const userRows = rows.filter(
+      (row): row is Extract<(typeof rows)[number], { kind: "message" }> =>
+        row.kind === "message" && row.message.role === "user",
+    );
+    const assistantRow = rows.find(
+      (row): row is Extract<(typeof rows)[number], { kind: "message" }> =>
+        row.kind === "message" && row.message.role === "assistant",
+    );
+
+    expect(userRows[0]?.isLastUserRow).toBe(false);
+    expect(userRows[1]?.isLastUserRow).toBe(true);
+    // Assistant rows are never the in-flight prompt regardless of position.
+    expect(assistantRow?.isLastUserRow).toBe(false);
   });
 });
 

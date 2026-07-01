@@ -31,6 +31,10 @@ export type MessagesTimelineRow =
       assistantCopyStreaming: boolean;
       assistantTurnDiffSummary?: TurnDiffSummary | undefined;
       revertTurnCount?: number | undefined;
+      /** True for the LAST user-role row — the just-sent (in-flight) prompt
+       *  while a turn runs. User messages persist with turnId null, so
+       *  in-flight can't be keyed off turnId. See isInFlightPrompt / Feature C. */
+      isLastUserRow: boolean;
     }
   | {
       kind: "proposed-plan";
@@ -65,16 +69,15 @@ export function computeMessageDurationStart(
 }
 
 /**
- * Whether a user prompt belongs to the turn that is currently running. Used to
- * make ONLY the in-flight (just-sent) prompt's rewind button clickable so it can
- * interrupt-then-rewind (CLI ESC parity). See Feature C.
+ * Whether a user prompt is the in-flight (just-sent) one — i.e. the LAST
+ * user-role row while a turn is running. Used to make ONLY that prompt's rewind
+ * button clickable so it can interrupt-then-rewind (CLI ESC parity). It cannot
+ * be keyed off the message's turnId: user messages ALWAYS persist with turnId
+ * null (see server decider), so a turnId match would never fire live. See
+ * Feature C.
  */
-export function isInFlightPrompt(
-  messageTurnId: TurnId | null | undefined,
-  activeTurnId: TurnId | null,
-  isWorking: boolean,
-): boolean {
-  return isWorking && messageTurnId != null && messageTurnId === activeTurnId;
+export function isInFlightPrompt(isLastUserRow: boolean, isWorking: boolean): boolean {
+  return isWorking && isLastUserRow;
 }
 
 export function normalizeCompactToolLabel(value: string): string {
@@ -156,6 +159,15 @@ export function deriveMessagesTimelineRows(input: {
   );
   const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(input.timelineEntries);
 
+  // The in-flight prompt is the LAST user-role row (keyed by entry id), not a
+  // turnId match — user messages persist with turnId null. See isInFlightPrompt.
+  let lastUserEntryId: string | null = null;
+  for (const entry of input.timelineEntries) {
+    if (entry.kind === "message" && entry.message.role === "user") {
+      lastUserEntryId = entry.id;
+    }
+  }
+
   for (let index = 0; index < input.timelineEntries.length; index += 1) {
     const timelineEntry = input.timelineEntries[index];
     if (!timelineEntry) {
@@ -222,6 +234,7 @@ export function deriveMessagesTimelineRows(input: {
         timelineEntry.message.role === "user"
           ? input.revertTurnCountByUserMessageId.get(timelineEntry.message.id)
           : undefined,
+      isLastUserRow: timelineEntry.message.role === "user" && timelineEntry.id === lastUserEntryId,
     });
   }
 
@@ -280,7 +293,8 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.showAssistantCopyButton === bm.showAssistantCopyButton &&
         a.assistantCopyStreaming === bm.assistantCopyStreaming &&
         a.assistantTurnDiffSummary === bm.assistantTurnDiffSummary &&
-        a.revertTurnCount === bm.revertTurnCount
+        a.revertTurnCount === bm.revertTurnCount &&
+        a.isLastUserRow === bm.isLastUserRow
       );
     }
   }

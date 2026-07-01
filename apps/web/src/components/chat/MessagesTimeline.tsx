@@ -416,7 +416,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                 <RewindUserMessageButton
                   messageId={row.message.id}
                   hasCheckpoint={hasCheckpoint}
-                  turnId={row.message.turnId ?? null}
+                  isLastUserRow={row.isLastUserRow}
                 />
               </div>
               <p className="text-right text-xs text-muted-foreground/50">
@@ -433,22 +433,20 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
 function RewindUserMessageButton({
   messageId,
   hasCheckpoint,
-  turnId,
+  isLastUserRow,
 }: {
   messageId: MessageId;
   hasCheckpoint: boolean;
-  turnId: TurnId | null;
+  isLastUserRow: boolean;
 }) {
   const ctx = use(TimelineRowCtx);
   const activity = use(TimelineRowActivityCtx);
-  // Only the just-sent (in-flight) prompt stays clickable while a turn runs — it
-  // interrupts the turn and rewinds to itself (CLI ESC parity). Every other
-  // prompt stays disabled until the turn settles. See Feature C.
-  const isInFlightPrompt = importedIsInFlightPrompt(
-    turnId,
-    activity.activeTurnId,
-    activity.isWorking,
-  );
+  // Only the just-sent (in-flight) prompt — the LAST user row — stays clickable
+  // while a turn runs; it interrupts the turn and rewinds to itself (CLI ESC
+  // parity). Every earlier prompt stays disabled until the turn settles. User
+  // messages persist with turnId null, so this is keyed off row position, not
+  // turnId. See Feature C.
+  const isInFlightPrompt = importedIsInFlightPrompt(isLastUserRow, activity.isWorking);
 
   return (
     <RewindMenu
