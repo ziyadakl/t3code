@@ -64,6 +64,19 @@ export function computeMessageDurationStart(
   return result;
 }
 
+/**
+ * Whether a user prompt belongs to the turn that is currently running. Used to
+ * make ONLY the in-flight (just-sent) prompt's rewind button clickable so it can
+ * interrupt-then-rewind (CLI ESC parity). See Feature C.
+ */
+export function isInFlightPrompt(
+  messageTurnId: TurnId | null | undefined,
+  activeTurnId: TurnId | null,
+  isWorking: boolean,
+): boolean {
+  return isWorking && messageTurnId != null && messageTurnId === activeTurnId;
+}
+
 export function normalizeCompactToolLabel(value: string): string {
   return value.replace(/\s+(?:complete|completed)\s*$/i, "").trim();
 }

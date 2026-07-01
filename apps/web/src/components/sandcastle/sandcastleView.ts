@@ -266,12 +266,17 @@ export function queueReadyDisplay(
     if (status.error === null) return null; // pending — show nothing yet
     return { text: "queue unavailable", muted: true, title: queueReadyErrorTitle(status.error) };
   }
-  const text = `${status.count} ready`;
+  const text =
+    status.total != null ? `${status.count} of ${status.total} ready` : `${status.count} ready`;
   if (status.error === null) {
+    const title =
+      status.total != null
+        ? `Issues Sandcastle can dispatch now (${status.count}) out of ${status.total} labeled "${status.label}"`
+        : `Issues Sandcastle can pick up now (labeled "${status.label}", ready to dispatch)`;
     return {
       text,
       muted: false,
-      title: `Issues Sandcastle can pick up now (labeled "${status.label}", ready to dispatch)`,
+      title,
     };
   }
   return { text, muted: true, title: `Last known count — ${queueReadyErrorTitle(status.error)}` };

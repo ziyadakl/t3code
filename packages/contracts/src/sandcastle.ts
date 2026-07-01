@@ -119,10 +119,11 @@ export const QueueReadyError = Schema.Literals(["gh-missing", "gh-unauthed", "qu
 export type QueueReadyError = typeof QueueReadyError.Type;
 
 /**
- * How many issues the Sandcastle loop can dispatch right now — open GitHub
- * issues carrying the pickup label, narrowed to the set the loop's planner will
- * actually pick up (the type: label rule when SANDCASTLE.md exists, and the
- * `Blocked by: #N` rule against the repo's open issues). NOT a raw label count.
+ * Two numbers describe the Sandcastle queue: `count` = issues dispatchable
+ * right now (open GitHub issues carrying the pickup label, unblocked and with
+ * exactly one type: label when SANDCASTLE.md exists); `total` = the raw size of
+ * the `ready-for-agent`-labeled set (the base set before those narrowing rules).
+ * So the UI can render "4 of 23 ready". NOT a raw label count for `count`.
  * This is NOT in status.json; t3's server queries GitHub for it (cached) and
  * attaches it per entry. `error` lets the UI show "unavailable" instead of a
  * wrong number when the query can't run.
@@ -132,6 +133,10 @@ export const QueueReadyStatus = Schema.Struct({
    *  blocked-by rules applied); null while the first query is pending or a
    *  query failed before any successful count. */
   count: Schema.NullOr(Schema.Number),
+  /** Raw size of the `ready-for-agent`-labeled set (the base set before the
+   *  narrowing rules); pairs with `count` for "N of M ready". Optional so
+   *  older/absent payloads still decode; null when unknown. */
+  total: Schema.optional(Schema.NullOr(Schema.Number)),
   /** The label counted (default "ready-for-agent"), echoed for display. */
   label: Schema.String,
   /** ISO time of the GitHub query behind `count`; null while pending. */

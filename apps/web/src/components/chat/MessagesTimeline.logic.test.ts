@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+import { TurnId } from "@t3tools/contracts";
 import {
   computeStableMessagesTimelineRows,
   computeMessageDurationStart,
@@ -6,11 +7,40 @@ import {
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
   isEffectivelyAtEnd,
+  isInFlightPrompt,
 } from "./MessagesTimeline.logic";
+
+describe("isInFlightPrompt", () => {
+  const turnA = TurnId.make("turn-a");
+  const turnB = TurnId.make("turn-b");
+
+  it("is true only when working AND the message turn matches the active turn", () => {
+    expect(isInFlightPrompt(turnA, turnA, true)).toBe(true);
+  });
+
+  it("is false when not working, even if the turn ids match", () => {
+    expect(isInFlightPrompt(turnA, turnA, false)).toBe(false);
+  });
+
+  it("is false when the message turn id is null/undefined", () => {
+    expect(isInFlightPrompt(null, turnA, true)).toBe(false);
+    expect(isInFlightPrompt(undefined, turnA, true)).toBe(false);
+  });
+
+  it("is false when the turn ids do not match", () => {
+    expect(isInFlightPrompt(turnB, turnA, true)).toBe(false);
+  });
+
+  it("is false when there is no active turn", () => {
+    expect(isInFlightPrompt(turnA, null, true)).toBe(false);
+  });
+});
 
 describe("isEffectivelyAtEnd", () => {
   it("is true when already at the end regardless of overflow", () => {
-    expect(isEffectivelyAtEnd({ isAtEnd: true, contentLength: 1333, scrollLength: 657 })).toBe(true);
+    expect(isEffectivelyAtEnd({ isAtEnd: true, contentLength: 1333, scrollLength: 657 })).toBe(
+      true,
+    );
   });
   it("is false when content overflows and not at the end", () => {
     expect(isEffectivelyAtEnd({ isAtEnd: false, contentLength: 1333, scrollLength: 657 })).toBe(
@@ -18,8 +48,12 @@ describe("isEffectivelyAtEnd", () => {
     );
   });
   it("is true when content fits the viewport (nothing to scroll)", () => {
-    expect(isEffectivelyAtEnd({ isAtEnd: false, contentLength: 657, scrollLength: 657 })).toBe(true);
-    expect(isEffectivelyAtEnd({ isAtEnd: false, contentLength: 400, scrollLength: 657 })).toBe(true);
+    expect(isEffectivelyAtEnd({ isAtEnd: false, contentLength: 657, scrollLength: 657 })).toBe(
+      true,
+    );
+    expect(isEffectivelyAtEnd({ isAtEnd: false, contentLength: 400, scrollLength: 657 })).toBe(
+      true,
+    );
   });
 });
 

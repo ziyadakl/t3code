@@ -891,6 +891,12 @@ export default function ChatView(props: ChatViewProps) {
   // they may cancel it: un-hide the forward messages, clear the pending cursor,
   // reset the composer. Cleared on send, on cancel, or overwritten by a re-rewind.
   const [pendingRewind, setPendingRewind] = useState<{ messageId: MessageId } | null>(null);
+  // Interrupt-then-rewind (Feature C): the just-sent prompt's rewind button
+  // stops the running turn, and once the turn settles we rewind to that prompt.
+  // Mirrors the deferred-action shape of `pendingRewind`.
+  const [pendingInterruptRewind, setPendingInterruptRewind] = useState<{
+    messageId: MessageId;
+  } | null>(null);
   // Same TDZ pattern as rewindRestoreFilesRef for the "cancel rewind" handler.
   const rewindCancelRef = useRef<() => void>(() => {});
   const [respondingRequestIds, setRespondingRequestIds] = useState<ApprovalRequestId[]>([]);
@@ -1934,6 +1940,7 @@ export default function ChatView(props: ChatViewProps) {
   useEffect(() => {
     setRewindPickerOpen(false);
     setRewindFilesAhead(null);
+    setPendingInterruptRewind(null);
   }, [activeThreadId]);
 
   const completionSummary = useMemo(() => {
@@ -3614,7 +3621,7 @@ export default function ChatView(props: ChatViewProps) {
     }
   };
 
-  const onInterrupt = async () => {
+  const onInterrupt = useCallback(async () => {
     const api = readEnvironmentApi(environmentId);
     if (!api || !activeThread) return;
     await api.orchestration.dispatchCommand({
@@ -3623,7 +3630,57 @@ export default function ChatView(props: ChatViewProps) {
       threadId: activeThread.id,
       createdAt: new Date().toISOString(),
     });
-  };
+  }, [activeThread, environmentId]);
+
+  // Feature C — interrupt the running turn, then rewind to the just-sent prompt
+  // once it settles (CLI ESC parity). When no turn is running we rewind straight
+  // away. The rewind itself reuses onRewindConversation (its guard refuses while
+  // the turn still runs, so we defer via pendingInterruptRewind).
+  const onInterruptAndRewind = useCallback(
+    (messageId: MessageId) => {
+      if (pendingInterruptRewind) return;
+      if (phase !== "running") {
+        void onRewindConversation(messageId);
+        return;
+      }
+      if (isConnecting) return;
+      setPendingInterruptRewind({ messageId });
+      void onInterrupt();
+    },
+    [isConnecting, onInterrupt, onRewindConversation, pendingInterruptRewind, phase],
+  );
+
+  // Once the interrupted turn has fully settled, perform the deferred rewind.
+  // Clearing the pending state FIRST prevents re-entry / a double rewind.
+  useEffect(() => {
+    if (!pendingInterruptRewind) return;
+    if (phase === "running" || isSendBusy || isConnecting || isRevertingCheckpoint) {
+      return;
+    }
+    const { messageId } = pendingInterruptRewind;
+    setPendingInterruptRewind(null);
+    void onRewindConversation(messageId);
+  }, [
+    pendingInterruptRewind,
+    phase,
+    isSendBusy,
+    isConnecting,
+    isRevertingCheckpoint,
+    onRewindConversation,
+  ]);
+
+  // Safety net: if the turn never confirms its stop, give up after a few seconds
+  // and surface an actionable error instead of hanging the pending rewind.
+  useEffect(() => {
+    if (!pendingInterruptRewind) return;
+    const timer = setTimeout(() => {
+      setPendingInterruptRewind(null);
+      if (activeThread) {
+        setThreadError(activeThread.id, "Couldn't stop the current turn — try again.");
+      }
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [pendingInterruptRewind, activeThread, setThreadError]);
 
   const onRespondToApproval = useCallback(
     async (requestId: ApprovalRequestId, decision: ProviderApprovalDecision) => {
@@ -4293,6 +4350,7 @@ export default function ChatView(props: ChatViewProps) {
               revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
               onRewindConversation={onRewindConversationStable}
               onRewindConversationAndFiles={onRewindConversationAndFilesStable}
+              onInterruptAndRewind={onInterruptAndRewind}
               isRevertingCheckpoint={isRevertingCheckpoint}
               onImageExpand={onExpandTimelineImage}
               markdownCwd={gitCwd ?? undefined}

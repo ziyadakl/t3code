@@ -1,8 +1,28 @@
-import { EnvironmentId, MessageId } from "@t3tools/contracts";
+import { EnvironmentId, MessageId, TurnId } from "@t3tools/contracts";
 import { createRef, type ReactNode, type Ref } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vite-plus/test";
 import type { LegendListRef } from "@legendapp/list/react";
+
+// Capture the props MessagesTimeline hands to the rewind control so we can
+// assert the enable/route wiring (Feature C) without a DOM. The real click ->
+// onRestoreConversation behavior of RewindMenu is proven in RewindMenu.test.tsx;
+// here we verify what MessagesTimeline routes into it per row.
+interface CapturedRewindProps {
+  messageId: MessageId;
+  hasCheckpoint: boolean;
+  disabled?: boolean;
+  onRestoreConversation: (messageId: MessageId) => void;
+  onRestoreConversationAndFiles: (messageId: MessageId) => void;
+}
+const rewindMenuProps: CapturedRewindProps[] = [];
+
+vi.mock("./RewindMenu", () => ({
+  RewindMenu: (props: CapturedRewindProps) => {
+    rewindMenuProps.push(props);
+    return <button data-testid={`rewind-${props.messageId}`} disabled={props.disabled} />;
+  },
+}));
 
 vi.mock("@legendapp/list/react", async () => {
   const legendListTestId = "legend-list";
@@ -105,6 +125,7 @@ function buildProps() {
     revertTurnCountByUserMessageId: new Map(),
     onRewindConversation: () => {},
     onRewindConversationAndFiles: () => {},
+    onInterruptAndRewind: () => {},
     isRevertingCheckpoint: false,
     onImageExpand: () => {},
     activeThreadEnvironmentId: ACTIVE_THREAD_ENVIRONMENT_ID,
@@ -297,5 +318,71 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain(">Review comment<");
     expect(markup).not.toContain("&lt;review_comment");
     expect(markup).not.toContain("&lt;/review_comment&gt;");
+  });
+});
+
+describe("MessagesTimeline — in-flight prompt rewind (Feature C)", () => {
+  const ACTIVE_TURN = TurnId.make("turn-active");
+  const PRIOR_TURN = TurnId.make("turn-prior");
+  const ACTIVE_MESSAGE = MessageId.make("message-active");
+  const PRIOR_MESSAGE = MessageId.make("message-prior");
+
+  function buildUserEntryOnTurn(entryId: string, messageId: MessageId, turnId: TurnId) {
+    return {
+      id: entryId,
+      kind: "message" as const,
+      createdAt: MESSAGE_CREATED_AT,
+      message: {
+        id: messageId,
+        role: "user" as const,
+        text: `prompt for ${entryId}`,
+        turnId,
+        createdAt: MESSAGE_CREATED_AT,
+        streaming: false,
+      },
+    };
+  }
+
+  it("enables only the active-turn prompt's rewind and routes it to interrupt-and-rewind", async () => {
+    rewindMenuProps.length = 0;
+    const onRewindConversation = vi.fn();
+    const onInterruptAndRewind = vi.fn();
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+
+    renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        isWorking
+        activeTurnInProgress
+        activeTurnId={ACTIVE_TURN}
+        onRewindConversation={onRewindConversation}
+        onInterruptAndRewind={onInterruptAndRewind}
+        timelineEntries={[
+          buildUserEntryOnTurn("entry-prior", PRIOR_MESSAGE, PRIOR_TURN),
+          buildUserEntryOnTurn("entry-active", ACTIVE_MESSAGE, ACTIVE_TURN),
+        ]}
+      />,
+    );
+
+    const priorProps = rewindMenuProps.find((p) => p.messageId === PRIOR_MESSAGE);
+    const activeProps = rewindMenuProps.find((p) => p.messageId === ACTIVE_MESSAGE);
+    if (!priorProps || !activeProps) {
+      throw new Error("expected rewind controls for both user prompts");
+    }
+
+    // Prior (non-active-turn) prompt stays disabled while a turn runs.
+    expect(priorProps.disabled).toBe(true);
+    // Active-turn (just-sent) prompt is clickable so it can interrupt+rewind.
+    expect(activeProps.disabled).toBe(false);
+
+    // Clicking the enabled control routes to interrupt-and-rewind, not the
+    // plain conversation rewind.
+    activeProps.onRestoreConversation(activeProps.messageId);
+    expect(onInterruptAndRewind).toHaveBeenCalledTimes(1);
+    expect(onInterruptAndRewind).toHaveBeenCalledWith(ACTIVE_MESSAGE);
+    expect(onRewindConversation).not.toHaveBeenCalled();
+
+    // The prior prompt still routes through the ordinary conversation rewind.
+    expect(priorProps.onRestoreConversation).toBe(onRewindConversation);
   });
 });

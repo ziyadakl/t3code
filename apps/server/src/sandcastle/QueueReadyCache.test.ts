@@ -133,6 +133,8 @@ describe("QueueReadyCache", () => {
       yield* Effect.sleep("20 millis");
       const settled = yield* cache.observe(CWD, LABEL);
       assert.equal(settled?.count, 3);
+      // `total` is the raw labeled base-set size (readyOfLength(3) ⇒ 3 issues).
+      assert.equal(settled?.total, 3);
       assert.equal(settled?.error, null);
       assert.equal(settled?.label, LABEL);
     }).pipe(
@@ -151,6 +153,8 @@ describe("QueueReadyCache", () => {
         // #10 typeless ⇒ excluded; #11 blocked by open #99 ⇒ excluded; #12 has one
         // type: label and no open blocker ⇒ kept. So exactly one is dispatchable.
         assert.equal(status?.count, 1);
+        // ...but `total` is the raw labeled base set (all three ready issues).
+        assert.equal(status?.total, 3);
         assert.equal(status?.error, null);
       }).pipe(
         Effect.provide(
@@ -161,7 +165,11 @@ describe("QueueReadyCache", () => {
               Effect.succeed({
                 ready: [
                   { number: 10, body: "", labels: ["ready-for-agent"] },
-                  { number: 11, body: "Blocked by: #99", labels: ["ready-for-agent", "type:feature"] },
+                  {
+                    number: 11,
+                    body: "Blocked by: #99",
+                    labels: ["ready-for-agent", "type:feature"],
+                  },
                   { number: 12, body: "", labels: ["ready-for-agent", "type:bug"] },
                 ],
                 openNumbers: [10, 11, 12, 99],
@@ -171,39 +179,36 @@ describe("QueueReadyCache", () => {
       ),
   );
 
-  it.live(
-    "skips the open-issue-number query when no ready issue declares a blocker",
-    () => {
-      // The open-issue set exists only to resolve `Blocked by: #N`; with no ready
-      // issue declaring one, that second gh subprocess is pure waste — it must not run.
-      const ghCounter: GhCallCounter = { byLabel: 0, numbers: 0 };
-      return Effect.gen(function* () {
-        const cache = yield* QueueReadyCache;
-        yield* cache.observe(CWD, LABEL);
-        yield* Effect.sleep("20 millis");
-        const status = yield* cache.observe(CWD, LABEL);
-        assert.equal(status?.count, 2); // both ready issues dispatchable
-        assert.equal(status?.error, null);
-        assert.equal(ghCounter.byLabel, 1);
-        assert.equal(ghCounter.numbers, 0); // open-issue-number query skipped
-      }).pipe(
-        Effect.provide(
-          cacheLayer({
-            identity: githubIdentity,
-            ghCounter,
-            dispatch: () =>
-              Effect.succeed({
-                ready: [
-                  { number: 1, body: "", labels: [] },
-                  { number: 2, body: "no blockers in this body", labels: [] },
-                ],
-                openNumbers: [1, 2],
-              }),
-          }),
-        ),
-      );
-    },
-  );
+  it.live("skips the open-issue-number query when no ready issue declares a blocker", () => {
+    // The open-issue set exists only to resolve `Blocked by: #N`; with no ready
+    // issue declaring one, that second gh subprocess is pure waste — it must not run.
+    const ghCounter: GhCallCounter = { byLabel: 0, numbers: 0 };
+    return Effect.gen(function* () {
+      const cache = yield* QueueReadyCache;
+      yield* cache.observe(CWD, LABEL);
+      yield* Effect.sleep("20 millis");
+      const status = yield* cache.observe(CWD, LABEL);
+      assert.equal(status?.count, 2); // both ready issues dispatchable
+      assert.equal(status?.error, null);
+      assert.equal(ghCounter.byLabel, 1);
+      assert.equal(ghCounter.numbers, 0); // open-issue-number query skipped
+    }).pipe(
+      Effect.provide(
+        cacheLayer({
+          identity: githubIdentity,
+          ghCounter,
+          dispatch: () =>
+            Effect.succeed({
+              ready: [
+                { number: 1, body: "", labels: [] },
+                { number: 2, body: "no blockers in this body", labels: [] },
+              ],
+              openNumbers: [1, 2],
+            }),
+        }),
+      ),
+    );
+  });
 
   it.live(
     "queries the open-issue-number set (and excludes the blocked issue) when a ready issue declares a blocker",
@@ -278,6 +283,7 @@ describe("QueueReadyCache", () => {
       yield* Effect.sleep("20 millis");
       const second = yield* cache.observe(CWD, LABEL);
       assert.equal(second?.count, 3); // prior count preserved
+      assert.equal(second?.total, 3); // prior total preserved (priorTotal path)
       assert.equal(second?.error, "gh-unauthed");
     }).pipe(
       Effect.provide(

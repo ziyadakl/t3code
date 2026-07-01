@@ -1,5 +1,5 @@
 import { type MessageId } from "@t3tools/contracts";
-import { type ReactElement } from "react";
+import { cloneElement, type ReactElement } from "react";
 import { FileClockIcon, Undo2Icon } from "lucide-react";
 
 import { Button } from "../ui/button";
@@ -52,6 +52,35 @@ export function RewindMenu({
   onRestoreConversationAndFiles,
   onChosen,
 }: RewindMenuProps) {
+  // Without a checkpoint the dropdown would hold a single item ("Restore
+  // conversation only"), so collapse it into a direct button that performs the
+  // rewind immediately — no menu to open. (Feature B.)
+  if (!hasCheckpoint) {
+    const onClick = () => {
+      onRestoreConversation(messageId);
+      onChosen?.();
+    };
+    if (trigger) {
+      return cloneElement(
+        trigger as ReactElement<{ onClick?: () => void; disabled?: boolean | undefined }>,
+        { onClick, disabled },
+      );
+    }
+    return (
+      <Button
+        type="button"
+        size="xs"
+        variant="outline"
+        disabled={disabled}
+        aria-label="Rewind to this prompt"
+        title="Rewind to this prompt"
+        onClick={onClick}
+      >
+        <Undo2Icon className="size-3" />
+      </Button>
+    );
+  }
+
   return (
     <Menu>
       {trigger ? (
@@ -170,7 +199,9 @@ export function RewindPicker({
                   type="button"
                   className="w-full rounded-md border px-3 py-2 text-left text-sm hover:bg-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
-                  <div className="line-clamp-2 text-foreground">{previewPromptText(prompt.text)}</div>
+                  <div className="line-clamp-2 text-foreground">
+                    {previewPromptText(prompt.text)}
+                  </div>
                   {prompt.hasCheckpoint ? (
                     <div className="mt-0.5 text-xs text-muted-foreground">checkpoint available</div>
                   ) : null}

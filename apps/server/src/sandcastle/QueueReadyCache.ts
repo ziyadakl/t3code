@@ -25,11 +25,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
-import type {
-  QueueReadyError,
-  QueueReadyStatus,
-  RepositoryIdentity,
-} from "@t3tools/contracts";
+import type { QueueReadyError, QueueReadyStatus, RepositoryIdentity } from "@t3tools/contracts";
 
 import {
   GitHubCli,
@@ -171,21 +167,37 @@ export const makeQueueReadyCache = (options: QueueReadyCacheOptions = {}) =>
           const ready = yield* gh.listOpenIssuesByLabel({ cwd, label });
           // The open-issue set only resolves `Blocked by: #N`; skip its query
           // entirely when no ready issue declares a blocker (the common case).
-          const openNumbers = readyHasBlockers(ready) ? yield* gh.listOpenIssueNumbers({ cwd }) : [];
+          const openNumbers = readyHasBlockers(ready)
+            ? yield* gh.listOpenIssueNumbers({ cwd })
+            : [];
           const mdExists = yield* sandcastleMdExists(repoRoot);
-          return countDispatchableIssues({ ready, openNumbers, sandcastleMdExists: mdExists });
+          const count = countDispatchableIssues({
+            ready,
+            openNumbers,
+            sandcastleMdExists: mdExists,
+          });
+          // `ready` is the raw labeled base set; its length is the "of M" total.
+          return { count, total: ready.length };
         }).pipe(
-          Effect.map((count) => ({ ok: true as const, count })),
+          Effect.map(({ count, total }) => ({ ok: true as const, count, total })),
           Effect.catch((error) =>
             Effect.succeed({ ok: false as const, error: reasonToWireError(error.reason) }),
           ),
         );
         yield* SynchronizedRef.update(ref, (map) => {
-          // Preserve the last good count on failure (stale-while-revalidate).
-          const priorCount = map.get(repoKey)?.status.count ?? null;
+          // Preserve the last good count AND total on failure (stale-while-revalidate).
+          const prior = map.get(repoKey)?.status;
+          const priorCount = prior?.count ?? null;
+          const priorTotal = prior?.total ?? null;
           const status: QueueReadyStatus = outcome.ok
-            ? { count: outcome.count, label, updatedAt: nowIso, error: null }
-            : { count: priorCount, label, updatedAt: nowIso, error: outcome.error };
+            ? { count: outcome.count, total: outcome.total, label, updatedAt: nowIso, error: null }
+            : {
+                count: priorCount,
+                total: priorTotal,
+                label,
+                updatedAt: nowIso,
+                error: outcome.error,
+              };
           return new Map(map).set(repoKey, { status, inFlight: false });
         });
       }).pipe(

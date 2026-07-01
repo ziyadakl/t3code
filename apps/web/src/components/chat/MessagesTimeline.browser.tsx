@@ -63,6 +63,7 @@ function buildProps() {
     revertTurnCountByUserMessageId: new Map(),
     onRewindConversation: vi.fn(),
     onRewindConversationAndFiles: vi.fn(),
+    onInterruptAndRewind: vi.fn(),
     isRevertingCheckpoint: false,
     onImageExpand: vi.fn(),
     activeThreadEnvironmentId: EnvironmentId.make("environment-local"),

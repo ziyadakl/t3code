@@ -346,36 +346,60 @@ describe("queueReadyDisplay", () => {
     ).toBeNull();
   });
 
-  it("shows the count when fresh", () => {
+  it("shows 'N of M ready' when fresh with a total", () => {
     const d = queueReadyDisplay({
+      count: 4,
+      total: 23,
+      label: "ready-for-agent",
+      updatedAt: "2026-06-28T18:00:00Z",
+      error: null,
+    });
+    expect(d?.text).toBe("4 of 23 ready");
+    expect(d?.muted).toBe(false);
+  });
+
+  it("falls back to 'N ready' when total is absent/null", () => {
+    const dNull = queueReadyDisplay({
+      count: 4,
+      total: null,
+      label: "ready-for-agent",
+      updatedAt: "2026-06-28T18:00:00Z",
+      error: null,
+    });
+    expect(dNull?.text).toBe("4 ready");
+    expect(dNull?.muted).toBe(false);
+
+    const dAbsent = queueReadyDisplay({
       count: 3,
       label: "ready-for-agent",
       updatedAt: "2026-06-28T18:00:00Z",
       error: null,
     });
-    expect(d?.text).toBe("3 ready");
-    expect(d?.muted).toBe(false);
+    expect(dAbsent?.text).toBe("3 ready");
+    expect(dAbsent?.muted).toBe(false);
   });
 
   it("shows zero plainly", () => {
     const d = queueReadyDisplay({
       count: 0,
+      total: 5,
       label: "ready-for-agent",
       updatedAt: "2026-06-28T18:00:00Z",
       error: null,
     });
-    expect(d?.text).toBe("0 ready");
+    expect(d?.text).toBe("0 of 5 ready");
     expect(d?.muted).toBe(false);
   });
 
   it("keeps the last count but mutes it when a refresh failed (stale)", () => {
     const d = queueReadyDisplay({
       count: 3,
+      total: 8,
       label: "ready-for-agent",
       updatedAt: "2026-06-28T18:00:00Z",
       error: "gh-unauthed",
     });
-    expect(d?.text).toBe("3 ready");
+    expect(d?.text).toBe("3 of 8 ready");
     expect(d?.muted).toBe(true);
   });
 

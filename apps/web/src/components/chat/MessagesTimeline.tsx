@@ -50,6 +50,7 @@ import {
   computeStableMessagesTimelineRows,
   MAX_VISIBLE_WORK_LOG_ENTRIES,
   deriveMessagesTimelineRows,
+  isInFlightPrompt as importedIsInFlightPrompt,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
   type StableMessagesTimelineRowsState,
@@ -106,6 +107,10 @@ interface TimelineRowSharedState {
 interface TimelineRowActivityState {
   isWorking: boolean;
   isRevertingCheckpoint: boolean;
+  /** Interrupt the running turn, then rewind to the just-sent prompt. */
+  onInterruptAndRewind: (messageId: MessageId) => void;
+  /** Turn currently running — gates which prompt's rewind stays clickable. */
+  activeTurnId: TurnId | null;
 }
 
 const TimelineRowCtx = createContext<TimelineRowSharedState>(null!);
@@ -133,6 +138,7 @@ interface MessagesTimelineProps {
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   onRewindConversation: (messageId: MessageId) => void;
   onRewindConversationAndFiles: (messageId: MessageId) => void;
+  onInterruptAndRewind: (messageId: MessageId) => void;
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   activeThreadEnvironmentId: EnvironmentId;
@@ -166,6 +172,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   revertTurnCountByUserMessageId,
   onRewindConversation,
   onRewindConversationAndFiles,
+  onInterruptAndRewind,
   isRevertingCheckpoint,
   onImageExpand,
   activeThreadEnvironmentId,
@@ -263,8 +270,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     () => ({
       isWorking,
       isRevertingCheckpoint,
+      onInterruptAndRewind,
+      activeTurnId: activeTurnId ?? null,
     }),
-    [isRevertingCheckpoint, isWorking],
+    [isRevertingCheckpoint, isWorking, onInterruptAndRewind, activeTurnId],
   );
 
   // Stable renderItem — no closure deps. Row components read shared state
@@ -407,6 +416,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                 <RewindUserMessageButton
                   messageId={row.message.id}
                   hasCheckpoint={hasCheckpoint}
+                  turnId={row.message.turnId ?? null}
                 />
               </div>
               <p className="text-right text-xs text-muted-foreground/50">
@@ -423,19 +433,31 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
 function RewindUserMessageButton({
   messageId,
   hasCheckpoint,
+  turnId,
 }: {
   messageId: MessageId;
   hasCheckpoint: boolean;
+  turnId: TurnId | null;
 }) {
   const ctx = use(TimelineRowCtx);
   const activity = use(TimelineRowActivityCtx);
+  // Only the just-sent (in-flight) prompt stays clickable while a turn runs — it
+  // interrupts the turn and rewinds to itself (CLI ESC parity). Every other
+  // prompt stays disabled until the turn settles. See Feature C.
+  const isInFlightPrompt = importedIsInFlightPrompt(
+    turnId,
+    activity.activeTurnId,
+    activity.isWorking,
+  );
 
   return (
     <RewindMenu
       messageId={messageId}
       hasCheckpoint={hasCheckpoint}
-      disabled={activity.isRevertingCheckpoint || activity.isWorking}
-      onRestoreConversation={ctx.onRewindConversation}
+      disabled={activity.isRevertingCheckpoint || (activity.isWorking && !isInFlightPrompt)}
+      onRestoreConversation={
+        isInFlightPrompt ? activity.onInterruptAndRewind : ctx.onRewindConversation
+      }
       onRestoreConversationAndFiles={ctx.onRewindConversationAndFiles}
     />
   );
@@ -697,9 +719,7 @@ const AssistantChangedFilesSection = memo(function AssistantChangedFilesSection(
   // Filter the whole-tree checkpoint diff down to files the agent itself edited.
   // This makes the displayed list consistent with what file-restore will actually
   // revert. See ADR-0004.
-  const agentFiles = checkpointFiles.filter((f) =>
-    pathIsInAgentEditSet(f.path, agentEditedPaths),
-  );
+  const agentFiles = checkpointFiles.filter((f) => pathIsInAgentEditSet(f.path, agentEditedPaths));
   if (agentFiles.length === 0) return null;
 
   return (
