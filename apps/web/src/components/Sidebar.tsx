@@ -2330,8 +2330,20 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       </Dialog>
       {/* Divider between top-level project groups, shown only when this group is
           expanded (so it gets breathing room) and never after the last group.
-          Lives inside the group's <li> so auto-animate moves it with the row. */}
-      {projectExpanded && !isLast ? <SidebarSeparator className="mt-1.5" /> : null}
+          Lives inside the group's <li> so auto-animate moves it with the row.
+          A horizontal gradient (transparent -> foreground/10 -> transparent) so
+          the rule fades out at both ends; uses foreground, not the house
+          `bg-sidebar-border` whose token is undefined in this theme (invisible).
+          mt-4 ≈ the ~16px stacked below it (this row's mb my-1.5 + the menu
+          gap-1 + the next row's mt my-1.5), so the rule sits centered in the
+          inter-group gap rather than hugging the thread above. */}
+      {projectExpanded && !isLast ? (
+        <div
+          role="separator"
+          aria-orientation="horizontal"
+          className="mt-4 h-px bg-linear-to-r from-transparent via-foreground/10 to-transparent"
+        />
+      ) : null}
     </>
   );
 });
