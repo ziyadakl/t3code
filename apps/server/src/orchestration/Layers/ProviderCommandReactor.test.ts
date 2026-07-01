@@ -145,6 +145,8 @@ describe("ProviderCommandReactor", () => {
     readonly threadModelSelection?: ModelSelection;
     readonly sessionModelSwitch?: "unsupported" | "in-session";
     readonly requiresNewThreadForModelChange?: boolean;
+    /** Driver kind advertised by the registry snapshot for the thread's instance. */
+    readonly providerDriver?: ProviderDriverKind;
   }) {
     const now = "2026-01-01T00:00:00.000Z";
     const baseDir = input?.baseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "t3code-reactor-"));
@@ -286,6 +288,7 @@ describe("ProviderCommandReactor", () => {
     const providerSnapshots = [
       {
         instanceId: modelSelection.instanceId,
+        ...(input?.providerDriver ? { driver: input.providerDriver } : {}),
         ...(input?.requiresNewThreadForModelChange === true
           ? { requiresNewThreadForModelChange: true }
           : {}),
@@ -513,6 +516,63 @@ describe("ProviderCommandReactor", () => {
     const readModel = await harness.readModel();
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
     expect(thread?.title).toBe("Generated title");
+  });
+
+  it("generates a thread title on the first turn for a Claude (SDK) thread", async () => {
+    // Claude threads previously deferred first-turn titling to the Agent SDK's
+    // session summary (SdkTitleReactor), which never produced a headless title —
+    // so Claude threads were never auto-titled. The generic generation path now
+    // runs for Claude too (its title generator is a fast Haiku SDK query).
+    const harness = await createHarness({
+      threadModelSelection: {
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "claude-sonnet-4-6",
+      },
+      providerDriver: ProviderDriverKind.make("claudeAgent"),
+    });
+    const now = "2026-01-01T00:00:00.000Z";
+    const seededTitle = "=== RESUME ===\\n\\nPick up the handoff and keep buil...";
+    harness.generateThreadTitle.mockReturnValue(Effect.succeed({ title: "Resume handoff work" }));
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.make("cmd-claude-title-seed"),
+        threadId: ThreadId.make("thread-1"),
+        title: seededTitle,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-claude-turn-start-title"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-claude-title"),
+          role: "user",
+          text: "=== RESUME ===\\n\\nPick up the handoff and keep building the feature.",
+          attachments: [],
+        },
+        titleSeed: seededTitle,
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.generateThreadTitle.mock.calls.length === 1);
+
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      return (
+        readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"))?.title ===
+        "Resume handoff work"
+      );
+    });
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(thread?.title).toBe("Resume handoff work");
   });
 
   it("does not overwrite an existing custom thread title on the first turn", async () => {

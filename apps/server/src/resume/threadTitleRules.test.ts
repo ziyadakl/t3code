@@ -1,7 +1,6 @@
-import { ProviderDriverKind } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 
-import { canReplaceThreadTitle, defersTitleToSdk } from "./threadTitleRules.ts";
+import { canReplaceThreadTitle } from "./threadTitleRules.ts";
 
 const DEFAULT_TITLE = "New thread";
 
@@ -30,23 +29,4 @@ it("canReplaceThreadTitle: a non-default title with an empty/undefined seed is l
   assert.isFalse(canReplaceThreadTitle("Custom name", undefined));
   assert.isFalse(canReplaceThreadTitle("Custom name", ""));
   assert.isFalse(canReplaceThreadTitle("Custom name", "   "));
-});
-
-// ===========================================================================
-// defersTitleToSdk
-// ===========================================================================
-
-it("defersTitleToSdk: true only for the claudeAgent driver", () => {
-  assert.isTrue(defersTitleToSdk(ProviderDriverKind.make("claudeAgent")));
-});
-
-it("defersTitleToSdk: false for non-claude drivers", () => {
-  assert.isFalse(defersTitleToSdk(ProviderDriverKind.make("codex")));
-  assert.isFalse(defersTitleToSdk(ProviderDriverKind.make("cursor")));
-  assert.isFalse(defersTitleToSdk(ProviderDriverKind.make("grok")));
-  assert.isFalse(defersTitleToSdk(ProviderDriverKind.make("opencode")));
-});
-
-it("defersTitleToSdk: false when the driver is undefined (instance not found)", () => {
-  assert.isFalse(defersTitleToSdk(undefined));
 });

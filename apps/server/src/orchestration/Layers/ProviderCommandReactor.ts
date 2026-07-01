@@ -41,7 +41,7 @@ import {
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
-import { canReplaceThreadTitle, defersTitleToSdk } from "../../resume/threadTitleRules.ts";
+import { canReplaceThreadTitle } from "../../resume/threadTitleRules.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 
@@ -771,17 +771,12 @@ const make = Effect.gen(function* () {
         ...generationInput,
       }).pipe(Effect.forkScoped);
 
-      // Claude-backed threads get their title from the Agent SDK's own session
-      // summary (SdkTitleReactor reads getSessionInfo after the first turn), so
-      // skip the separate generation here. For Claude it would route through
-      // textGenerationModelSelection and, when that provider is unavailable, fall
-      // back to a `claude -p` subprocess that can hang for minutes.
-      const titleProviderDriver = (yield* providerRegistry.getProviders).find(
-        (candidate) => candidate.instanceId === thread.modelSelection.instanceId,
-      )?.driver;
-      const sdkProvidesTitle = defersTitleToSdk(titleProviderDriver);
-
-      if (!sdkProvidesTitle && canReplaceThreadTitle(thread.title, event.payload.titleSeed)) {
+      // Every driver (Claude included) titles the thread from its first message
+      // via the generic text-generation path. Claude's title generator is now a
+      // fast Haiku Agent-SDK query, so this no longer risks the multi-minute
+      // `claude -p` hang that previously forced Claude threads to defer titling
+      // to the Agent SDK's session summary (which never produced a headless title).
+      if (canReplaceThreadTitle(thread.title, event.payload.titleSeed)) {
         yield* maybeGenerateThreadTitleForFirstTurn({
           threadId: event.payload.threadId,
           cwd: generationCwd,

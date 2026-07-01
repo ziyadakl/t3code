@@ -13,7 +13,6 @@ import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
 import { OrchestrationReactor } from "../Services/OrchestrationReactor.ts";
 import { ResumeSeedReactor } from "../../resume/ResumeSeedReactor.ts";
 import { SessionTitleReactor } from "../../resume/SessionTitleReactor.ts";
-import { SdkTitleReactor } from "../../resume/SdkTitleReactor.ts";
 import { makeOrchestrationReactor } from "./OrchestrationReactor.ts";
 import * as AgentAwarenessRelay from "../../relay/AgentAwarenessRelay.ts";
 
@@ -94,14 +93,6 @@ describe("OrchestrationReactor", () => {
           }),
         ),
         Layer.provideMerge(
-          Layer.succeed(SdkTitleReactor, {
-            start: () => {
-              started.push("sdk-title-reactor");
-              return Effect.void;
-            },
-          }),
-        ),
-        Layer.provideMerge(
           Layer.succeed(AgentAwarenessRelay.AgentAwarenessRelay, {
             publishThread: () => Effect.void,
             start: () => {
@@ -125,7 +116,6 @@ describe("OrchestrationReactor", () => {
       "thread-deletion-reactor",
       "resume-seed-reactor",
       "session-title-reactor",
-      "sdk-title-reactor",
       "agent-awareness-relay",
     ]);
 

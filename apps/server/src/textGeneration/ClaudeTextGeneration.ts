@@ -7,13 +7,19 @@
  *
  * @module ClaudeTextGeneration
  */
+import {
+  query,
+  type Options as ClaudeQueryOptions,
+  type SDKMessage,
+} from "@anthropic-ai/claude-agent-sdk";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-import { type ClaudeSettings, type ModelSelection } from "@t3tools/contracts";
+import { type ChatAttachment, type ClaudeSettings, type ModelSelection } from "@t3tools/contracts";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
 
 import { TextGenerationError } from "@t3tools/contracts";
@@ -22,7 +28,6 @@ import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
-  buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
 import {
   normalizeCliError,
@@ -47,6 +52,65 @@ import { makeClaudeEnvironment } from "../provider/Drivers/ClaudeHome.ts";
 const CLAUDE_TIMEOUT_MS = 180_000;
 
 /**
+ * Fixed Haiku model for the thread-title one-shot. Titles never need a strong
+ * model, and pinning Haiku keeps the call fast + cheap regardless of the
+ * (possibly heavy) `textGenerationModelSelection` the caller resolved.
+ */
+export const CLAUDE_TITLE_MODEL_ID = "claude-haiku-4-5-20251001";
+
+/**
+ * Timeout for the Haiku title query. Deliberately tiny compared to
+ * `CLAUDE_TIMEOUT_MS` (the 3-minute `claude -p` bound this path used to hit and
+ * hang on): a title is best-effort and forked by the caller, so a slow/stuck
+ * query must give up fast instead of blocking titling for minutes.
+ */
+export const CLAUDE_TITLE_TIMEOUT_MS = 15_000;
+
+/** Input to the injectable Agent-SDK title query (mirrors the real `query`). */
+export interface ClaudeTitleQueryInput {
+  readonly prompt: string;
+  readonly options: ClaudeQueryOptions;
+}
+
+/**
+ * Runs one Agent-SDK `query` for a title and yields its messages. Injected so
+ * the title path is unit-testable without spawning the real Claude runtime; the
+ * live default calls the same `query` the session driver (ClaudeAdapter) uses,
+ * over the same OAuth environment (no separate auth/API-key path).
+ */
+export type ClaudeTitleQueryRun = (input: ClaudeTitleQueryInput) => AsyncIterable<SDKMessage>;
+
+/** Optional seams for {@link makeClaudeTextGeneration} (test injection only). */
+export interface ClaudeTextGenerationOptions {
+  readonly runTitleQuery?: ClaudeTitleQueryRun;
+  readonly titleTimeoutMillis?: number;
+}
+
+const liveTitleQuery: ClaudeTitleQueryRun = (input) =>
+  query({ prompt: input.prompt, options: input.options });
+
+/**
+ * Tight, plain-text title instruction for the Haiku one-shot. Unlike the CLI
+ * path this asks for the bare title (no JSON envelope) so the reply is the title
+ * itself, which we then sanitize.
+ */
+const buildFastThreadTitlePrompt = (
+  message: string,
+  attachments: ReadonlyArray<ChatAttachment>,
+): string => {
+  const lines = [
+    "Generate a concise 3-8 word title summarizing this coding conversation, based on the user's first message below.",
+    "Summarize the request; do not restate it verbatim.",
+    "Reply with ONLY the title: no quotes, no surrounding punctuation, no preamble, no explanation.",
+  ];
+  if (attachments.length > 0) {
+    lines.push("If images are attached, use them as primary context for visual/UI work.");
+  }
+  lines.push("", "User message:", message);
+  return lines.join("\n");
+};
+
+/**
  * Schema for the wrapper JSON returned by `claude -p --output-format json`.
  * We only care about `structured_output`.
  */
@@ -60,9 +124,12 @@ const decodeClaudeOutputEnvelope = Schema.decodeEffect(Schema.fromJsonString(Cla
 export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(function* (
   claudeSettings: ClaudeSettings,
   environment: NodeJS.ProcessEnv = process.env,
+  options?: ClaudeTextGenerationOptions,
 ) {
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const claudeEnvironment = yield* makeClaudeEnvironment(claudeSettings, environment);
+  const runTitleQuery = options?.runTitleQuery ?? liveTitleQuery;
+  const titleTimeoutMillis = options?.titleTimeoutMillis ?? CLAUDE_TITLE_TIMEOUT_MS;
 
   const readStreamAsString = <E>(
     operation: string,
@@ -334,24 +401,75 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
     };
   });
 
+  /**
+   * Thread titles run a fast one-shot Agent-SDK query on Haiku instead of the
+   * `claude -p` subprocess the other operations use. That subprocess carried a
+   * 3-minute timeout and, on a Claude-only host where `textGenerationModelSelection`
+   * fell back to Claude, hung the first turn for minutes. The SDK query reuses the
+   * same OAuth environment as the session driver (so it works with no API key),
+   * pins Haiku for speed, and is bounded by a short timeout.
+   */
   const generateThreadTitle: TextGenerationShape["generateThreadTitle"] = Effect.fn(
     "ClaudeTextGeneration.generateThreadTitle",
   )(function* (input) {
-    const { prompt, outputSchema } = buildThreadTitlePrompt({
-      message: input.message,
-      attachments: input.attachments,
-    });
+    const prompt = buildFastThreadTitlePrompt(input.message, input.attachments ?? []);
+    const queryOptions: ClaudeQueryOptions = {
+      model: CLAUDE_TITLE_MODEL_ID,
+      ...(claudeSettings.binaryPath
+        ? { pathToClaudeCodeExecutable: claudeSettings.binaryPath }
+        : {}),
+      ...(input.cwd ? { cwd: input.cwd } : {}),
+      env: claudeEnvironment,
+      // A title is a single text reply — never a tool loop. Cap the turns and
+      // skip permission prompts so nothing can stall the (short-bounded) query.
+      maxTurns: 1,
+      permissionMode: "bypassPermissions",
+      allowDangerouslySkipPermissions: true,
+      // Don't load user/project settings (CLAUDE.md, hooks) for a throwaway title.
+      settingSources: [],
+    };
 
-    const generated = yield* runClaudeJson({
-      operation: "generateThreadTitle",
-      cwd: input.cwd,
-      prompt,
-      outputSchemaJson: outputSchema,
-      modelSelection: input.modelSelection,
-    });
+    const rawTitle = yield* Effect.tryPromise({
+      try: async () => {
+        let result: string | undefined;
+        for await (const message of runTitleQuery({ prompt, options: queryOptions })) {
+          if (message.type === "result" && message.subtype === "success") {
+            result = message.result;
+          }
+        }
+        return result;
+      },
+      catch: (cause) =>
+        new TextGenerationError({
+          operation: "generateThreadTitle",
+          detail: "Claude thread-title query failed.",
+          cause,
+        }),
+    }).pipe(
+      Effect.timeoutOption(Duration.millis(titleTimeoutMillis)),
+      Effect.flatMap(
+        Option.match({
+          onNone: () =>
+            Effect.fail(
+              new TextGenerationError({
+                operation: "generateThreadTitle",
+                detail: "Claude thread-title query timed out.",
+              }),
+            ),
+          onSome: (value) => Effect.succeed(value),
+        }),
+      ),
+    );
+
+    if (rawTitle === undefined) {
+      return yield* new TextGenerationError({
+        operation: "generateThreadTitle",
+        detail: "Claude thread-title query returned no result.",
+      });
+    }
 
     return {
-      title: sanitizeThreadTitle(generated.title),
+      title: sanitizeThreadTitle(rawTitle),
     };
   });
 

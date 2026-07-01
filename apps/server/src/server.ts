@@ -51,7 +51,6 @@ import { RewindReactorLive } from "./orchestration/Layers/RewindReactor.ts";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
 import { ResumeSeedReactorLive } from "./resume/ResumeSeedReactor.ts";
 import { SessionTitleReactorLive } from "./resume/SessionTitleReactor.ts";
-import { SdkTitleReactorLive } from "./resume/SdkTitleReactor.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
@@ -159,7 +158,6 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(ThreadDeletionReactorLive),
   Layer.provideMerge(ResumeSeedReactorLive),
   Layer.provideMerge(SessionTitleReactorLive),
-  Layer.provideMerge(SdkTitleReactorLive),
   Layer.provideMerge(AgentAwarenessRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
   Layer.provideMerge(RuntimeReceiptBusLive),
 );
