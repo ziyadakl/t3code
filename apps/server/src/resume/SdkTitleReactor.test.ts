@@ -21,6 +21,7 @@ import {
   effectiveTitleSeed,
   firstUserTitleSeed,
   handleTurnDiffCompleted,
+  isPromptEcho,
   pickSdkTitle,
   resolveRenameTitle,
   type DispatchRename,
@@ -205,43 +206,154 @@ it("captureTitleSeed: an undefined seed is a no-op (nothing captured)", () => {
 });
 
 // ===========================================================================
+// PURE: isPromptEcho (a summary is the raw prompt, verbatim or truncated)
+// ===========================================================================
+
+it("isPromptEcho: a verbatim copy of a user message -> true", () => {
+  assert.equal(isPromptEcho("Thanks. Now what is 3+3?", ["Thanks. Now what is 3+3?"]), true);
+});
+
+it("isPromptEcho: a truncated prefix ending in '...' -> true", () => {
+  // The SDK truncates a long prompt into the summary with a trailing ellipsis.
+  assert.equal(
+    isPromptEcho("Investigate the failing build in...", [
+      "Investigate the failing build in the CI pipeline",
+    ]),
+    true,
+  );
+  // Unicode ellipsis too.
+  assert.equal(isPromptEcho("Investigate the failing…", ["Investigate the failing build"]), true);
+});
+
+it("isPromptEcho: whitespace/newline/case-insensitive prefix match -> true (handoff shape)", () => {
+  // Real observed shape: summary has '\n\n' where firstPrompt has spaces.
+  const summary = "=== RESUME FROM HANDOFF ===\n\nNEXT SESSION — your f...";
+  const firstPrompt = "=== RESUME FROM HANDOFF ===  NEXT SESSION — your first action is to read this file";
+  assert.equal(isPromptEcho(summary, [firstPrompt]), true);
+});
+
+it("isPromptEcho: a real distinct title is NOT an echo -> false", () => {
+  assert.equal(
+    isPromptEcho("Resume renderer refactor and deferred cleanups", [
+      "The handoff is written. Relay below for the next session.",
+    ]),
+    false,
+  );
+});
+
+it("isPromptEcho: an UNtruncated title that merely PREFIXES a message is NOT an echo [review finding]", () => {
+  // Real short AI title that is a leading substring of a longer prompt. Because
+  // it has no ellipsis (SDK did not truncate it), it must NOT be treated as an
+  // echo — otherwise a genuine title is rejected forever.
+  assert.equal(
+    isPromptEcho("Add dark mode", ["Add dark mode toggle to the settings page"]),
+    false,
+  );
+  assert.equal(isPromptEcho("Fix the login bug", ["Fix the login bug and refactor auth"]), false);
+});
+
+it("isPromptEcho: truncation markers other than exactly three dots still count [review finding]", () => {
+  // The SDK's truncation marker may not be exactly '...'; 2 or 4 dots must also
+  // register as truncation so the prompt fragment is caught as an echo.
+  assert.equal(isPromptEcho("Investigate the failing build..", ["Investigate the failing build in CI"]), true);
+  assert.equal(
+    isPromptEcho("Investigate the failing build....", ["Investigate the failing build in CI"]),
+    true,
+  );
+});
+
+it("isPromptEcho: empty candidate / empty sources -> false", () => {
+  assert.equal(isPromptEcho("", ["anything"]), false);
+  assert.equal(isPromptEcho("   ", ["anything"]), false);
+  assert.equal(isPromptEcho("A title", []), false);
+});
+
+// ===========================================================================
 // PURE: pickSdkTitle
 // ===========================================================================
 
 it("pickSdkTitle: undefined info -> null", () => {
-  assert.equal(pickSdkTitle(undefined, DEFAULT_TITLE), null);
+  assert.equal(pickSdkTitle(undefined, DEFAULT_TITLE, []), null);
 });
 
 it("pickSdkTitle: empty/whitespace summary -> null", () => {
-  assert.equal(pickSdkTitle({ summary: "" }, DEFAULT_TITLE), null);
-  assert.equal(pickSdkTitle({ summary: "   " }, DEFAULT_TITLE), null);
+  assert.equal(pickSdkTitle({ summary: "" }, DEFAULT_TITLE, []), null);
+  assert.equal(pickSdkTitle({ summary: "   " }, DEFAULT_TITLE, []), null);
 });
 
 it("pickSdkTitle: summary still equal to firstPrompt (not yet AI-generated) -> null", () => {
   assert.equal(
-    pickSdkTitle({ summary: "Hello there", firstPrompt: "Hello there" }, DEFAULT_TITLE),
+    pickSdkTitle({ summary: "Hello there", firstPrompt: "Hello there" }, DEFAULT_TITLE, []),
     null,
   );
   // Whitespace-insensitive equality.
   assert.equal(
-    pickSdkTitle({ summary: "  Hello there  ", firstPrompt: "Hello there" }, DEFAULT_TITLE),
+    pickSdkTitle({ summary: "  Hello there  ", firstPrompt: "Hello there" }, DEFAULT_TITLE, []),
     null,
   );
 });
 
+it("pickSdkTitle: summary echoing a LATER user message (not firstPrompt) -> null [live bug]", () => {
+  // The exact live failure: a fresh session's summary was the 2nd prompt verbatim
+  // while firstPrompt was the 1st. The old `summary === firstPrompt` check missed
+  // it and latched the prompt echo as the title.
+  assert.equal(
+    pickSdkTitle(
+      { summary: "Thanks. Now what is 3+3?", firstPrompt: "What is 2+2? Answer in one word." },
+      DEFAULT_TITLE,
+      ["What is 2+2? Answer in one word.", "Thanks. Now what is 3+3?"],
+    ),
+    null,
+  );
+});
+
+it("pickSdkTitle: summary is a TRUNCATED prefix of firstPrompt -> null [handoff bug]", () => {
+  // The RESUME-FROM-HANDOFF thread: summary is the first ~50 chars of the prompt
+  // with '\n\n' where the prompt has spaces, so it is not an exact match but IS a
+  // prompt echo.
+  assert.equal(
+    pickSdkTitle(
+      {
+        summary: "=== RESUME FROM HANDOFF ===\n\nNEXT SESSION — your f...",
+        firstPrompt:
+          "=== RESUME FROM HANDOFF ===  NEXT SESSION — your first action is to read this file",
+      },
+      DEFAULT_TITLE,
+      [],
+    ),
+    null,
+  );
+});
+
+it("pickSdkTitle: a real short title that prefixes a user message is KEPT (not an echo) [review finding]", () => {
+  // Regression guard for the review finding: the prefix relaxation must not
+  // reject a genuine short title just because it leads a longer user message.
+  assert.equal(
+    pickSdkTitle(
+      { summary: "Add dark mode", firstPrompt: "Add dark mode toggle to the settings page" },
+      DEFAULT_TITLE,
+      ["Add dark mode toggle to the settings page"],
+    ),
+    "Add dark mode",
+  );
+});
+
 it("pickSdkTitle: a summary that sanitizes to the placeholder -> null", () => {
-  assert.equal(pickSdkTitle({ summary: "New thread" }, "Some existing title"), null);
+  assert.equal(pickSdkTitle({ summary: "New thread" }, "Some existing title", []), null);
 });
 
 it("pickSdkTitle: a summary equal to the current title -> null", () => {
-  assert.equal(pickSdkTitle({ summary: "Fix the parser" }, "Fix the parser"), null);
+  assert.equal(pickSdkTitle({ summary: "Fix the parser" }, "Fix the parser", []), null);
 });
 
 it("pickSdkTitle: a good distinct summary -> the sanitized title", () => {
-  assert.equal(pickSdkTitle({ summary: "  Fix the parser bug  " }, DEFAULT_TITLE), "Fix the parser bug");
+  assert.equal(
+    pickSdkTitle({ summary: "  Fix the parser bug  " }, DEFAULT_TITLE, ["do the thing"]),
+    "Fix the parser bug",
+  );
   // Surrounding quotes are stripped by sanitizeThreadTitle.
   assert.equal(
-    pickSdkTitle({ summary: '"Refactor the auth module"' }, DEFAULT_TITLE),
+    pickSdkTitle({ summary: '"Refactor the auth module"' }, DEFAULT_TITLE, []),
     "Refactor the auth module",
   );
 });

@@ -157,22 +157,74 @@ export const effectiveTitleSeed = (
   deps: SdkTitleDeps,
 ): string | undefined => deps.titleSeeds.get(threadId) ?? firstUserTitleSeed(messages);
 
+/** Collapse whitespace runs + lowercase so an echo compares equal despite
+ * newline/space/case differences between the SDK summary and the stored text. */
+const normalizeForEcho = (value: string): string => value.replace(/\s+/g, " ").trim().toLowerCase();
+
+/** A trailing ellipsis ("..", "...", "…") — the marker the SDK appends when it
+ * truncates a prompt into the summary. Matches a run of 2+ dots so an off-count
+ * marker still registers as truncation. Non-global: safe to `.test` then
+ * `.replace` the same instance. */
+const TRAILING_ELLIPSIS = /(?:\.{2,}|…)\s*$/u;
+
+/**
+ * True when `candidate` is an echo of any user message — i.e. the SDK returned a
+ * raw prompt as `summary` instead of a generated title. Until Claude generates a
+ * real title, `getSessionInfo` returns a prompt (the first OR the latest) as
+ * `summary`. Two shapes, distinguished by whether the SDK truncated it:
+ *  - TRUNCATED (ends in an ellipsis, e.g. `"=== RESUME ===\n\nNEXT SESSION — your f..."`):
+ *    an echo when it's a PREFIX of a message.
+ *  - WHOLE (no ellipsis): an echo only when it equals a message VERBATIM.
+ * Requiring exact match for the untruncated case is deliberate — a genuine short
+ * title often prefixes the prompt it summarizes (title "Add dark mode" vs message
+ * "Add dark mode toggle to settings"); prefix-matching those would reject real
+ * titles forever. Whitespace/case-insensitive throughout.
+ */
+export const isPromptEcho = (
+  candidate: string,
+  userMessages: ReadonlyArray<string>,
+): boolean => {
+  const truncated = TRAILING_ELLIPSIS.test(candidate.trim());
+  const needle = normalizeForEcho(candidate.replace(TRAILING_ELLIPSIS, ""));
+  if (needle.length === 0) {
+    return false;
+  }
+  return userMessages.some((message) => {
+    const haystack = normalizeForEcho(message);
+    if (haystack.length === 0) {
+      return false;
+    }
+    return truncated ? haystack.startsWith(needle) : haystack === needle;
+  });
+};
+
 /**
  * Choose the title to apply from a session-info read, or null when it isn't a
  * usable, ready, distinct title:
  *  - no info / empty summary → null
- *  - summary still equals firstPrompt → the AI summary hasn't been generated yet
- *    (the SDK falls back to firstPrompt), so it's not ready → null
+ *  - summary is a verbatim/truncated-prefix echo of a user message (incl. the
+ *    SDK `firstPrompt`) → the AI title hasn't been generated yet (the SDK echoes
+ *    a prompt until then), so it's not ready → null
  *  - sanitizes to the placeholder, or equals the current title → null (no-op)
+ *
+ * `userMessages` are the thread's user-message texts, used together with
+ * `info.firstPrompt` to detect a prompt echo.
  */
 export const pickSdkTitle = (
   info: SdkSessionTitleInfo | undefined,
   currentTitle: string,
+  userMessages: ReadonlyArray<string>,
 ): string | null => {
   if (!info || info.summary.trim().length === 0) {
     return null;
   }
-  if (info.firstPrompt !== undefined && info.summary.trim() === info.firstPrompt.trim()) {
+  // Include the SDK's own firstPrompt alongside the thread's user messages: a
+  // RESUMED thread can have firstPrompt from the SDK even when thread.messages
+  // weren't replayed into the projection. For a fresh thread firstPrompt already
+  // equals userMessages[0], so the overlap is harmless (`some` short-circuits).
+  const echoSources =
+    info.firstPrompt !== undefined ? [info.firstPrompt, ...userMessages] : userMessages;
+  if (isPromptEcho(info.summary, echoSources)) {
     return null;
   }
   const title = sanitizeThreadTitle(info.summary);
@@ -219,7 +271,10 @@ export const resolveRenameTitle = (input: {
       const info = yield* deps
         .readSessionTitle(sessionId, dir ? { dir } : undefined)
         .pipe(Effect.catch(() => Effect.succeed(undefined)));
-      const title = pickSdkTitle(info, thread.title);
+      const userMessages = thread.messages
+        .filter((message) => message.role === "user")
+        .map((message) => message.text);
+      const title = pickSdkTitle(info, thread.title, userMessages);
       if (title) {
         return title;
       }
