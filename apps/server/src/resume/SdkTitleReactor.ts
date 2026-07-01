@@ -126,6 +126,26 @@ export const firstUserTitleSeed = (
 };
 
 /**
+ * Capture a thread's raw client `titleSeed` — but ONLY the first time the thread
+ * is seen. The web client sends a `titleSeed` on EVERY `thread.turn-start-requested`
+ * (not just the first), yet a later turn's text must never overwrite the seed the
+ * thread was originally titled with: a title poll forked from turn 1 can run for
+ * ~15s and gates on this seed, so clobbering it with turn-2 text would make the
+ * gate mismatch the current title and abandon auto-titling permanently. No-op when
+ * the seed is absent or one was already captured — mirroring the module docstring
+ * ("capture each thread's raw seed ... only when none was captured").
+ */
+export const captureTitleSeed = (
+  threadId: string,
+  seed: string | undefined,
+  titleSeeds: Map<string, string>,
+): void => {
+  if (seed !== undefined && !titleSeeds.has(threadId)) {
+    titleSeeds.set(threadId, seed);
+  }
+};
+
+/**
  * The seed to gate title replacement against: the raw client `titleSeed`
  * captured for the thread when present (matches the title the client actually
  * set), else the reconstructed truncated-first-message seed (legacy fallback for
@@ -235,6 +255,13 @@ export const handleTurnDiffCompleted = (threadId: ThreadId, deps: SdkTitleDeps) 
       .getBinding(threadId)
       .pipe(Effect.map(Option.getOrUndefined));
     if (!binding || !defersTitleToSdk(binding.provider)) {
+      // Not an SDK-titleable thread (no binding / non-Claude provider): its
+      // captured seed will never be consumed, so drop it now. Together with
+      // capture-when-absent this bounds `titleSeeds` to in-flight threads
+      // instead of accumulating one entry per thread for the process lifetime.
+      // (Transient Claude give-ups below — title not ready, user-rename
+      // mismatch — deliberately KEEP the seed so a later turn can retry.)
+      deps.titleSeeds.delete(threadId);
       return;
     }
     const sessionId = claudeSessionIdFromCursor(binding.resumeCursor);
@@ -325,11 +352,11 @@ const make = Effect.gen(function* () {
         // Capture the raw client title seed up front so the diff-completed gate
         // matches the title the client actually set (which differs from the
         // stored, transformed first message for ultrathink/terminal/image).
+        // Capture only the FIRST turn's seed: the client resends a titleSeed on
+        // every turn, and a later turn must not clobber the seed an in-flight
+        // poll is gating on (see captureTitleSeed).
         if (event.type === "thread.turn-start-requested") {
-          const seed = event.payload.titleSeed;
-          if (seed !== undefined) {
-            titleSeeds.set(event.payload.threadId, seed);
-          }
+          captureTitleSeed(event.payload.threadId, event.payload.titleSeed, titleSeeds);
           return Effect.void;
         }
         if (event.type !== "thread.turn-diff-completed") {

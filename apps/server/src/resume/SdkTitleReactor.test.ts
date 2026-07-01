@@ -17,6 +17,7 @@ import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { ProviderSessionDirectoryLive } from "../provider/Layers/ProviderSessionDirectory.ts";
 import { ProviderSessionDirectory } from "../provider/Services/ProviderSessionDirectory.ts";
 import {
+  captureTitleSeed,
   effectiveTitleSeed,
   firstUserTitleSeed,
   handleTurnDiffCompleted,
@@ -170,6 +171,37 @@ it("effectiveTitleSeed: falls back to the reconstructed first-message seed when 
   const deps = depsWithSeeds(new Map());
   const seed = effectiveTitleSeed(THREAD_ID, [{ role: "user", text: "do the thing" }], deps);
   assert.equal(seed, "do the thing");
+});
+
+// ===========================================================================
+// PURE: captureTitleSeed (capture ONCE — a later turn must not clobber the seed)
+// ===========================================================================
+
+it("captureTitleSeed: BUG 1 regression — a second start event does NOT overwrite the first seed", () => {
+  const titleSeeds = new Map<string, string>();
+  // Turn 1: the client's raw seed is captured.
+  captureTitleSeed(THREAD_ID, "First turn prompt", titleSeeds);
+  // Turn 2 (user sends again while the turn-1 title poll is still in flight):
+  // the client sends a NEW titleSeed. It must NOT clobber the first-turn seed,
+  // or the in-flight poll would gate against turn-2 text and abandon titling.
+  captureTitleSeed(THREAD_ID, "Second turn prompt", titleSeeds);
+  assert.equal(titleSeeds.get(THREAD_ID), "First turn prompt");
+  // ...and the gate the poll evaluates still resolves to the FIRST seed even
+  // though the stored first message now reflects a later turn's text.
+  const deps = depsWithSeeds(titleSeeds);
+  assert.equal(
+    effectiveTitleSeed(THREAD_ID, [{ role: "user", text: "Second turn prompt" }], deps),
+    "First turn prompt",
+  );
+});
+
+it("captureTitleSeed: an undefined seed is a no-op (nothing captured)", () => {
+  const titleSeeds = new Map<string, string>();
+  captureTitleSeed(THREAD_ID, undefined, titleSeeds);
+  assert.equal(titleSeeds.has(THREAD_ID), false);
+  // A later real seed on the same thread is still captured.
+  captureTitleSeed(THREAD_ID, "the real seed", titleSeeds);
+  assert.equal(titleSeeds.get(THREAD_ID), "the real seed");
 });
 
 // ===========================================================================
@@ -625,7 +657,7 @@ it.layer(baseLayers)("SdkTitleReactor.handleTurnDiffCompleted", (it) => {
       }),
   );
 
-  it.effect("does NOT dispatch for a non-Claude (codex) binding", () =>
+  it.effect("does NOT dispatch for a non-Claude (codex) binding, and drops its captured seed (BUG 2)", () =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("thread-codex");
       yield* seedBinding(threadId, "codex", { resume: CLAUDE_SESSION_ID });
@@ -635,7 +667,9 @@ it.layer(baseLayers)("SdkTitleReactor.handleTurnDiffCompleted", (it) => {
         readSessionTitle: readShouldNotRun,
         dispatchRename,
         handled: new Set(),
-        titleSeeds: new Map(),
+        // A seed was captured on turn-start (the reactor captures for EVERY
+        // provider). Since this thread is not SDK-titleable it must be dropped.
+        titleSeeds: new Map([[threadId, "a captured codex seed"]]),
         maxAttempts: 1,
         delayMillis: 0,
       };
@@ -652,10 +686,12 @@ it.layer(baseLayers)("SdkTitleReactor.handleTurnDiffCompleted", (it) => {
       yield* settle;
 
       assert.equal(calls.length, 0);
+      // BUG 2: the non-Claude thread's seed is removed so titleSeeds stays bounded.
+      assert.equal(deps.titleSeeds.has(threadId), false);
     }),
   );
 
-  it.effect("does NOT dispatch when there is no provider binding", () =>
+  it.effect("does NOT dispatch when there is no provider binding, and drops its captured seed (BUG 2)", () =>
     Effect.gen(function* () {
       // Never seeded -> getBinding returns Option.none.
       const threadId = ThreadId.make("thread-no-binding");
@@ -665,7 +701,7 @@ it.layer(baseLayers)("SdkTitleReactor.handleTurnDiffCompleted", (it) => {
         readSessionTitle: readShouldNotRun,
         dispatchRename,
         handled: new Set(),
-        titleSeeds: new Map(),
+        titleSeeds: new Map([[threadId, "a captured seed with no binding"]]),
         maxAttempts: 1,
         delayMillis: 0,
       };
@@ -682,6 +718,8 @@ it.layer(baseLayers)("SdkTitleReactor.handleTurnDiffCompleted", (it) => {
       yield* settle;
 
       assert.equal(calls.length, 0);
+      // BUG 2: no-binding thread's seed is removed too.
+      assert.equal(deps.titleSeeds.has(threadId), false);
     }),
   );
 
@@ -715,7 +753,7 @@ it.layer(baseLayers)("SdkTitleReactor.handleTurnDiffCompleted", (it) => {
     }),
   );
 
-  it.effect("does NOT dispatch when the title was already user-renamed", () =>
+  it.effect("does NOT dispatch when the title was already user-renamed, but KEEPS the seed (transient give-up)", () =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("thread-renamed");
       yield* seedBinding(threadId, "claudeAgent", { resume: CLAUDE_SESSION_ID });
@@ -725,7 +763,9 @@ it.layer(baseLayers)("SdkTitleReactor.handleTurnDiffCompleted", (it) => {
         readSessionTitle: readShouldNotRun,
         dispatchRename,
         handled: new Set(),
-        titleSeeds: new Map(),
+        // A seed WAS captured; the user then renamed to something that matches
+        // neither the placeholder nor the seed -> not replaceable right now.
+        titleSeeds: new Map([[threadId, "the original captured seed"]]),
         maxAttempts: 1,
         delayMillis: 0,
       };
@@ -734,7 +774,7 @@ it.layer(baseLayers)("SdkTitleReactor.handleTurnDiffCompleted", (it) => {
         Effect.provideService(
           ProjectionSnapshotQuery,
           makeSnapshotService({
-            // Title is neither the placeholder nor the message seed -> not replaceable.
+            // Title is neither the placeholder nor the captured seed -> not replaceable.
             thread: () =>
               Option.some(makeThread("User picked this", [{ role: "user", text: "do x" }])),
             project: projectShellSome,
@@ -744,6 +784,9 @@ it.layer(baseLayers)("SdkTitleReactor.handleTurnDiffCompleted", (it) => {
       yield* settle;
 
       assert.equal(calls.length, 0);
+      // This is a Claude thread on a TRANSIENT give-up (mismatch), NOT a
+      // non-titleable thread: keep the seed so a later turn can still retry.
+      assert.equal(deps.titleSeeds.get(threadId), "the original captured seed");
     }),
   );
 });
