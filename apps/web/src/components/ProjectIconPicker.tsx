@@ -6,6 +6,7 @@ import { Input } from "./ui/input";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { useSettings, useUpdateSettings, getClientSettings } from "../hooks/useSettings";
 import { useProjectColorOverride } from "../hooks/useProjectColorOverride";
+import { resolveValidIconName } from "../lib/projectIcon";
 import { derivePhysicalProjectKeyFromPath } from "../logicalProject";
 
 /** Cap how many icons we mount at once — each DynamicIcon lazy-imports its own
@@ -43,8 +44,7 @@ export function ProjectIconPicker({
   const current = useSettings((s) => s.projectIconOverrides?.[key]);
   // Guard the stored name against the live lucide list: a stale/removed name
   // falls back to the folder default rather than rendering a broken icon.
-  const currentIcon =
-    current && (iconNames as readonly string[]).includes(current) ? (current as IconName) : null;
+  const currentIcon = resolveValidIconName(current);
   const currentColor = useProjectColorOverride(environmentId, cwd);
   const { updateSettings } = useUpdateSettings();
   const [open, setOpen] = useState(false);

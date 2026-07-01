@@ -1,10 +1,11 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 import { FolderIcon } from "lucide-react";
-import { DynamicIcon, iconNames, type IconName } from "lucide-react/dynamic";
+import { DynamicIcon } from "lucide-react/dynamic";
 import { useState } from "react";
 import { resolveEnvironmentHttpUrl } from "../environments/runtime";
 import { colorOverrideStyle, useProjectColorOverride } from "../hooks/useProjectColorOverride";
 import { useSettings } from "../hooks/useSettings";
+import { resolveValidIconName } from "../lib/projectIcon";
 import { derivePhysicalProjectKeyFromPath } from "../logicalProject";
 
 const loadedProjectFaviconSrcs = new Set<string>();
@@ -33,10 +34,7 @@ export function ProjectFavicon(input: {
   // name against the live lucide icon list so a stale/removed name (version
   // drift) falls back to the favicon/folder default instead of a broken icon.
   const iconOverride = useSettings((s) => s.projectIconOverrides?.[physicalKey]);
-  const validIconName =
-    iconOverride && (iconNames as readonly string[]).includes(iconOverride)
-      ? (iconOverride as IconName)
-      : null;
+  const validIconName = resolveValidIconName(iconOverride);
   // Optional per-project tint. lucide icons render with currentColor, so a
   // `style={{ color }}` flows through. The favicon <img> is left untinted.
   const colorOverride = useProjectColorOverride(input.environmentId, input.cwd);
