@@ -249,6 +249,22 @@ export function deriveMessagesTimelineRows(input: {
   return nextRows;
 }
 
+/**
+ * Index of the LAST user-message row in the derived timeline rows, or -1 when
+ * there is none. A user row is `kind: "message"` with the user role — the same
+ * notion `deriveMessagesTimelineRows` uses for `isLastUserRow`. Shared seam for
+ * a "jump to my last message" scroll target.
+ */
+export function lastUserRowIndex(rows: MessagesTimelineRow[]): number {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index];
+    if (row && row.kind === "message" && row.message.role === "user") {
+      return index;
+    }
+  }
+  return -1;
+}
+
 export function computeStableMessagesTimelineRows(
   rows: MessagesTimelineRow[],
   previous: StableMessagesTimelineRowsState,

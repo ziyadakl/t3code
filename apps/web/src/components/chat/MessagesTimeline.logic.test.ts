@@ -7,6 +7,8 @@ import {
   resolveAssistantMessageCopyState,
   isEffectivelyAtEnd,
   isInFlightPrompt,
+  lastUserRowIndex,
+  type MessagesTimelineRow,
 } from "./MessagesTimeline.logic";
 
 describe("isInFlightPrompt", () => {
@@ -483,6 +485,111 @@ describe("deriveMessagesTimelineRows", () => {
     expect(userRows[1]?.isLastUserRow).toBe(true);
     // Assistant rows are never the in-flight prompt regardless of position.
     expect(assistantRow?.isLastUserRow).toBe(false);
+  });
+});
+
+describe("lastUserRowIndex", () => {
+  const userRow = (id: string): MessagesTimelineRow => ({
+    kind: "message",
+    id,
+    createdAt: "2026-01-01T00:00:00Z",
+    message: {
+      id: id as never,
+      role: "user",
+      text: "hi",
+      turnId: null,
+      createdAt: "2026-01-01T00:00:00Z",
+      streaming: false,
+    },
+    durationStart: "2026-01-01T00:00:00Z",
+    showCompletionDivider: false,
+    completionSummary: null,
+    showAssistantCopyButton: false,
+    assistantCopyStreaming: false,
+    isLastUserRow: false,
+  });
+  const assistantRow = (id: string): MessagesTimelineRow => ({
+    kind: "message",
+    id,
+    createdAt: "2026-01-01T00:00:10Z",
+    message: {
+      id: id as never,
+      role: "assistant",
+      text: "ok",
+      turnId: "turn-1" as never,
+      createdAt: "2026-01-01T00:00:10Z",
+      completedAt: "2026-01-01T00:00:11Z",
+      streaming: false,
+    },
+    durationStart: "2026-01-01T00:00:10Z",
+    showCompletionDivider: false,
+    completionSummary: null,
+    showAssistantCopyButton: false,
+    assistantCopyStreaming: false,
+    isLastUserRow: false,
+  });
+  const workingRow: MessagesTimelineRow = {
+    kind: "working",
+    id: "working-indicator-row",
+    createdAt: null,
+  };
+
+  it("returns the index of the last user row among mixed following rows", () => {
+    const rows = [userRow("u1"), assistantRow("a1"), workingRow];
+    expect(lastUserRowIndex(rows)).toBe(0);
+  });
+
+  it("returns -1 when there is no user row", () => {
+    const rows = [assistantRow("a1"), workingRow];
+    expect(lastUserRowIndex(rows)).toBe(-1);
+  });
+
+  it("returns the LAST user row index when there are multiple", () => {
+    const rows = [userRow("u1"), assistantRow("a1"), userRow("u2"), assistantRow("a2")];
+    expect(lastUserRowIndex(rows)).toBe(2);
+  });
+
+  it("derives the last user row index from deriveMessagesTimelineRows output", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "user-1-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:00Z",
+          message: {
+            id: "user-1" as never,
+            role: "user",
+            text: "First",
+            turnId: null,
+            createdAt: "2026-01-01T00:00:00Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "assistant-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:10Z",
+          message: {
+            id: "assistant-1" as never,
+            role: "assistant",
+            text: "ok",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:10Z",
+            completedAt: "2026-01-01T00:00:11Z",
+            streaming: false,
+          },
+        },
+      ],
+      completionDividerBeforeEntryId: null,
+      isWorking: true,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(lastUserRowIndex(rows)).toBe(0);
+    const target = rows[lastUserRowIndex(rows)];
+    expect(target?.kind === "message" && target.message.role === "user").toBe(true);
   });
 });
 
