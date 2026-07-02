@@ -168,7 +168,7 @@ import { MessagesTimeline } from "./chat/MessagesTimeline";
 import {
   deriveMessagesTimelineRows,
   isEffectivelyAtEnd,
-  nextJumpStep,
+  jumpStepTarget,
   shouldShowJumpButton,
   userRowIndices,
 } from "./chat/MessagesTimeline.logic";
@@ -2052,10 +2052,7 @@ export default function ChatView(props: ChatViewProps) {
   const messagesWrapperRef = useRef<HTMLDivElement | null>(null);
 
   const handleJumpStep = useCallback(() => {
-    const targets = jumpToUserMessages.targets;
-    if (targets.length === 0) return;
-    const { pos, nextCursor } = nextJumpStep(targets.length, jumpCursor);
-    const rowIndex = targets[pos];
+    const { rowIndex, nextCursor } = jumpStepTarget(jumpToUserMessages.targets, jumpCursor);
     if (rowIndex != null) {
       legendListRef.current?.scrollToIndex({ index: rowIndex, viewPosition: 0, animated: true });
     }
@@ -2094,10 +2091,12 @@ export default function ChatView(props: ChatViewProps) {
       if (el) observer.observe(el);
       else setLatestUserMessageVisible(false);
     };
-    const mo = new MutationObserver(() => attach());
+    const attachDebouncer = new Debouncer(attach, { wait: 100 });
+    const mo = new MutationObserver(() => attachDebouncer.maybeExecute());
     mo.observe(root, { childList: true, subtree: true });
     attach();
     return () => {
+      attachDebouncer.cancel();
       mo.disconnect();
       observer.disconnect();
     };

@@ -306,6 +306,22 @@ export function nextJumpStep(
 }
 
 /**
+ * Resolve one step-back click into the concrete row to scroll to plus the next
+ * cursor. Wraps nextJumpStep with the targets-array lookup and the out-of-range
+ * guard so ChatView's handler stays a thin adapter. rowIndex is null when there
+ * is nothing to scroll to (no targets, or the resolved position is out of range).
+ */
+export function jumpStepTarget(
+  targets: number[],
+  cursor: number | null,
+): { rowIndex: number | null; nextCursor: number | null } {
+  if (targets.length === 0) return { rowIndex: null, nextCursor: cursor };
+  const { pos, nextCursor } = nextJumpStep(targets.length, cursor);
+  const rowIndex = targets[pos] ?? null;
+  return { rowIndex, nextCursor };
+}
+
+/**
  * Whether the step-back navigator button should render. Hidden when there are no
  * user messages, or when idle AND the latest user message is already on screen.
  * Stays visible mid-cycle (cursor !== null) so repeated clicks can keep stepping up.

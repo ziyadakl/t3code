@@ -11,6 +11,7 @@ import {
   lastUserRowIndex,
   userRowIndices,
   nextJumpStep,
+  jumpStepTarget,
   shouldShowJumpButton,
   type MessagesTimelineRow,
 } from "./MessagesTimeline.logic";
@@ -750,6 +751,40 @@ describe("nextJumpStep", () => {
 
   it("clamps at the first user message (position 0)", () => {
     expect(nextJumpStep(3, 0)).toEqual({ pos: 0, nextCursor: 0 });
+  });
+});
+
+describe("jumpStepTarget", () => {
+  it("returns a null row and echoes the cursor when there are no targets (cursor null)", () => {
+    expect(jumpStepTarget([], null)).toEqual({ rowIndex: null, nextCursor: null });
+  });
+
+  it("returns a null row and echoes the cursor when there are no targets (numeric cursor)", () => {
+    expect(jumpStepTarget([], 3)).toEqual({ rowIndex: null, nextCursor: 3 });
+  });
+
+  it("targets the single user row on an idle click and settles the cursor at 0", () => {
+    expect(jumpStepTarget([4], null)).toEqual({ rowIndex: 4, nextCursor: 0 });
+  });
+
+  it("clamps a single-target repeat click at the first (only) user row", () => {
+    expect(jumpStepTarget([4], 0)).toEqual({ rowIndex: 4, nextCursor: 0 });
+  });
+
+  it("targets the most recent user row on an idle multi-target click", () => {
+    expect(jumpStepTarget([2, 5, 9], null)).toEqual({ rowIndex: 9, nextCursor: 1 });
+  });
+
+  it("steps back to the middle user row mid-cycle", () => {
+    expect(jumpStepTarget([2, 5, 9], 1)).toEqual({ rowIndex: 5, nextCursor: 0 });
+  });
+
+  it("clamps at the first user row on a multi-target repeat click", () => {
+    expect(jumpStepTarget([2, 5, 9], 0)).toEqual({ rowIndex: 2, nextCursor: 0 });
+  });
+
+  it("guards a stale out-of-range cursor by returning a null row", () => {
+    expect(jumpStepTarget([2, 5], 5)).toEqual({ rowIndex: null, nextCursor: 4 });
   });
 });
 
