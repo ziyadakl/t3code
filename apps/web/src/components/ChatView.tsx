@@ -39,7 +39,7 @@ import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/proje
 import { truncate } from "@t3tools/shared/String";
 import { nextTerminalId, resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
 import { Debouncer } from "@tanstack/react-pacer";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type RefObject, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
 import { useVcsStatus } from "~/lib/vcsStatusState";
@@ -116,6 +116,7 @@ import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings"
 import PlanSidebar from "./PlanSidebar";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import {
+  ArrowUpIcon,
   ChevronDownIcon,
   FileClockIcon,
   TriangleAlertIcon,
@@ -164,7 +165,11 @@ import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
-import { isEffectivelyAtEnd } from "./chat/MessagesTimeline.logic";
+import {
+  deriveMessagesTimelineRows,
+  isEffectivelyAtEnd,
+  lastUserRowIndex,
+} from "./chat/MessagesTimeline.logic";
 import { ChatHeader } from "./chat/ChatHeader";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { NoActiveThreadState } from "./NoActiveThreadState";
@@ -784,6 +789,37 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
     </div>
   );
 });
+
+/**
+ * "Jump to my last message" pill — scrolls the transcript straight to the
+ * user's last sent prompt via the LegendList ref. Sibling of the
+ * scroll-to-bottom pill and matches its styling. Renders nothing when
+ * {@link index} is negative (no user row to jump to).
+ */
+export function JumpToLastMessageButton({
+  listRef,
+  index,
+}: {
+  listRef: RefObject<LegendListRef | null>;
+  index: number;
+}) {
+  if (index < 0) {
+    return null;
+  }
+  return (
+    <div className="pointer-events-none absolute bottom-1 left-1/2 z-30 flex -translate-x-1/2 justify-center py-1.5">
+      <button
+        type="button"
+        aria-label="Jump to my last message"
+        onClick={() => listRef.current?.scrollToIndex({ index, viewPosition: 0, animated: true })}
+        className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-border/60 bg-card px-3 py-1 text-muted-foreground text-xs shadow-sm transition-colors hover:border-border hover:cursor-pointer hover:text-foreground"
+      >
+        <ArrowUpIcon className="size-3.5" />
+        Jump to my last message
+      </button>
+    </div>
+  );
+}
 
 export default function ChatView(props: ChatViewProps) {
   const {
@@ -1962,6 +1998,36 @@ export default function ChatView(props: ChatViewProps) {
     if (!completionSummary) return null;
     return deriveCompletionDividerBeforeEntryId(timelineEntries, activeLatestTurn);
   }, [activeLatestTurn, completionSummary, latestTurnSettled, timelineEntries]);
+  // Index of the user's last sent message in the rendered timeline rows, plus
+  // whether jumping to it is meaningful (i.e. there is content after it — when
+  // the prompt is the very last row it is already pinned at the bottom). Derive
+  // rows the same way MessagesTimeline does so the index matches the rendered
+  // list. Seam for the "jump to my last message" pill.
+  const jumpToLastMessage = useMemo(() => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries,
+      completionDividerBeforeEntryId,
+      completionSummary,
+      isWorking,
+      activeTurnInProgress: isWorking || !latestTurnSettled,
+      activeTurnId: activeLatestTurn?.turnId ?? null,
+      activeTurnStartedAt: activeWorkStartedAt,
+      turnDiffSummaryByAssistantMessageId,
+      revertTurnCountByUserMessageId,
+    });
+    const index = lastUserRowIndex(rows);
+    return { index, canJump: index >= 0 && index < rows.length - 1 };
+  }, [
+    timelineEntries,
+    completionDividerBeforeEntryId,
+    completionSummary,
+    isWorking,
+    latestTurnSettled,
+    activeLatestTurn?.turnId,
+    activeWorkStartedAt,
+    turnDiffSummaryByAssistantMessageId,
+    revertTurnCountByUserMessageId,
+  ]);
   const gitCwd = activeProject
     ? projectScriptCwd({
         project: { cwd: activeProject.cwd },
@@ -4374,6 +4440,13 @@ export default function ChatView(props: ChatViewProps) {
                   Scroll to bottom
                 </button>
               </div>
+            )}
+
+            {/* jump to my last message — shown when already at the bottom (so the
+                scroll-to-bottom pill is hidden) and the last user prompt sits
+                above with a response after it, worth scrolling back up to. */}
+            {!showScrollToBottom && jumpToLastMessage.canJump && (
+              <JumpToLastMessageButton listRef={legendListRef} index={jumpToLastMessage.index} />
             )}
           </div>
 

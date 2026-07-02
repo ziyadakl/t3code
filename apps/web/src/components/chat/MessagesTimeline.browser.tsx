@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { render } from "vitest-browser-react";
 
 const scrollToEndSpy = vi.fn();
+const scrollToIndexSpy = vi.fn();
 const getStateSpy = vi.fn(() => ({ isAtEnd: true }));
 
 vi.mock("@legendapp/list/react", async () => {
@@ -26,6 +27,7 @@ vi.mock("@legendapp/list/react", async () => {
       () =>
         ({
           scrollToEnd: scrollToEndSpy,
+          scrollToIndex: scrollToIndexSpy,
           getState: getStateSpy,
         }) as unknown as LegendListRef,
     );
@@ -45,6 +47,8 @@ vi.mock("@legendapp/list/react", async () => {
 });
 
 import { MessagesTimeline } from "./MessagesTimeline";
+import { deriveMessagesTimelineRows, lastUserRowIndex } from "./MessagesTimeline.logic";
+import { JumpToLastMessageButton } from "../ChatView";
 
 const MESSAGE_CREATED_AT = "2026-04-13T12:00:00.000Z";
 
@@ -97,9 +101,41 @@ function buildUserTimelineEntry(text: string) {
   };
 }
 
+function buildMessageTimelineEntry(
+  id: string,
+  messageId: string,
+  role: "user" | "assistant",
+  text: string,
+) {
+  return {
+    id,
+    kind: "message" as const,
+    createdAt: MESSAGE_CREATED_AT,
+    message: {
+      id: messageId as never,
+      role,
+      text,
+      createdAt: MESSAGE_CREATED_AT,
+      streaming: false,
+    },
+  };
+}
+
+const JUMP_DERIVE_INPUTS = {
+  completionDividerBeforeEntryId: null,
+  completionSummary: null,
+  isWorking: false,
+  activeTurnInProgress: false,
+  activeTurnId: null,
+  activeTurnStartedAt: null,
+  turnDiffSummaryByAssistantMessageId: new Map(),
+  revertTurnCountByUserMessageId: new Map(),
+} as const;
+
 describe("MessagesTimeline", () => {
   afterEach(() => {
     scrollToEndSpy.mockReset();
+    scrollToIndexSpy.mockReset();
     getStateSpy.mockClear();
     vi.restoreAllMocks();
     document.body.innerHTML = "";
@@ -260,6 +296,37 @@ describe("MessagesTimeline", () => {
 
       const messageBody = document.querySelector("[data-user-message-body='true']");
       expect(messageBody?.getAttribute("data-user-message-collapsed")).toBe("true");
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("jumps to the user's last message row via scrollToIndex with viewPosition 0", async () => {
+    const listRef = createRef<LegendListRef | null>();
+    const timelineEntries = [
+      buildMessageTimelineEntry("entry-a1", "message-a1", "assistant", "First reply"),
+      buildMessageTimelineEntry("entry-u1", "message-u1", "user", "My last prompt"),
+      buildMessageTimelineEntry("entry-a2", "message-a2", "assistant", "Second reply"),
+    ];
+
+    const rows = deriveMessagesTimelineRows({ ...JUMP_DERIVE_INPUTS, timelineEntries });
+    const index = lastUserRowIndex(rows);
+    expect(index).toBe(1);
+
+    const screen = await render(
+      <>
+        <MessagesTimeline {...buildProps()} listRef={listRef} timelineEntries={timelineEntries} />
+        <JumpToLastMessageButton listRef={listRef} index={index} />
+      </>,
+    );
+
+    try {
+      await page.getByRole("button", { name: "Jump to my last message" }).click();
+      expect(scrollToIndexSpy).toHaveBeenCalledWith({
+        index,
+        viewPosition: 0,
+        animated: true,
+      });
     } finally {
       await screen.unmount();
     }
