@@ -229,7 +229,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-user-message-footer="true"');
   });
 
-  it("renders context compaction entries in the normal work log", async () => {
+  it("collapses a single non-error work entry behind a terse actions summary", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -250,8 +250,82 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Context compacted");
-    expect(markup).toContain("Work log");
+    // Terse "1 action" summary, no worklog card chrome, collapsed by default.
+    expect(markup).toContain("1 action");
+    expect(markup).not.toContain("Work log");
+    expect(markup).not.toContain("Context compacted");
+  });
+
+  it("renders a terse '{N} actions' summary and drops the worklog card chrome", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const workEntry = (id: string, label: string) => ({
+      id: `entry-${id}`,
+      kind: "work" as const,
+      createdAt: "2026-03-17T19:12:28.000Z",
+      entry: {
+        id,
+        createdAt: "2026-03-17T19:12:28.000Z",
+        label,
+        tone: "tool" as const,
+      },
+    });
+
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          workEntry("w1", "Ran build"),
+          workEntry("w2", "Read file"),
+          workEntry("w3", "Edited file"),
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("3 actions");
+    // Old bordered card chrome + header are gone.
+    expect(markup).not.toContain("rounded-xl border border-border/45 bg-card/25");
+    expect(markup).not.toContain("Work log");
+    expect(markup).not.toContain("Tool calls");
+    // Collapsed by default: individual entry labels are hidden.
+    expect(markup).not.toContain("Ran build");
+  });
+
+  it("keeps error-tone work entries visible even while collapsed", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            id: "entry-1",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-1",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "Command failed loudly",
+              tone: "error",
+            },
+          },
+          {
+            id: "entry-2",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:29.000Z",
+            entry: {
+              id: "work-2",
+              createdAt: "2026-03-17T19:12:29.000Z",
+              label: "Quietly read a file",
+              tone: "tool",
+            },
+          },
+        ]}
+      />,
+    );
+
+    // Error entry is always visible; the non-error one stays behind the summary.
+    expect(markup).toContain("Command failed loudly");
+    expect(markup).toContain("1 action");
+    expect(markup).not.toContain("Quietly read a file");
   });
 
   it("formats changed file paths from the workspace root", async () => {
@@ -268,7 +342,9 @@ describe("MessagesTimeline", () => {
               id: "work-1",
               createdAt: "2026-03-17T19:12:28.000Z",
               label: "Updated files",
-              tone: "tool",
+              // Error tone keeps the entry always-visible so its changed-file
+              // path rendering is observable in the collapsed (SSR) markup.
+              tone: "error",
               changedFiles: ["C:/Users/mike/dev-stuff/t3code/apps/web/src/session-logic.ts"],
             },
           },

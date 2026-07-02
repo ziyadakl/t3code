@@ -4,12 +4,14 @@ import {
   computeMessageDurationStart,
   deriveMessagesTimelineRows,
   normalizeCompactToolLabel,
+  partitionWorkEntriesByError,
   resolveAssistantMessageCopyState,
   isEffectivelyAtEnd,
   isInFlightPrompt,
   lastUserRowIndex,
   type MessagesTimelineRow,
 } from "./MessagesTimeline.logic";
+import { type WorkLogEntry } from "../../session-logic";
 
 describe("isInFlightPrompt", () => {
   it("is true only for the last user row while working", () => {
@@ -485,6 +487,75 @@ describe("deriveMessagesTimelineRows", () => {
     expect(userRows[1]?.isLastUserRow).toBe(true);
     // Assistant rows are never the in-flight prompt regardless of position.
     expect(assistantRow?.isLastUserRow).toBe(false);
+  });
+});
+
+describe("deriveMessagesTimelineRows — work grouping", () => {
+  it("collapses a run of consecutive work entries into exactly ONE work row of N entries", () => {
+    const workEntry = (id: string, tone: WorkLogEntry["tone"]) => ({
+      id: `entry-${id}`,
+      kind: "work" as const,
+      createdAt: "2026-01-01T00:00:00Z",
+      entry: {
+        id,
+        createdAt: "2026-01-01T00:00:00Z",
+        label: `work ${id}`,
+        tone,
+      },
+    });
+
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        workEntry("w1", "tool"),
+        workEntry("w2", "thinking"),
+        workEntry("w3", "info"),
+        workEntry("w4", "error"),
+      ],
+      completionDividerBeforeEntryId: null,
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    const workRows = rows.filter(
+      (row): row is Extract<(typeof rows)[number], { kind: "work" }> => row.kind === "work",
+    );
+    expect(workRows).toHaveLength(1);
+    expect(workRows[0]?.groupedEntries).toHaveLength(4);
+    // One work-run = one row, at the run's own position/id.
+    expect(workRows[0]?.id).toBe("entry-w1");
+  });
+});
+
+describe("partitionWorkEntriesByError", () => {
+  const entry = (id: string, tone: WorkLogEntry["tone"]): WorkLogEntry => ({
+    id,
+    createdAt: "2026-01-01T00:00:00Z",
+    label: `work ${id}`,
+    tone,
+  });
+
+  it("splits error-tone entries from the rest, preserving order", () => {
+    const e1 = entry("e1", "tool");
+    const e2 = entry("e2", "error");
+    const e3 = entry("e3", "thinking");
+    const e4 = entry("e4", "error");
+
+    const { errors, rest } = partitionWorkEntriesByError([e1, e2, e3, e4]);
+
+    expect(errors).toEqual([e2, e4]);
+    expect(rest).toEqual([e1, e3]);
+  });
+
+  it("returns empty error list when there are no error-tone entries", () => {
+    const e1 = entry("e1", "tool");
+    const e2 = entry("e2", "info");
+
+    const { errors, rest } = partitionWorkEntriesByError([e1, e2]);
+
+    expect(errors).toEqual([]);
+    expect(rest).toEqual([e1, e2]);
   });
 });
 

@@ -3,7 +3,22 @@ import { type TimelineEntry, type WorkLogEntry } from "../../session-logic";
 import { type ChatMessage, type ProposedPlan, type TurnDiffSummary } from "../../types";
 import { type MessageId, type TurnId } from "@t3tools/contracts";
 
-export const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
+/**
+ * Split work entries into error-tone entries and the rest, preserving order
+ * within each bucket. Error entries render always-visible (never hidden behind
+ * the collapsed "N actions" summary); the summary covers only `rest`.
+ */
+export function partitionWorkEntriesByError(entries: ReadonlyArray<WorkLogEntry>): {
+  errors: WorkLogEntry[];
+  rest: WorkLogEntry[];
+} {
+  const errors: WorkLogEntry[] = [];
+  const rest: WorkLogEntry[] = [];
+  for (const entry of entries) {
+    (entry.tone === "error" ? errors : rest).push(entry);
+  }
+  return { errors, rest };
+}
 
 export interface TimelineDurationMessage {
   id: string;

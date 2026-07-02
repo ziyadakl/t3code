@@ -29,6 +29,7 @@ import ChatMarkdown from "../ChatMarkdown";
 import {
   BotIcon,
   CheckIcon,
+  ChevronRightIcon,
   CircleAlertIcon,
   EyeIcon,
   GlobeIcon,
@@ -48,7 +49,7 @@ import { DiffStatLabel, hasNonZeroStat } from "./DiffStatLabel";
 import { MessageCopyButton } from "./MessageCopyButton";
 import {
   computeStableMessagesTimelineRows,
-  MAX_VISIBLE_WORK_LOG_ENTRIES,
+  partitionWorkEntriesByError,
   deriveMessagesTimelineRows,
   isInFlightPrompt as importedIsInFlightPrompt,
   normalizeCompactToolLabel,
@@ -654,44 +655,49 @@ const WorkGroupSection = memo(function WorkGroupSection({
   groupedEntries: Extract<MessagesTimelineRow, { kind: "work" }>["groupedEntries"];
 }) {
   const { workspaceRoot } = use(TimelineRowCtx);
+  // Collapsed by default — even while streaming. Toggling re-renders only this row.
   const [isExpanded, setIsExpanded] = useState(false);
-  const hasOverflow = groupedEntries.length > MAX_VISIBLE_WORK_LOG_ENTRIES;
-  const visibleEntries =
-    hasOverflow && !isExpanded
-      ? groupedEntries.slice(-MAX_VISIBLE_WORK_LOG_ENTRIES)
-      : groupedEntries;
-  const hiddenCount = groupedEntries.length - visibleEntries.length;
-  const onlyToolEntries = groupedEntries.every((entry) => entry.tone === "tool");
-  const showHeader = hasOverflow || !onlyToolEntries;
-  const groupLabel = onlyToolEntries ? "Tool calls" : "Work log";
+  const { errors, rest } = partitionWorkEntriesByError(groupedEntries);
+  const summaryCount = rest.length;
+  const summaryLabel = summaryCount === 1 ? "1 action" : `${summaryCount} actions`;
 
   return (
-    <div className="rounded-xl border border-border/45 bg-card/25 px-2 py-1.5">
-      {showHeader && (
-        <div className="mb-1.5 flex items-center justify-between gap-2 px-0.5">
-          <p className="text-[9px] uppercase tracking-[0.16em] text-muted-foreground/55">
-            {groupLabel} ({groupedEntries.length})
-          </p>
-          {hasOverflow && (
-            <button
-              type="button"
-              className="text-[9px] uppercase tracking-[0.12em] text-muted-foreground/55 transition-colors duration-150 hover:text-foreground/75"
-              onClick={() => setIsExpanded((v) => !v)}
-            >
-              {isExpanded ? "Show less" : `Show ${hiddenCount} more`}
-            </button>
-          )}
+    <div className="space-y-0.5">
+      {/* Error entries are always visible, never hidden behind the summary. */}
+      {errors.map((workEntry) => (
+        <SimpleWorkEntryRow
+          key={`work-row:${workEntry.id}`}
+          workEntry={workEntry}
+          workspaceRoot={workspaceRoot}
+        />
+      ))}
+      {summaryCount > 0 && (
+        <button
+          type="button"
+          aria-expanded={isExpanded}
+          className="flex items-center gap-1 px-1 py-1 text-[11px] leading-5 text-muted-foreground/55 transition-colors duration-150 hover:text-foreground/75"
+          onClick={() => setIsExpanded((v) => !v)}
+        >
+          <ChevronRightIcon
+            className={cn(
+              "size-3 shrink-0 transition-transform duration-150",
+              isExpanded && "rotate-90",
+            )}
+          />
+          {summaryLabel}
+        </button>
+      )}
+      {isExpanded && summaryCount > 0 && (
+        <div className="space-y-0.5">
+          {rest.map((workEntry) => (
+            <SimpleWorkEntryRow
+              key={`work-row:${workEntry.id}`}
+              workEntry={workEntry}
+              workspaceRoot={workspaceRoot}
+            />
+          ))}
         </div>
       )}
-      <div className="space-y-0.5">
-        {visibleEntries.map((workEntry) => (
-          <SimpleWorkEntryRow
-            key={`work-row:${workEntry.id}`}
-            workEntry={workEntry}
-            workspaceRoot={workspaceRoot}
-          />
-        ))}
-      </div>
     </div>
   );
 });
