@@ -794,20 +794,29 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
  * "Jump to my last message" pill — scrolls the transcript straight to the
  * user's last sent prompt via the LegendList ref. Sibling of the
  * scroll-to-bottom pill and matches its styling. Renders nothing when
- * {@link index} is negative (no user row to jump to).
+ * {@link index} is negative (no user row to jump to). When {@link raised} it
+ * sits above the scroll-to-bottom pill so the two controls never overlap (both
+ * are meaningful while scrolled up: jump back to your prompt OR jump to the end).
  */
 export function JumpToLastMessageButton({
   listRef,
   index,
+  raised = false,
 }: {
   listRef: RefObject<LegendListRef | null>;
   index: number;
+  raised?: boolean;
 }) {
   if (index < 0) {
     return null;
   }
   return (
-    <div className="pointer-events-none absolute bottom-1 left-1/2 z-30 flex -translate-x-1/2 justify-center py-1.5">
+    <div
+      className={cn(
+        "pointer-events-none absolute left-1/2 z-30 flex -translate-x-1/2 justify-center py-1.5",
+        raised ? "bottom-12" : "bottom-1",
+      )}
+    >
       <button
         type="button"
         aria-label="Jump to my last message"
@@ -1998,13 +2007,12 @@ export default function ChatView(props: ChatViewProps) {
     if (!completionSummary) return null;
     return deriveCompletionDividerBeforeEntryId(timelineEntries, activeLatestTurn);
   }, [activeLatestTurn, completionSummary, latestTurnSettled, timelineEntries]);
-  // Index of the user's last sent message in the rendered timeline rows, plus
-  // whether jumping to it is meaningful (i.e. there is content after it — when
-  // the prompt is the very last row it is already pinned at the bottom). Derive
-  // rows the same way MessagesTimeline does so the index matches the rendered
-  // list. Seam for the "jump to my last message" pill.
-  const jumpToLastMessage = useMemo(() => {
-    const rows = deriveMessagesTimelineRows({
+  // Single source of truth for timeline row derivation. MessagesTimeline derives its rows
+  // from THIS exact object, and the `jumpToLastMessage` lookup below reuses it, so the two
+  // can never desync on the input field list (F7). Memoized so MessagesTimeline (memo) and
+  // the lookup only recompute when a real input changes.
+  const timelineDeriveInput = useMemo(
+    () => ({
       timelineEntries,
       completionDividerBeforeEntryId,
       completionSummary,
@@ -2014,20 +2022,29 @@ export default function ChatView(props: ChatViewProps) {
       activeTurnStartedAt: activeWorkStartedAt,
       turnDiffSummaryByAssistantMessageId,
       revertTurnCountByUserMessageId,
-    });
+    }),
+    [
+      timelineEntries,
+      completionDividerBeforeEntryId,
+      completionSummary,
+      isWorking,
+      latestTurnSettled,
+      activeLatestTurn?.turnId,
+      activeWorkStartedAt,
+      turnDiffSummaryByAssistantMessageId,
+      revertTurnCountByUserMessageId,
+    ],
+  );
+  // Index of the user's last sent message in the rendered timeline rows, plus
+  // whether jumping to it is meaningful (i.e. there is content after it — when
+  // the prompt is the very last row it is already pinned at the bottom). Uses the
+  // shared derive input so the index always matches the rendered list. Seam for the
+  // "jump to my last message" pill.
+  const jumpToLastMessage = useMemo(() => {
+    const rows = deriveMessagesTimelineRows(timelineDeriveInput);
     const index = lastUserRowIndex(rows);
     return { index, canJump: index >= 0 && index < rows.length - 1 };
-  }, [
-    timelineEntries,
-    completionDividerBeforeEntryId,
-    completionSummary,
-    isWorking,
-    latestTurnSettled,
-    activeLatestTurn?.turnId,
-    activeWorkStartedAt,
-    turnDiffSummaryByAssistantMessageId,
-    revertTurnCountByUserMessageId,
-  ]);
+  }, [timelineDeriveInput]);
   const gitCwd = activeProject
     ? projectScriptCwd({
         project: { cwd: activeProject.cwd },
@@ -4402,18 +4419,12 @@ export default function ChatView(props: ChatViewProps) {
             <MessagesTimeline
               key={activeThread.id}
               isWorking={isWorking}
-              activeTurnInProgress={isWorking || !latestTurnSettled}
               activeTurnId={activeLatestTurn?.turnId ?? null}
-              activeTurnStartedAt={activeWorkStartedAt}
+              deriveInput={timelineDeriveInput}
               listRef={legendListRef}
-              timelineEntries={timelineEntries}
-              completionDividerBeforeEntryId={completionDividerBeforeEntryId}
-              completionSummary={completionSummary}
-              turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
               activeThreadEnvironmentId={activeThread.environmentId}
               routeThreadKey={routeThreadKey}
               onOpenTurnDiff={onOpenTurnDiff}
-              revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
               onRewindConversation={onRewindConversationStable}
               onRewindConversationAndFiles={onRewindConversationAndFilesStable}
               onInterruptAndRewind={onInterruptAndRewind}
@@ -4442,11 +4453,17 @@ export default function ChatView(props: ChatViewProps) {
               </div>
             )}
 
-            {/* jump to my last message — shown when already at the bottom (so the
-                scroll-to-bottom pill is hidden) and the last user prompt sits
-                above with a response after it, worth scrolling back up to. */}
-            {!showScrollToBottom && jumpToLastMessage.canJump && (
-              <JumpToLastMessageButton listRef={legendListRef} index={jumpToLastMessage.index} />
+            {/* jump to my last message — available whenever the last user prompt
+                sits above with a response after it, worth scrolling back up to.
+                Independent of the scroll-to-bottom pill: while scrolled up BOTH
+                are useful (jump back to your prompt OR jump to the end), so when
+                that pill is showing this one is raised above it to avoid overlap. */}
+            {jumpToLastMessage.canJump && (
+              <JumpToLastMessageButton
+                listRef={legendListRef}
+                index={jumpToLastMessage.index}
+                raised={showScrollToBottom}
+              />
             )}
           </div>
 

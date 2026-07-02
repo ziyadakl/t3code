@@ -33,12 +33,29 @@ describe("ComposerPrimaryActions nested subagent rows", () => {
     renderActions({
       isRunning: true,
       runningSubagents: [
-        { subagentType: "orchestrator", descendantCount: 4 },
-        { subagentType: "Explore", descendantCount: 0 },
+        { toolUseId: "orch-1", subagentType: "orchestrator", descendantCount: 4 },
+        { toolUseId: "exp-1", subagentType: "Explore", descendantCount: 0 },
       ],
     });
     await expect.element(page.getByText("subagent: orchestrator (+4)")).toBeVisible();
     await expect.element(page.getByText("subagent: Explore")).toBeVisible();
+  });
+
+  it("keys each row by its toolUseId so same-type siblings stay stable (F3)", async () => {
+    renderActions({
+      isRunning: true,
+      runningSubagents: [
+        { toolUseId: "a-1", subagentType: "Explore", descendantCount: 2 },
+        { toolUseId: "a-2", subagentType: "Explore", descendantCount: 0 },
+      ],
+    });
+    // Two same-type rows: identity must come from toolUseId, not (type:index), so the
+    // (+2) row is tied to a-1 and the plain row to a-2 (they don't collide on key).
+    await expect
+      .element(page.getByText("subagent: Explore (+2)"))
+      .toHaveAttribute("data-subagent-tool-use-id", "a-1");
+    const rowA2 = document.querySelector('[data-subagent-tool-use-id="a-2"]');
+    expect(rowA2?.textContent).toBe("subagent: Explore");
   });
 
   it("shows no rows while running when no subagents are live", async () => {
@@ -50,7 +67,7 @@ describe("ComposerPrimaryActions nested subagent rows", () => {
   it("shows no rows when the turn is not running", () => {
     renderActions({
       isRunning: false,
-      runningSubagents: [{ subagentType: "Explore", descendantCount: 0 }],
+      runningSubagents: [{ toolUseId: "exp-1", subagentType: "Explore", descendantCount: 0 }],
     });
     expect(page.getByText(/^subagent:/).query()).toBeNull();
   });

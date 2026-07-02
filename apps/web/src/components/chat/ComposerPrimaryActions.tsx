@@ -143,10 +143,15 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
             className="flex min-w-0 flex-col items-end gap-0.5 text-muted-foreground/70 text-xs tabular-nums"
             aria-live="polite"
           >
-            {runningSubagents.map((row, index) => (
-              // Concurrent same-type subagents share no stable id; position is the identity.
-              // oxlint-disable-next-line react/no-array-index-key
-              <span key={`${row.subagentType}:${index}`} className="whitespace-nowrap">
+            {runningSubagents.map((row) => (
+              // Key by the subagent's tool_use_id so a concurrent same-type sibling
+              // completing/reordering doesn't make React reuse the wrong element (which
+              // flashed a stale `(+N)`). See buildRunningSubagentTree.
+              <span
+                key={row.toolUseId}
+                data-subagent-tool-use-id={row.toolUseId}
+                className="whitespace-nowrap"
+              >
                 {formatSubagentRow(row)}
               </span>
             ))}

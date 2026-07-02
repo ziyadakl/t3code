@@ -124,19 +124,21 @@ const EMPTY_TIMELINE_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "d
 // Props (public API)
 // ---------------------------------------------------------------------------
 
+/**
+ * The single row-derivation input. ChatView builds this once (memoized) and hands the SAME
+ * object to both this component's derive and its own `jumpToLastMessage` last-user-row
+ * lookup, so the two can never desync on the field list (F7). `isWorking`/`activeTurnId` are
+ * also surfaced as their own props because the timeline uses them outside row derivation.
+ */
+type MessagesTimelineDeriveInput = Parameters<typeof deriveMessagesTimelineRows>[0];
+
 interface MessagesTimelineProps {
   isWorking: boolean;
-  activeTurnInProgress: boolean;
   activeTurnId?: TurnId | null;
-  activeTurnStartedAt: string | null;
+  deriveInput: MessagesTimelineDeriveInput;
   listRef: React.RefObject<LegendListRef | null>;
-  timelineEntries: ReturnType<typeof deriveTimelineEntries>;
-  completionDividerBeforeEntryId: string | null;
-  completionSummary: string | null;
-  turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   routeThreadKey: string;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
-  revertTurnCountByUserMessageId: Map<MessageId, number>;
   onRewindConversation: (messageId: MessageId) => void;
   onRewindConversationAndFiles: (messageId: MessageId) => void;
   onInterruptAndRewind: (messageId: MessageId) => void;
@@ -160,17 +162,11 @@ interface MessagesTimelineProps {
 
 export const MessagesTimeline = memo(function MessagesTimeline({
   isWorking,
-  activeTurnInProgress,
   activeTurnId,
-  activeTurnStartedAt,
+  deriveInput,
   listRef,
-  timelineEntries,
-  completionDividerBeforeEntryId,
-  completionSummary,
-  turnDiffSummaryByAssistantMessageId,
   routeThreadKey,
   onOpenTurnDiff,
-  revertTurnCountByUserMessageId,
   onRewindConversation,
   onRewindConversationAndFiles,
   onInterruptAndRewind,
@@ -185,31 +181,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onIsAtEndChange,
   agentEditSetByTurnId,
 }: MessagesTimelineProps) {
-  const rawRows = useMemo(
-    () =>
-      deriveMessagesTimelineRows({
-        timelineEntries,
-        completionDividerBeforeEntryId,
-        completionSummary,
-        isWorking,
-        activeTurnInProgress,
-        activeTurnId: activeTurnId ?? null,
-        activeTurnStartedAt,
-        turnDiffSummaryByAssistantMessageId,
-        revertTurnCountByUserMessageId,
-      }),
-    [
-      timelineEntries,
-      completionDividerBeforeEntryId,
-      completionSummary,
-      isWorking,
-      activeTurnInProgress,
-      activeTurnId,
-      activeTurnStartedAt,
-      turnDiffSummaryByAssistantMessageId,
-      revertTurnCountByUserMessageId,
-    ],
-  );
+  const rawRows = useMemo(() => deriveMessagesTimelineRows(deriveInput), [deriveInput]);
   const rows = useStableRows(rawRows);
 
   const handleScroll = useCallback(() => {

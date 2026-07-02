@@ -4,6 +4,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vite-plus/test";
 import type { LegendListRef } from "@legendapp/list/react";
 
+import type { deriveMessagesTimelineRows } from "./MessagesTimeline.logic";
+
+type MessagesTimelineDeriveInput = Parameters<typeof deriveMessagesTimelineRows>[0];
+
 // Capture the props MessagesTimeline hands to the rewind control so we can
 // assert the enable/route wiring (Feature C) without a DOM. The real click ->
 // onRestoreConversation behavior of RewindMenu is proven in RewindMenu.test.tsx;
@@ -110,19 +114,32 @@ beforeAll(() => {
 const ACTIVE_THREAD_ENVIRONMENT_ID = EnvironmentId.make("environment-local");
 const MESSAGE_CREATED_AT = "2026-03-17T19:12:28.000Z";
 
-function buildProps() {
+function buildDeriveInput(
+  timelineEntries: MessagesTimelineDeriveInput["timelineEntries"] = [],
+  overrides: Partial<MessagesTimelineDeriveInput> = {},
+): MessagesTimelineDeriveInput {
   return {
+    timelineEntries,
+    completionDividerBeforeEntryId: null,
+    completionSummary: null,
     isWorking: false,
     activeTurnInProgress: false,
     activeTurnId: null,
     activeTurnStartedAt: null,
-    listRef: createRef<LegendListRef | null>(),
-    completionDividerBeforeEntryId: null,
-    completionSummary: null,
     turnDiffSummaryByAssistantMessageId: new Map(),
+    revertTurnCountByUserMessageId: new Map(),
+    ...overrides,
+  };
+}
+
+function buildProps() {
+  return {
+    isWorking: false,
+    activeTurnId: null,
+    deriveInput: buildDeriveInput(),
+    listRef: createRef<LegendListRef | null>(),
     routeThreadKey: "environment-local:thread-1",
     onOpenTurnDiff: () => {},
-    revertTurnCountByUserMessageId: new Map(),
     onRewindConversation: () => {},
     onRewindConversationAndFiles: () => {},
     onInterruptAndRewind: () => {},
@@ -165,7 +182,7 @@ describe("MessagesTimeline", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
-        timelineEntries={[buildUserTimelineEntry(buildLongUserMessageText())]}
+        deriveInput={buildDeriveInput([buildUserTimelineEntry(buildLongUserMessageText())])}
       />,
     );
 
@@ -180,7 +197,7 @@ describe("MessagesTimeline", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
-        timelineEntries={[buildUserTimelineEntry("Short prompt.")]}
+        deriveInput={buildDeriveInput([buildUserTimelineEntry("Short prompt.")])}
       />,
     );
 
@@ -193,7 +210,7 @@ describe("MessagesTimeline", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
-        timelineEntries={[
+        deriveInput={buildDeriveInput([
           buildUserTimelineEntry(
             [
               buildLongUserMessageText("yoo what's @terminal-1:1-5 mean"),
@@ -205,7 +222,7 @@ describe("MessagesTimeline", () => {
               "</terminal_context>",
             ].join("\n"),
           ),
-        ]}
+        ])}
       />,
     );
 
@@ -220,7 +237,7 @@ describe("MessagesTimeline", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
-        timelineEntries={[buildUserTimelineEntry(buildLongUserMessageText())]}
+        deriveInput={buildDeriveInput([buildUserTimelineEntry(buildLongUserMessageText())])}
       />,
     );
 
@@ -234,7 +251,7 @@ describe("MessagesTimeline", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
-        timelineEntries={[
+        deriveInput={buildDeriveInput([
           {
             id: "entry-1",
             kind: "work",
@@ -246,7 +263,7 @@ describe("MessagesTimeline", () => {
               tone: "info",
             },
           },
-        ]}
+        ])}
       />,
     );
 
@@ -273,11 +290,11 @@ describe("MessagesTimeline", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
-        timelineEntries={[
+        deriveInput={buildDeriveInput([
           workEntry("w1", "Ran build"),
           workEntry("w2", "Read file"),
           workEntry("w3", "Edited file"),
-        ]}
+        ])}
       />,
     );
 
@@ -295,7 +312,7 @@ describe("MessagesTimeline", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
-        timelineEntries={[
+        deriveInput={buildDeriveInput([
           {
             id: "entry-1",
             kind: "work",
@@ -318,7 +335,7 @@ describe("MessagesTimeline", () => {
               tone: "tool",
             },
           },
-        ]}
+        ])}
       />,
     );
 
@@ -333,7 +350,7 @@ describe("MessagesTimeline", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
-        timelineEntries={[
+        deriveInput={buildDeriveInput([
           {
             id: "entry-1",
             kind: "work",
@@ -348,7 +365,7 @@ describe("MessagesTimeline", () => {
               changedFiles: ["C:/Users/mike/dev-stuff/t3code/apps/web/src/session-logic.ts"],
             },
           },
-        ]}
+        ])}
         workspaceRoot="C:/Users/mike/dev-stuff/t3code"
       />,
     );
@@ -362,7 +379,7 @@ describe("MessagesTimeline", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
-        timelineEntries={[
+        deriveInput={buildDeriveInput([
           {
             id: "entry-1",
             kind: "message",
@@ -384,7 +401,7 @@ describe("MessagesTimeline", () => {
               streaming: false,
             },
           },
-        ]}
+        ])}
       />,
     );
 
@@ -432,14 +449,16 @@ describe("MessagesTimeline — in-flight prompt rewind (Feature C)", () => {
       <MessagesTimeline
         {...buildProps()}
         isWorking
-        activeTurnInProgress
         activeTurnId={ACTIVE_TURN}
         onRewindConversation={onRewindConversation}
         onInterruptAndRewind={onInterruptAndRewind}
-        timelineEntries={[
-          buildUserEntry("entry-prior", PRIOR_MESSAGE),
-          buildUserEntry("entry-active", ACTIVE_MESSAGE),
-        ]}
+        deriveInput={buildDeriveInput(
+          [
+            buildUserEntry("entry-prior", PRIOR_MESSAGE),
+            buildUserEntry("entry-active", ACTIVE_MESSAGE),
+          ],
+          { isWorking: true, activeTurnInProgress: true, activeTurnId: ACTIVE_TURN },
+        )}
       />,
     );
 
@@ -477,10 +496,10 @@ describe("MessagesTimeline — in-flight prompt rewind (Feature C)", () => {
         {...buildProps()}
         onRewindConversation={onRewindConversation}
         onInterruptAndRewind={onInterruptAndRewind}
-        timelineEntries={[
+        deriveInput={buildDeriveInput([
           buildUserEntry("entry-prior", PRIOR_MESSAGE),
           buildUserEntry("entry-active", ACTIVE_MESSAGE),
-        ]}
+        ])}
       />,
     );
 

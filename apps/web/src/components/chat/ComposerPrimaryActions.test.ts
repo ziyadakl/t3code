@@ -94,16 +94,16 @@ describe("formatPendingPrimaryActionLabel", () => {
 
 describe("formatSubagentRow", () => {
   it("renders just the type when it has no running descendants", () => {
-    expect(formatSubagentRow({ subagentType: "Explore", descendantCount: 0 })).toBe(
-      "subagent: Explore",
-    );
+    expect(
+      formatSubagentRow({ toolUseId: "t1", subagentType: "Explore", descendantCount: 0 }),
+    ).toBe("subagent: Explore");
   });
 
   it("appends (+N) when there are running descendants", () => {
-    expect(formatSubagentRow({ subagentType: "orchestrator", descendantCount: 4 })).toBe(
-      "subagent: orchestrator (+4)",
-    );
-    expect(formatSubagentRow({ subagentType: "worker", descendantCount: 1 })).toBe(
+    expect(
+      formatSubagentRow({ toolUseId: "t2", subagentType: "orchestrator", descendantCount: 4 }),
+    ).toBe("subagent: orchestrator (+4)");
+    expect(formatSubagentRow({ toolUseId: "t3", subagentType: "worker", descendantCount: 1 })).toBe(
       "subagent: worker (+1)",
     );
   });

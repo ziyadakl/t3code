@@ -52,19 +52,32 @@ import { JumpToLastMessageButton } from "../ChatView";
 
 const MESSAGE_CREATED_AT = "2026-04-13T12:00:00.000Z";
 
-function buildProps() {
+type MessagesTimelineDeriveInput = Parameters<typeof deriveMessagesTimelineRows>[0];
+
+function buildDeriveInput(
+  timelineEntries: MessagesTimelineDeriveInput["timelineEntries"] = [],
+): MessagesTimelineDeriveInput {
   return {
+    timelineEntries,
+    completionDividerBeforeEntryId: null,
+    completionSummary: null,
     isWorking: false,
     activeTurnInProgress: false,
     activeTurnId: null,
     activeTurnStartedAt: null,
-    listRef: createRef<LegendListRef | null>(),
-    completionDividerBeforeEntryId: null,
-    completionSummary: null,
     turnDiffSummaryByAssistantMessageId: new Map(),
+    revertTurnCountByUserMessageId: new Map(),
+  };
+}
+
+function buildProps() {
+  return {
+    isWorking: false,
+    activeTurnId: null,
+    deriveInput: buildDeriveInput(),
+    listRef: createRef<LegendListRef | null>(),
     routeThreadKey: "environment-local:thread-1",
     onOpenTurnDiff: vi.fn(),
-    revertTurnCountByUserMessageId: new Map(),
     onRewindConversation: vi.fn(),
     onRewindConversationAndFiles: vi.fn(),
     onInterruptAndRewind: vi.fn(),
@@ -145,7 +158,7 @@ describe("MessagesTimeline", () => {
     const screen = await render(
       <MessagesTimeline
         {...buildProps()}
-        timelineEntries={[
+        deriveInput={buildDeriveInput([
           {
             id: "work-1",
             kind: "work",
@@ -158,7 +171,7 @@ describe("MessagesTimeline", () => {
               tone: "thinking",
             },
           },
-        ]}
+        ])}
       />,
     );
 
@@ -191,7 +204,7 @@ describe("MessagesTimeline", () => {
     vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
 
     const props = buildProps();
-    const screen = await render(<MessagesTimeline {...props} timelineEntries={[]} />);
+    const screen = await render(<MessagesTimeline {...props} deriveInput={buildDeriveInput([])} />);
 
     try {
       await expect
@@ -201,7 +214,7 @@ describe("MessagesTimeline", () => {
       await screen.rerender(
         <MessagesTimeline
           {...props}
-          timelineEntries={[
+          deriveInput={buildDeriveInput([
             {
               id: "work-1",
               kind: "work",
@@ -214,7 +227,7 @@ describe("MessagesTimeline", () => {
                 tone: "thinking",
               },
             },
-          ]}
+          ])}
         />,
       );
 
@@ -239,7 +252,7 @@ describe("MessagesTimeline", () => {
     const screen = await render(
       <MessagesTimeline
         {...buildProps()}
-        timelineEntries={[buildUserTimelineEntry(buildLongUserMessageText())]}
+        deriveInput={buildDeriveInput([buildUserTimelineEntry(buildLongUserMessageText())])}
       />,
     );
 
@@ -265,7 +278,7 @@ describe("MessagesTimeline", () => {
     const screen = await render(
       <MessagesTimeline
         {...buildProps()}
-        timelineEntries={[buildUserTimelineEntry(buildLongUserMessageText())]}
+        deriveInput={buildDeriveInput([buildUserTimelineEntry(buildLongUserMessageText())])}
       />,
     );
 
@@ -304,7 +317,9 @@ describe("MessagesTimeline", () => {
     const screen = await render(
       <MessagesTimeline
         {...buildProps()}
-        timelineEntries={[buildUserTimelineEntry(buildLongUserMessageText("latest long prompt"))]}
+        deriveInput={buildDeriveInput([
+          buildUserTimelineEntry(buildLongUserMessageText("latest long prompt")),
+        ])}
       />,
     );
 
@@ -332,7 +347,11 @@ describe("MessagesTimeline", () => {
 
     const screen = await render(
       <>
-        <MessagesTimeline {...buildProps()} listRef={listRef} timelineEntries={timelineEntries} />
+        <MessagesTimeline
+          {...buildProps()}
+          listRef={listRef}
+          deriveInput={buildDeriveInput(timelineEntries)}
+        />
         <JumpToLastMessageButton listRef={listRef} index={index} />
       </>,
     );
@@ -346,6 +365,31 @@ describe("MessagesTimeline", () => {
       });
     } finally {
       await screen.unmount();
+    }
+  });
+
+  it("raises the jump pill above the scroll-to-bottom slot when both are visible (F6)", async () => {
+    const listRef = createRef<LegendListRef | null>();
+
+    // Not raised: shares the bottom-most slot (bottom-1) with the scroll pill.
+    const flat = await render(<JumpToLastMessageButton listRef={listRef} index={0} />);
+    try {
+      const button = page.getByRole("button", { name: "Jump to my last message" }).element();
+      const wrapper = button.closest("div");
+      expect(wrapper?.className).toContain("bottom-1");
+      expect(wrapper?.className).not.toContain("bottom-12");
+    } finally {
+      await flat.unmount();
+    }
+
+    // Raised: offset up so it does not overlap the scroll-to-bottom pill.
+    const raised = await render(<JumpToLastMessageButton listRef={listRef} index={0} raised />);
+    try {
+      const button = page.getByRole("button", { name: "Jump to my last message" }).element();
+      const wrapper = button.closest("div");
+      expect(wrapper?.className).toContain("bottom-12");
+    } finally {
+      await raised.unmount();
     }
   });
 });
