@@ -1236,6 +1236,205 @@ describe("ClaudeAdapterLive", () => {
     },
   );
 
+  it.effect(
+    "flushes a leftover nested subagent at turn end carrying the parent/type triple",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+
+        const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.takeUntil((event) => event.type === "turn.completed"),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+
+        const session = yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          runtimeMode: "full-access",
+        });
+
+        yield* adapter.sendTurn({
+          threadId: session.threadId,
+          input: "spawn a nested subagent",
+          attachments: [],
+        });
+
+        // A nested subagent is registered in-flight via a batched snapshot...
+        harness.query.emit({
+          type: "assistant",
+          session_id: "sdk-session-nested",
+          uuid: "assistant-nested-leftover",
+          parent_tool_use_id: "parent-agent-1",
+          message: {
+            id: "assistant-message-nested-leftover",
+            content: [
+              {
+                type: "tool_use",
+                id: "nested-agent-leftover",
+                name: "Task",
+                input: {
+                  subagent_type: "code-reviewer",
+                  description: "review the diff",
+                },
+              },
+            ],
+          },
+        } as unknown as SDKMessage);
+
+        // ...but no tool_result ever arrives, so the turn-end sweep must flush it.
+        harness.query.emit({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          errors: [],
+          session_id: "sdk-session-nested",
+          uuid: "result-nested-leftover",
+        } as unknown as SDKMessage);
+
+        const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+
+        const nestedCompleted = runtimeEvents.find(
+          (event) =>
+            event.type === "item.completed" && String(event.itemId) === "nested-agent-leftover",
+        );
+        assert.equal(nestedCompleted?.type, "item.completed");
+        if (nestedCompleted?.type === "item.completed") {
+          assert.equal(
+            String(nestedCompleted.payload.parentToolUseId),
+            "parent-agent-1",
+            "swept item.completed must carry parentToolUseId",
+          );
+          assert.equal(
+            nestedCompleted.payload.subagentType,
+            "code-reviewer",
+            "swept item.completed must carry subagentType",
+          );
+        }
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
+  it.effect(
+    "clears the nested-subagent dedupe set at turn end so a re-used id re-emits next turn",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+
+        let turnsCompleted = 0;
+        const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.takeUntil((event) => {
+            if (event.type === "turn.completed") {
+              turnsCompleted += 1;
+            }
+            return turnsCompleted >= 2;
+          }),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+
+        const session = yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          runtimeMode: "full-access",
+        });
+
+        // Let the message-processing fiber fully drain the current turn (so the
+        // next sendTurn doesn't race ahead of the previous turn's snapshot).
+        const waitForTurnDrain = () =>
+          Effect.gen(function* () {
+            for (let i = 0; i < 5000; i += 1) {
+              const sessions = yield* adapter.listSessions();
+              const current = sessions.find((s) => s.threadId === session.threadId);
+              if (current && current.status !== "running") {
+                return;
+              }
+              yield* Effect.yieldNow;
+            }
+          });
+
+        // The two turns reuse the same nested tool_use id but wrap it in
+        // distinct assistant snapshots (distinct uuid / message id), matching
+        // how a fresh turn would present the same subagent kind again.
+        const nestedSnapshotFor = (suffix: string) =>
+          ({
+            type: "assistant",
+            session_id: "sdk-session-nested",
+            uuid: `assistant-nested-reuse-${suffix}`,
+            parent_tool_use_id: "parent-agent-1",
+            message: {
+              id: `assistant-message-nested-reuse-${suffix}`,
+              content: [
+                {
+                  type: "tool_use",
+                  id: "nested-agent-reuse",
+                  name: "Task",
+                  input: {
+                    subagent_type: "code-reviewer",
+                    description: "review the diff",
+                  },
+                },
+              ],
+            },
+          }) as unknown as SDKMessage;
+
+        // Turn 1: nested subagent starts, then the turn completes (swept).
+        yield* adapter.sendTurn({
+          threadId: session.threadId,
+          input: "spawn a nested subagent",
+          attachments: [],
+        });
+        harness.query.emit(nestedSnapshotFor("t1"));
+        harness.query.emit({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          errors: [],
+          session_id: "sdk-session-nested",
+          uuid: "result-nested-reuse-1",
+        } as unknown as SDKMessage);
+
+        yield* waitForTurnDrain();
+
+        // Turn 2: the SAME nested id re-appears. With the dedupe set cleared at
+        // turn end it must produce a fresh item.started (not be swallowed as a dup).
+        yield* adapter.sendTurn({
+          threadId: session.threadId,
+          input: "spawn it again",
+          attachments: [],
+        });
+        harness.query.emit(nestedSnapshotFor("t2"));
+        harness.query.emit({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          errors: [],
+          session_id: "sdk-session-nested",
+          uuid: "result-nested-reuse-2",
+        } as unknown as SDKMessage);
+
+        const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+
+        const nestedStarts = runtimeEvents.filter(
+          (event) => event.type === "item.started" && String(event.itemId) === "nested-agent-reuse",
+        );
+        assert.equal(
+          nestedStarts.length,
+          2,
+          "the re-used nested id must re-emit item.started once per turn (set cleared at turn end)",
+        );
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
   it.effect("falls back to a default plan step label for blank TodoWrite content", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

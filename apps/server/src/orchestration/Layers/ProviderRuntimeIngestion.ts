@@ -282,6 +282,27 @@ function requestKindFromCanonicalRequestType(
   }
 }
 
+// The subagent triple ({toolUseId, parentToolUseId, subagentType}) is carried
+// identically on the tool.started / tool.updated / tool.completed activity
+// payloads, so extract the conditional spread once instead of pasting it into
+// each switch arm.
+function subagentActivityFields(
+  event: Extract<
+    ProviderRuntimeEvent,
+    { type: "item.started" | "item.updated" | "item.completed" }
+  >,
+) {
+  return {
+    ...(event.itemId !== undefined ? { toolUseId: event.itemId } : {}),
+    ...(event.payload.parentToolUseId !== undefined
+      ? { parentToolUseId: event.payload.parentToolUseId }
+      : {}),
+    ...(event.payload.subagentType !== undefined
+      ? { subagentType: event.payload.subagentType }
+      : {}),
+  };
+}
+
 function runtimeEventToActivities(
   event: ProviderRuntimeEvent,
 ): ReadonlyArray<OrchestrationThreadActivity> {
@@ -587,13 +608,7 @@ function runtimeEventToActivities(
           summary: event.payload.title ?? "Tool updated",
           payload: {
             itemType: event.payload.itemType,
-            ...(event.itemId !== undefined ? { toolUseId: event.itemId } : {}),
-            ...(event.payload.parentToolUseId !== undefined
-              ? { parentToolUseId: event.payload.parentToolUseId }
-              : {}),
-            ...(event.payload.subagentType !== undefined
-              ? { subagentType: event.payload.subagentType }
-              : {}),
+            ...subagentActivityFields(event),
             ...(event.payload.status ? { status: event.payload.status } : {}),
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
             ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
@@ -617,13 +632,7 @@ function runtimeEventToActivities(
           summary: event.payload.title ?? "Tool",
           payload: {
             itemType: event.payload.itemType,
-            ...(event.itemId !== undefined ? { toolUseId: event.itemId } : {}),
-            ...(event.payload.parentToolUseId !== undefined
-              ? { parentToolUseId: event.payload.parentToolUseId }
-              : {}),
-            ...(event.payload.subagentType !== undefined
-              ? { subagentType: event.payload.subagentType }
-              : {}),
+            ...subagentActivityFields(event),
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
             ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
           },
@@ -646,13 +655,7 @@ function runtimeEventToActivities(
           summary: `${event.payload.title ?? "Tool"} started`,
           payload: {
             itemType: event.payload.itemType,
-            ...(event.itemId !== undefined ? { toolUseId: event.itemId } : {}),
-            ...(event.payload.parentToolUseId !== undefined
-              ? { parentToolUseId: event.payload.parentToolUseId }
-              : {}),
-            ...(event.payload.subagentType !== undefined
-              ? { subagentType: event.payload.subagentType }
-              : {}),
+            ...subagentActivityFields(event),
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,

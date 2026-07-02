@@ -1720,6 +1720,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           status: status === "completed" ? "completed" : "failed",
           title: tool.title,
           ...(tool.detail ? { detail: tool.detail } : {}),
+          ...subagentPayloadFields(tool),
           data: {
             toolName: tool.toolName,
             input: tool.input,
@@ -1738,6 +1739,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
     // Clear any remaining stale entries (e.g. from interrupted content blocks)
     context.inFlightTools.clear();
+    // Bound the nested-subagent dedupe set to the lifetime of a turn: it only
+    // needs to suppress duplicate item.started emits from cumulative snapshots
+    // WITHIN a turn, so clearing it here prevents unbounded growth across a
+    // long session while keeping within-turn dedupe intact.
+    context.nestedStartedToolUseIds.clear();
+    context.nextNestedToolIndex = -1;
 
     for (const block of turnState.assistantTextBlockOrder) {
       yield* completeAssistantTextBlock(context, block, {
