@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  formatPendingPrimaryActionLabel,
-  formatRunningSubagentLabel,
-} from "./ComposerPrimaryActions";
+import { formatPendingPrimaryActionLabel, formatSubagentRow } from "./ComposerPrimaryActions";
 
 describe("formatPendingPrimaryActionLabel", () => {
   it("returns 'Submitting...' while responding", () => {
@@ -95,17 +92,19 @@ describe("formatPendingPrimaryActionLabel", () => {
   });
 });
 
-describe("formatRunningSubagentLabel", () => {
-  it("shows the count while running with at least one subagent", () => {
-    expect(formatRunningSubagentLabel({ isRunning: true, count: 1 })).toBe("1 running");
-    expect(formatRunningSubagentLabel({ isRunning: true, count: 3 })).toBe("3 running");
+describe("formatSubagentRow", () => {
+  it("renders just the type when it has no running descendants", () => {
+    expect(formatSubagentRow({ subagentType: "Explore", descendantCount: 0 })).toBe(
+      "subagent: Explore",
+    );
   });
 
-  it("is hidden when no subagents are running", () => {
-    expect(formatRunningSubagentLabel({ isRunning: true, count: 0 })).toBeNull();
-  });
-
-  it("is hidden when the turn is not running", () => {
-    expect(formatRunningSubagentLabel({ isRunning: false, count: 2 })).toBeNull();
+  it("appends (+N) when there are running descendants", () => {
+    expect(formatSubagentRow({ subagentType: "orchestrator", descendantCount: 4 })).toBe(
+      "subagent: orchestrator (+4)",
+    );
+    expect(formatSubagentRow({ subagentType: "worker", descendantCount: 1 })).toBe(
+      "subagent: worker (+1)",
+    );
   });
 });

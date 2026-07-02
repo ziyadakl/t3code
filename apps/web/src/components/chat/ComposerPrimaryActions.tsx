@@ -3,6 +3,7 @@ import { ChevronDownIcon, ChevronLeftIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
+import type { RunningSubagentRow } from "../../hooks/useRunningSubagentTree";
 
 interface PendingActionState {
   questionIndex: number;
@@ -24,25 +25,21 @@ interface ComposerPrimaryActionsProps {
   isPreparingWorktree: boolean;
   hasSendableContent: boolean;
   preserveComposerFocusOnPointerDown?: boolean;
-  runningSubagentCount?: number;
+  runningSubagents?: ReadonlyArray<RunningSubagentRow>;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
   onImplementPlanInNewThread: () => void;
 }
 
+/** Stable empty default so the `runningSubagents` prop keeps referential equality. */
+const EMPTY_SUBAGENT_ROWS: ReadonlyArray<RunningSubagentRow> = [];
+
 /**
- * Terse always-visible label for the number of top-level subagents running under the
- * active turn. Only shown while the turn is running and at least one subagent is live.
+ * Terse CLI-style row for one running top-level subagent: `subagent: <type>`, with a
+ * `(+N)` suffix only when it has N running descendants (nested subagents at any level).
  */
-export const formatRunningSubagentLabel = (input: {
-  isRunning: boolean;
-  count: number;
-}): string | null => {
-  if (!input.isRunning || input.count <= 0) {
-    return null;
-  }
-  return `${input.count} running`;
-};
+export const formatSubagentRow = (row: RunningSubagentRow): string =>
+  `subagent: ${row.subagentType}${row.descendantCount > 0 ? ` (+${row.descendantCount})` : ""}`;
 
 export const formatPendingPrimaryActionLabel = (input: {
   compact: boolean;
@@ -78,7 +75,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   isPreparingWorktree,
   hasSendableContent,
   preserveComposerFocusOnPointerDown = false,
-  runningSubagentCount = 0,
+  runningSubagents = EMPTY_SUBAGENT_ROWS,
   onPreviousPendingQuestion,
   onInterrupt,
   onImplementPlanInNewThread,
@@ -139,16 +136,21 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   }
 
   if (isRunning) {
-    const runningLabel = formatRunningSubagentLabel({ isRunning, count: runningSubagentCount });
     return (
       <div className={cn("flex items-center justify-end", compact ? "gap-1.5" : "gap-2")}>
-        {runningLabel ? (
-          <span
-            className="text-muted-foreground/70 whitespace-nowrap text-xs tabular-nums"
+        {runningSubagents.length > 0 ? (
+          <div
+            className="flex min-w-0 flex-col items-end gap-0.5 text-muted-foreground/70 text-xs tabular-nums"
             aria-live="polite"
           >
-            {runningLabel}
-          </span>
+            {runningSubagents.map((row, index) => (
+              // Concurrent same-type subagents share no stable id; position is the identity.
+              // oxlint-disable-next-line react/no-array-index-key
+              <span key={`${row.subagentType}:${index}`} className="whitespace-nowrap">
+                {formatSubagentRow(row)}
+              </span>
+            ))}
+          </div>
         ) : null}
         <button
           type="button"
