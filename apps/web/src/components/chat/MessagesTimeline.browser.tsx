@@ -47,7 +47,7 @@ vi.mock("@legendapp/list/react", async () => {
 });
 
 import { MessagesTimeline } from "./MessagesTimeline";
-import { deriveMessagesTimelineRows, lastUserRowIndex } from "./MessagesTimeline.logic";
+import { deriveMessagesTimelineRows } from "./MessagesTimeline.logic";
 import { JumpToLastMessageButton } from "../ChatView";
 
 const MESSAGE_CREATED_AT = "2026-04-13T12:00:00.000Z";
@@ -113,37 +113,6 @@ function buildUserTimelineEntry(text: string) {
     },
   };
 }
-
-function buildMessageTimelineEntry(
-  id: string,
-  messageId: string,
-  role: "user" | "assistant",
-  text: string,
-) {
-  return {
-    id,
-    kind: "message" as const,
-    createdAt: MESSAGE_CREATED_AT,
-    message: {
-      id: messageId as never,
-      role,
-      text,
-      createdAt: MESSAGE_CREATED_AT,
-      streaming: false,
-    },
-  };
-}
-
-const JUMP_DERIVE_INPUTS = {
-  completionDividerBeforeEntryId: null,
-  completionSummary: null,
-  isWorking: false,
-  activeTurnInProgress: false,
-  activeTurnId: null,
-  activeTurnStartedAt: null,
-  turnDiffSummaryByAssistantMessageId: new Map(),
-  revertTurnCountByUserMessageId: new Map(),
-} as const;
 
 describe("MessagesTimeline", () => {
   afterEach(() => {
@@ -333,48 +302,28 @@ describe("MessagesTimeline", () => {
     }
   });
 
-  it("jumps to the user's last message row via scrollToIndex with viewPosition 0", async () => {
-    const listRef = createRef<LegendListRef | null>();
-    const timelineEntries = [
-      buildMessageTimelineEntry("entry-a1", "message-a1", "assistant", "First reply"),
-      buildMessageTimelineEntry("entry-u1", "message-u1", "user", "My last prompt"),
-      buildMessageTimelineEntry("entry-a2", "message-a2", "assistant", "Second reply"),
-    ];
-
-    const rows = deriveMessagesTimelineRows({ ...JUMP_DERIVE_INPUTS, timelineEntries });
-    const index = lastUserRowIndex(rows);
-    expect(index).toBe(1);
-
-    const screen = await render(
-      <>
-        <MessagesTimeline
-          {...buildProps()}
-          listRef={listRef}
-          deriveInput={buildDeriveInput(timelineEntries)}
-        />
-        <JumpToLastMessageButton listRef={listRef} index={index} />
-      </>,
-    );
+  it("renders an icon-only step-back button and fires onJump when clicked", async () => {
+    const onJump = vi.fn();
+    const screen = await render(<JumpToLastMessageButton onJump={onJump} />);
 
     try {
-      await page.getByRole("button", { name: "Jump to my last message" }).click();
-      expect(scrollToIndexSpy).toHaveBeenCalledWith({
-        index,
-        viewPosition: 0,
-        animated: true,
-      });
+      const button = page.getByRole("button", { name: "Jump to previous message" });
+      await expect.element(button).toBeVisible();
+      // Icon-only: no leftover text pill.
+      expect(document.body.textContent ?? "").not.toContain("Jump to my last message");
+
+      await button.click();
+      expect(onJump).toHaveBeenCalledTimes(1);
     } finally {
       await screen.unmount();
     }
   });
 
-  it("raises the jump pill above the scroll-to-bottom slot when both are visible (F6)", async () => {
-    const listRef = createRef<LegendListRef | null>();
-
+  it("raises the jump button above the scroll-to-bottom slot when both are visible (F6)", async () => {
     // Not raised: shares the bottom-most slot (bottom-1) with the scroll pill.
-    const flat = await render(<JumpToLastMessageButton listRef={listRef} index={0} />);
+    const flat = await render(<JumpToLastMessageButton onJump={() => {}} />);
     try {
-      const button = page.getByRole("button", { name: "Jump to my last message" }).element();
+      const button = page.getByRole("button", { name: "Jump to previous message" }).element();
       const wrapper = button.closest("div");
       expect(wrapper?.className).toContain("bottom-1");
       expect(wrapper?.className).not.toContain("bottom-12");
@@ -383,9 +332,9 @@ describe("MessagesTimeline", () => {
     }
 
     // Raised: offset up so it does not overlap the scroll-to-bottom pill.
-    const raised = await render(<JumpToLastMessageButton listRef={listRef} index={0} raised />);
+    const raised = await render(<JumpToLastMessageButton onJump={() => {}} raised />);
     try {
-      const button = page.getByRole("button", { name: "Jump to my last message" }).element();
+      const button = page.getByRole("button", { name: "Jump to previous message" }).element();
       const wrapper = button.closest("div");
       expect(wrapper?.className).toContain("bottom-12");
     } finally {

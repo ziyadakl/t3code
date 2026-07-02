@@ -9,6 +9,9 @@ import {
   isEffectivelyAtEnd,
   isInFlightPrompt,
   lastUserRowIndex,
+  userRowIndices,
+  nextJumpStep,
+  shouldShowJumpButton,
   type MessagesTimelineRow,
 } from "./MessagesTimeline.logic";
 import { type WorkLogEntry } from "../../session-logic";
@@ -661,6 +664,118 @@ describe("lastUserRowIndex", () => {
     expect(lastUserRowIndex(rows)).toBe(0);
     const target = rows[lastUserRowIndex(rows)];
     expect(target?.kind === "message" && target.message.role === "user").toBe(true);
+  });
+});
+
+describe("userRowIndices", () => {
+  const userRow = (id: string): MessagesTimelineRow => ({
+    kind: "message",
+    id,
+    createdAt: "2026-01-01T00:00:00Z",
+    message: {
+      id: id as never,
+      role: "user",
+      text: "hi",
+      turnId: null,
+      createdAt: "2026-01-01T00:00:00Z",
+      streaming: false,
+    },
+    durationStart: "2026-01-01T00:00:00Z",
+    showCompletionDivider: false,
+    completionSummary: null,
+    showAssistantCopyButton: false,
+    assistantCopyStreaming: false,
+    isLastUserRow: false,
+  });
+  const assistantRow = (id: string): MessagesTimelineRow => ({
+    kind: "message",
+    id,
+    createdAt: "2026-01-01T00:00:10Z",
+    message: {
+      id: id as never,
+      role: "assistant",
+      text: "ok",
+      turnId: "turn-1" as never,
+      createdAt: "2026-01-01T00:00:10Z",
+      completedAt: "2026-01-01T00:00:11Z",
+      streaming: false,
+    },
+    durationStart: "2026-01-01T00:00:10Z",
+    showCompletionDivider: false,
+    completionSummary: null,
+    showAssistantCopyButton: false,
+    assistantCopyStreaming: false,
+    isLastUserRow: false,
+  });
+  const workingRow: MessagesTimelineRow = {
+    kind: "working",
+    id: "working-indicator-row",
+    createdAt: null,
+  };
+
+  it("returns an empty array when there are no rows", () => {
+    expect(userRowIndices([])).toEqual([]);
+  });
+
+  it("returns an empty array when there are no user rows", () => {
+    expect(userRowIndices([assistantRow("a1"), workingRow])).toEqual([]);
+  });
+
+  it("returns ascending indices for every user row among mixed rows", () => {
+    const rows = [
+      userRow("u1"),
+      assistantRow("a1"),
+      userRow("u2"),
+      assistantRow("a2"),
+      workingRow,
+    ];
+    expect(userRowIndices(rows)).toEqual([0, 2]);
+  });
+
+  it("agrees with lastUserRowIndex on the final entry", () => {
+    const rows = [userRow("u1"), assistantRow("a1"), userRow("u2")];
+    const indices = userRowIndices(rows);
+    expect(indices.at(-1)).toBe(lastUserRowIndex(rows));
+  });
+});
+
+describe("nextJumpStep", () => {
+  it("targets the most recent user message when idle (cursor null)", () => {
+    expect(nextJumpStep(3, null)).toEqual({ pos: 2, nextCursor: 1 });
+  });
+
+  it("decrements mid-cycle toward the first user message", () => {
+    expect(nextJumpStep(3, 1)).toEqual({ pos: 1, nextCursor: 0 });
+  });
+
+  it("clamps at the first user message (position 0)", () => {
+    expect(nextJumpStep(3, 0)).toEqual({ pos: 0, nextCursor: 0 });
+  });
+});
+
+describe("shouldShowJumpButton", () => {
+  it("is hidden when there are no user messages", () => {
+    expect(
+      shouldShowJumpButton({ targetsLength: 0, cursor: null, latestVisible: false }),
+    ).toBe(false);
+  });
+
+  it("is hidden when idle and the latest user message is already visible", () => {
+    expect(
+      shouldShowJumpButton({ targetsLength: 2, cursor: null, latestVisible: true }),
+    ).toBe(false);
+  });
+
+  it("is shown when idle and the latest user message is off screen", () => {
+    expect(
+      shouldShowJumpButton({ targetsLength: 2, cursor: null, latestVisible: false }),
+    ).toBe(true);
+  });
+
+  it("stays shown mid-cycle even when the latest user message is visible", () => {
+    expect(
+      shouldShowJumpButton({ targetsLength: 2, cursor: 0, latestVisible: true }),
+    ).toBe(true);
   });
 });
 

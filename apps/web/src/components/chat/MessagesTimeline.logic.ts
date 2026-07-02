@@ -280,6 +280,45 @@ export function lastUserRowIndex(rows: MessagesTimelineRow[]): number {
   return -1;
 }
 
+/** Indices of ALL user-message rows in the derived timeline, ascending. */
+export function userRowIndices(rows: MessagesTimelineRow[]): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < rows.length; i += 1) {
+    const row = rows[i];
+    if (row && row.kind === "message" && row.message.role === "user") out.push(i);
+  }
+  return out;
+}
+
+/**
+ * One click of the step-back navigator. `cursor` is the array-position (into the
+ * userRowIndices array) the NEXT click targets, or null when idle (fresh cycle).
+ * Returns the position to scroll to NOW and the cursor for the next click.
+ * Idle → jump to the most recent (last) user message, then walk backward,
+ * clamped at the first (position 0).
+ */
+export function nextJumpStep(
+  targetsLength: number,
+  cursor: number | null,
+): { pos: number; nextCursor: number } {
+  const pos = cursor ?? targetsLength - 1;
+  return { pos, nextCursor: Math.max(0, pos - 1) };
+}
+
+/**
+ * Whether the step-back navigator button should render. Hidden when there are no
+ * user messages, or when idle AND the latest user message is already on screen.
+ * Stays visible mid-cycle (cursor !== null) so repeated clicks can keep stepping up.
+ */
+export function shouldShowJumpButton(args: {
+  targetsLength: number;
+  cursor: number | null;
+  latestVisible: boolean;
+}): boolean {
+  if (args.targetsLength === 0) return false;
+  return args.cursor !== null || !args.latestVisible;
+}
+
 export function computeStableMessagesTimelineRows(
   rows: MessagesTimelineRow[],
   previous: StableMessagesTimelineRowsState,

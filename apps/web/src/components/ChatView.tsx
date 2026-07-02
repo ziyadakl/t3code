@@ -39,7 +39,7 @@ import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/proje
 import { truncate } from "@t3tools/shared/String";
 import { nextTerminalId, resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
 import { Debouncer } from "@tanstack/react-pacer";
-import { type RefObject, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
 import { useVcsStatus } from "~/lib/vcsStatusState";
@@ -116,8 +116,8 @@ import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings"
 import PlanSidebar from "./PlanSidebar";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import {
-  ArrowUpIcon,
   ChevronDownIcon,
+  ChevronUpIcon,
   FileClockIcon,
   TriangleAlertIcon,
   Undo2Icon,
@@ -168,7 +168,9 @@ import { MessagesTimeline } from "./chat/MessagesTimeline";
 import {
   deriveMessagesTimelineRows,
   isEffectivelyAtEnd,
-  lastUserRowIndex,
+  nextJumpStep,
+  shouldShowJumpButton,
+  userRowIndices,
 } from "./chat/MessagesTimeline.logic";
 import { ChatHeader } from "./chat/ChatHeader";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
@@ -791,25 +793,20 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
 });
 
 /**
- * "Jump to my last message" pill — scrolls the transcript straight to the
- * user's last sent prompt via the LegendList ref. Sibling of the
- * scroll-to-bottom pill and matches its styling. Renders nothing when
- * {@link index} is negative (no user row to jump to). When {@link raised} it
- * sits above the scroll-to-bottom pill so the two controls never overlap (both
- * are meaningful while scrolled up: jump back to your prompt OR jump to the end).
+ * Step-back navigator — a compact up-chevron that walks the transcript backward
+ * through the user's own prompts, one per click (see nextJumpStep). The parent
+ * owns the cursor + scroll; this component just fires {@link onJump}. Sibling of
+ * the scroll-to-bottom pill; when {@link raised} it sits above that pill so the
+ * two controls never overlap (both are meaningful while scrolled up: step back
+ * through your prompts OR jump to the end).
  */
 export function JumpToLastMessageButton({
-  listRef,
-  index,
+  onJump,
   raised = false,
 }: {
-  listRef: RefObject<LegendListRef | null>;
-  index: number;
+  onJump: () => void;
   raised?: boolean;
 }) {
-  if (index < 0) {
-    return null;
-  }
   return (
     <div
       className={cn(
@@ -819,12 +816,11 @@ export function JumpToLastMessageButton({
     >
       <button
         type="button"
-        aria-label="Jump to my last message"
-        onClick={() => listRef.current?.scrollToIndex({ index, viewPosition: 0, animated: true })}
-        className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-border/60 bg-card px-3 py-1 text-muted-foreground text-xs shadow-sm transition-colors hover:border-border hover:cursor-pointer hover:text-foreground"
+        aria-label="Jump to previous message"
+        onClick={onJump}
+        className="pointer-events-auto flex items-center justify-center rounded-full border border-border/60 bg-card p-1.5 text-muted-foreground shadow-sm transition-colors hover:cursor-pointer hover:border-border hover:text-foreground"
       >
-        <ArrowUpIcon className="size-3.5" />
-        Jump to my last message
+        <ChevronUpIcon className="size-4" />
       </button>
     </div>
   );
@@ -2035,16 +2031,77 @@ export default function ChatView(props: ChatViewProps) {
       revertTurnCountByUserMessageId,
     ],
   );
-  // Index of the user's last sent message in the rendered timeline rows, plus
-  // whether jumping to it is meaningful (i.e. there is content after it — when
-  // the prompt is the very last row it is already pinned at the bottom). Uses the
-  // shared derive input so the index always matches the rendered list. Seam for the
-  // "jump to my last message" pill.
-  const jumpToLastMessage = useMemo(() => {
+  // Step-back navigator targets: the row indices of ALL the user's own prompts
+  // (ascending) plus the id of the latest one. Uses the shared derive input so
+  // the indices always match the rendered list. The navigator walks these
+  // backward one click at a time (see nextJumpStep / handleJumpStep).
+  const jumpToUserMessages = useMemo(() => {
     const rows = deriveMessagesTimelineRows(timelineDeriveInput);
-    const index = lastUserRowIndex(rows);
-    return { index, canJump: index >= 0 && index < rows.length - 1 };
+    const targets = userRowIndices(rows);
+    const lastIndex = targets.length ? targets[targets.length - 1]! : -1;
+    const latestRow = lastIndex >= 0 ? rows[lastIndex] : undefined;
+    const latestId = latestRow && latestRow.kind === "message" ? latestRow.message.id : null;
+    return { targets, latestId };
   }, [timelineDeriveInput]);
+  // Position (into jumpToUserMessages.targets) the NEXT step-back click targets,
+  // or null when idle (a fresh cycle starts at the latest prompt).
+  const [jumpCursor, setJumpCursor] = useState<number | null>(null);
+  // Whether the latest user prompt is currently on screen (IntersectionObserver
+  // below). Drives whether the navigator button renders when idle.
+  const [latestUserMessageVisible, setLatestUserMessageVisible] = useState(true);
+  const messagesWrapperRef = useRef<HTMLDivElement | null>(null);
+
+  const handleJumpStep = useCallback(() => {
+    const targets = jumpToUserMessages.targets;
+    if (targets.length === 0) return;
+    const { pos, nextCursor } = nextJumpStep(targets.length, jumpCursor);
+    const rowIndex = targets[pos];
+    if (rowIndex != null) {
+      legendListRef.current?.scrollToIndex({ index: rowIndex, viewPosition: 0, animated: true });
+    }
+    setJumpCursor(nextCursor);
+  }, [jumpToUserMessages.targets, jumpCursor]);
+
+  // A new user prompt (or thread switch) starts a fresh step-back cycle.
+  // latestId is the intended sole trigger (setJumpCursor is a stable setter).
+  useEffect(() => {
+    setJumpCursor(null);
+  }, [jumpToUserMessages.latestId]);
+
+  // Track whether the latest user prompt is on screen. When its row is
+  // virtualized away it's off screen by definition, so treat "not found" as
+  // not-visible. Keyed on the latest id so it re-attaches to each new prompt.
+  useEffect(() => {
+    const root = messagesWrapperRef.current;
+    const latestId = jumpToUserMessages.latestId;
+    if (!root || latestId == null) {
+      setLatestUserMessageVisible(true);
+      return;
+    }
+    const selector = `[data-message-id="${CSS.escape(latestId)}"]`;
+    let observedEl: Element | null = null;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) setLatestUserMessageVisible(entry.isIntersecting);
+      },
+      { root, threshold: 0 },
+    );
+    const attach = () => {
+      const el = root.querySelector(selector);
+      if (el === observedEl) return;
+      if (observedEl) observer.unobserve(observedEl);
+      observedEl = el;
+      if (el) observer.observe(el);
+      else setLatestUserMessageVisible(false);
+    };
+    const mo = new MutationObserver(() => attach());
+    mo.observe(root, { childList: true, subtree: true });
+    attach();
+    return () => {
+      mo.disconnect();
+      observer.disconnect();
+    };
+  }, [jumpToUserMessages.latestId]);
   const gitCwd = activeProject
     ? projectScriptCwd({
         project: { cwd: activeProject.cwd },
@@ -2739,6 +2796,7 @@ export default function ChatView(props: ChatViewProps) {
     if (isAtEnd) {
       showScrollDebouncer.current.cancel();
       setShowScrollToBottom(false);
+      setJumpCursor(null);
     } else {
       showScrollDebouncer.current.maybeExecute();
     }
@@ -4414,7 +4472,7 @@ export default function ChatView(props: ChatViewProps) {
         {/* Chat column */}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {/* Messages Wrapper */}
-          <div className="relative flex min-h-0 flex-1 flex-col">
+          <div ref={messagesWrapperRef} className="relative flex min-h-0 flex-1 flex-col">
             {/* Messages — LegendList handles virtualization and scrolling internally */}
             <MessagesTimeline
               key={activeThread.id}
@@ -4453,17 +4511,19 @@ export default function ChatView(props: ChatViewProps) {
               </div>
             )}
 
-            {/* jump to my last message — available whenever the last user prompt
-                sits above with a response after it, worth scrolling back up to.
-                Independent of the scroll-to-bottom pill: while scrolled up BOTH
-                are useful (jump back to your prompt OR jump to the end), so when
-                that pill is showing this one is raised above it to avoid overlap. */}
-            {jumpToLastMessage.canJump && (
-              <JumpToLastMessageButton
-                listRef={legendListRef}
-                index={jumpToLastMessage.index}
-                raised={showScrollToBottom}
-              />
+            {/* step-back navigator — a compact up-chevron that walks backward
+                through the user's own prompts, one per click. Hidden when the
+                latest prompt is already on screen (idle) and shown mid-cycle so
+                repeated clicks keep stepping up. Independent of the
+                scroll-to-bottom pill: while scrolled up BOTH are useful (step
+                back through your prompts OR jump to the end), so when that pill
+                is showing this one is raised above it to avoid overlap. */}
+            {shouldShowJumpButton({
+              targetsLength: jumpToUserMessages.targets.length,
+              cursor: jumpCursor,
+              latestVisible: latestUserMessageVisible,
+            }) && (
+              <JumpToLastMessageButton onJump={handleJumpStep} raised={showScrollToBottom} />
             )}
           </div>
 
