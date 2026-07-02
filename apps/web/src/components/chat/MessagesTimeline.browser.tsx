@@ -166,6 +166,15 @@ describe("MessagesTimeline", () => {
       await expect
         .element(page.getByText("Send a message to start the conversation."))
         .not.toBeInTheDocument();
+
+      // The work run collapses non-error entries behind a terse "N actions"
+      // summary. The thinking detail is hidden until the summary is expanded.
+      const summaryToggle = page.getByRole("button", { name: "1 action" });
+      await expect.element(summaryToggle).toBeVisible();
+      await expect.element(summaryToggle).toHaveAttribute("aria-expanded", "false");
+
+      await summaryToggle.click();
+
       await expect.element(page.getByText("Thinking - Inspecting repository state")).toBeVisible();
     } finally {
       await screen.unmount();
@@ -208,6 +217,14 @@ describe("MessagesTimeline", () => {
           ]}
         />,
       );
+
+      // The newly appeared work run renders collapsed; expand it to reach the
+      // hidden thinking detail.
+      const summaryToggle = page.getByRole("button", { name: "1 action" });
+      await expect.element(summaryToggle).toBeVisible();
+      await expect.element(summaryToggle).toHaveAttribute("aria-expanded", "false");
+
+      await summaryToggle.click();
 
       await expect.element(page.getByText("Thinking - Inspecting repository state")).toBeVisible();
       expect(props.onIsAtEndChange).toHaveBeenCalledWith(true);
