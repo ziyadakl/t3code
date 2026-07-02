@@ -9,6 +9,7 @@ import type {
   PermissionMode,
   PermissionResult,
   SDKMessage,
+  SDKResultMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import {
@@ -37,13 +38,56 @@ import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
 import type { ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
-import { makeClaudeAdapter, type ClaudeAdapterLiveOptions } from "./ClaudeAdapter.ts";
+import {
+  isInterruptedResult,
+  makeClaudeAdapter,
+  turnStatusFromResult,
+  type ClaudeAdapterLiveOptions,
+} from "./ClaudeAdapter.ts";
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 
 // Test-local service tag so the rest of the file can keep using `yield* ClaudeAdapter`.
 class ClaudeAdapter extends Context.Service<ClaudeAdapter, ClaudeAdapterShape>()(
   "t3/provider/Layers/ClaudeAdapter.test/ClaudeAdapter",
 ) {}
+
+const makeResult = (overrides: Record<string, unknown>): SDKResultMessage =>
+  ({
+    type: "result",
+    subtype: "error_during_execution",
+    is_error: true,
+    stop_reason: null,
+    errors: [],
+    session_id: "sdk-session",
+    uuid: "result-uuid",
+    ...overrides,
+  }) as unknown as SDKResultMessage;
+
+describe("turnStatusFromResult / isInterruptedResult", () => {
+  it("classifies the SDK post-interrupt error_during_execution shape as interrupted", () => {
+    const result = makeResult({
+      subtype: "error_during_execution",
+      is_error: true,
+      stop_reason: null,
+      errors: ["[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null"],
+    });
+
+    assert.equal(isInterruptedResult(result), true);
+    assert.equal(turnStatusFromResult(result), "interrupted");
+  });
+
+  it("still classifies a genuine error_during_execution as failed (no over-suppression)", () => {
+    const result = makeResult({
+      subtype: "error_during_execution",
+      is_error: true,
+      stop_reason: "tool_use",
+      errors: ["Error: the sandbox tool crashed hard while writing output"],
+    });
+
+    assert.equal(isInterruptedResult(result), false);
+    assert.equal(turnStatusFromResult(result), "failed");
+  });
+});
 
 class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   private readonly queue: Array<SDKMessage> = [];
@@ -1306,6 +1350,70 @@ describe("ClaudeAdapterLive", () => {
       Effect.provide(harness.layer),
     );
   });
+
+  it.effect(
+    "treats the SDK post-interrupt error_during_execution result as interrupted without a runtime error",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+
+        const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 6).pipe(
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+
+        const session = yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          runtimeMode: "full-access",
+        });
+
+        const turn = yield* adapter.sendTurn({
+          threadId: session.threadId,
+          input: "hello",
+          attachments: [],
+        });
+
+        // Interrupting a turn mid-flight makes the SDK's final message the user
+        // prompt with no assistant reply, so it emits this shape. It must NOT
+        // surface a runtime error (red banner) — the sequence has no
+        // `runtime.error`, and the turn completes as interrupted.
+        harness.query.emit({
+          type: "result",
+          subtype: "error_during_execution",
+          is_error: true,
+          errors: ["[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null"],
+          stop_reason: null,
+          session_id: "sdk-session-ede",
+          uuid: "result-ede",
+        } as unknown as SDKMessage);
+
+        const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+        assert.deepEqual(
+          runtimeEvents.map((event) => event.type),
+          [
+            "session.started",
+            "session.configured",
+            "session.state.changed",
+            "turn.started",
+            "thread.started",
+            "turn.completed",
+          ],
+        );
+
+        const turnCompleted = runtimeEvents[runtimeEvents.length - 1];
+        assert.equal(turnCompleted?.type, "turn.completed");
+        if (turnCompleted?.type === "turn.completed") {
+          assert.equal(String(turnCompleted.turnId), String(turn.turnId));
+          assert.equal(turnCompleted.payload.state, "interrupted");
+        }
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
 
   it.effect("closes the session when the Claude stream aborts after a turn starts", () => {
     const harness = makeHarness();

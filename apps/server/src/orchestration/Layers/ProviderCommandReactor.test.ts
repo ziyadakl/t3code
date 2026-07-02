@@ -21,6 +21,7 @@ import {
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -33,7 +34,10 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { deriveServerPaths, ServerConfig } from "../../config.ts";
 import { TextGenerationError } from "@t3tools/contracts";
-import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
+import {
+  ProviderAdapterRequestError,
+  ProviderAdapterSessionClosedError,
+} from "../../provider/Errors.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
@@ -48,6 +52,7 @@ import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import {
+  isBenignTurnStartFailureCause,
   providerErrorLabel,
   providerErrorLabelFromInstanceHint,
   ProviderCommandReactorLive,
@@ -137,6 +142,34 @@ describe("ProviderCommandReactor", () => {
 
     it("uses the unknown driver kind when the resolved driver is not registered locally", () => {
       expect(providerErrorLabel("third_party_driver")).toBe("third_party_driver");
+    });
+  });
+
+  describe("isBenignTurnStartFailureCause", () => {
+    it("treats a concurrent-teardown ProviderAdapterSessionClosedError as benign", () => {
+      const cause = Cause.fail(
+        new ProviderAdapterSessionClosedError({
+          provider: "claudeAgent",
+          threadId: ThreadId.make("thread-1"),
+        }),
+      );
+      expect(isBenignTurnStartFailureCause(cause)).toBe(true);
+    });
+
+    it("treats an interrupt-only cause as benign", () => {
+      const cause = Cause.interrupt(0);
+      expect(isBenignTurnStartFailureCause(cause)).toBe(true);
+    });
+
+    it("does NOT suppress a genuine turn-start failure (no over-suppression)", () => {
+      const cause = Cause.fail(
+        new ProviderAdapterRequestError({
+          provider: "claudeAgent",
+          method: "turn/start",
+          detail: "genuine turn start boom",
+        }),
+      );
+      expect(isBenignTurnStartFailureCause(cause)).toBe(false);
     });
   });
 
@@ -466,6 +499,52 @@ describe("ProviderCommandReactor", () => {
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
+  });
+
+  it("still surfaces a lastError banner for a genuine turn-start failure", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.sendTurn.mockImplementationOnce(
+      () =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: "claudeAgent",
+            method: "turn/start",
+            detail: "genuine turn start boom",
+          }),
+        ) as never,
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-genuine-failure"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-genuine-failure"),
+          role: "user",
+          text: "hello reactor",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      return (
+        thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed") ??
+        false
+      );
+    });
+
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(thread?.session?.lastError).toContain("genuine turn start boom");
   });
 
   it("generates a thread title on the first turn", async () => {

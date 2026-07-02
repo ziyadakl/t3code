@@ -327,18 +327,42 @@ function resultErrorsText(result: SDKResultMessage): string {
     : "";
 }
 
-function isInterruptedResult(result: SDKResultMessage): boolean {
+/** First raw (non-lowercased) entry of a result's `errors[]`, or "". */
+function firstResultError(result: SDKResultMessage): string {
+  return "errors" in result && Array.isArray(result.errors) && typeof result.errors[0] === "string"
+    ? result.errors[0]
+    : "";
+}
+
+export function isInterruptedResult(result: SDKResultMessage): boolean {
   const errors = resultErrorsText(result);
   if (errors.includes("interrupt")) {
     return true;
   }
 
-  return (
+  if (
     result.subtype === "error_during_execution" &&
     result.is_error === false &&
     (errors.includes("request was aborted") ||
       errors.includes("interrupted by user") ||
       errors.includes("aborted"))
+  ) {
+    return true;
+  }
+
+  // SDK post-interrupt shape: interrupting a turn mid-flight leaves the Agent
+  // SDK's final message as the user prompt with no assistant reply, so the SDK
+  // emits an `error_during_execution` result flagged `is_error` with a null
+  // `stop_reason` and an `[ede_diagnostic] result_type=user last_content_type=n/a
+  // stop_reason=null` first error. That is an interrupt, not a genuine execution
+  // failure, so it must not surface as a red runtime error. Gated on the specific
+  // `[ede_diagnostic]` marker + null `stop_reason` so a real
+  // `error_during_execution` (non-null stop_reason, real error content) still
+  // classifies as failed.
+  return (
+    result.subtype === "error_during_execution" &&
+    result.stop_reason === null &&
+    firstResultError(result).startsWith("[ede_diagnostic]")
   );
 }
 
@@ -768,7 +792,7 @@ const buildUserMessageEffect = Effect.fn("buildUserMessageEffect")(function* (
   return buildUserMessage({ sdkContent });
 });
 
-function turnStatusFromResult(result: SDKResultMessage): ProviderRuntimeTurnStatus {
+export function turnStatusFromResult(result: SDKResultMessage): ProviderRuntimeTurnStatus {
   if (result.subtype === "success") {
     return "completed";
   }

@@ -27,7 +27,10 @@ import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { increment, orchestrationEventsProcessedTotal } from "../../observability/Metrics.ts";
-import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
+import {
+  ProviderAdapterRequestError,
+  ProviderAdapterSessionClosedError,
+} from "../../provider/Errors.ts";
 import type { ProviderServiceError } from "../../provider/Errors.ts";
 import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
@@ -43,7 +46,28 @@ import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import { canReplaceThreadTitle } from "../../resume/threadTitleRules.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
+const isProviderAdapterSessionClosedError = Schema.is(ProviderAdapterSessionClosedError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
+
+/**
+ * A turn-start failure that is really the expected concurrent teardown of an
+ * in-flight session — not an actionable error.
+ *
+ * Two shapes qualify:
+ *  - the fiber was interrupted (`hasInterruptsOnly`), and
+ *  - a `ProviderAdapterSessionClosedError` reached turn-start, which the Claude
+ *    adapter raises ONLY when the prompt-queue offer fails because the session
+ *    was closed out from under the starting turn (see `toSessionError` →
+ *    "closed"). That happens when a rewind/interrupt/stop tore the session down
+ *    while `sendTurn` was still starting. A genuine adapter fault surfaces as a
+ *    different tag (`ProviderAdapterRequestError`/process error) and is NOT
+ *    suppressed here.
+ */
+export const isBenignTurnStartFailureCause = (cause: Cause.Cause<unknown>): boolean =>
+  Cause.hasInterruptsOnly(cause) ||
+  cause.reasons.some(
+    (reason) => Cause.isFailReason(reason) && isProviderAdapterSessionClosedError(reason.error),
+  );
 
 type ProviderIntentEvent = Extract<
   OrchestrationEvent,
@@ -786,7 +810,7 @@ const make = Effect.gen(function* () {
     }
 
     const handleTurnStartFailure = (cause: Cause.Cause<unknown>) => {
-      if (Cause.hasInterruptsOnly(cause)) {
+      if (isBenignTurnStartFailureCause(cause)) {
         return Effect.void;
       }
       const detail = formatFailureDetail(cause);
