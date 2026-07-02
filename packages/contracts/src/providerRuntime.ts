@@ -411,6 +411,11 @@ export const ItemLifecyclePayload = Schema.Struct({
   title: Schema.optional(TrimmedNonEmptyStringSchema),
   detail: Schema.optional(TrimmedNonEmptyStringSchema),
   data: Schema.optional(Schema.Unknown),
+  // The tool_use_id of the parent Agent call for a nested subagent
+  // (absent/undefined for top-level items).
+  parentToolUseId: Schema.optional(RuntimeItemId),
+  // The subagent_type/name for a nested subagent.
+  subagentType: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type ItemLifecyclePayload = typeof ItemLifecyclePayload.Type;
 
