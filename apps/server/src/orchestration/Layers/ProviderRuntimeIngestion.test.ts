@@ -315,9 +315,7 @@ describe("ProviderRuntimeIngestion", () => {
       updatedAt: createdAt,
     });
 
-    const messageRepo = await runtime.runPromise(
-      Effect.service(ProjectionThreadMessageRepository),
-    );
+    const messageRepo = await runtime.runPromise(Effect.service(ProjectionThreadMessageRepository));
 
     return {
       engine,
@@ -982,6 +980,94 @@ describe("ProviderRuntimeIngestion", () => {
     expect(data?.toolCallId).toBe("tool-read-1");
     expect(data?.kind).toBe("read");
     expect(rawOutput?.content).toBe('import * as Effect from "effect/Effect"\n');
+  });
+
+  it("surfaces the subagent triple onto started collab-agent activities", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "item.started",
+      eventId: asEventId("evt-nested-agent-started"),
+      provider: ProviderDriverKind.make("claudeAgent"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-nested-agent"),
+      itemId: asItemId("nested-agent-1"),
+      payload: {
+        itemType: "collab_agent_tool_call",
+        status: "inProgress",
+        title: "Delegate to subagent",
+        parentToolUseId: asItemId("parent-agent-1"),
+        subagentType: "code-reviewer",
+        data: {
+          toolName: "Task",
+          input: { subagent_type: "code-reviewer" },
+        },
+      },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-nested-agent-started",
+      ),
+    );
+    const activity = thread.activities.find(
+      (entry: ProviderRuntimeTestActivity) => entry.id === "evt-nested-agent-started",
+    );
+    const payload =
+      activity?.payload && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>)
+        : undefined;
+
+    expect(activity?.kind).toBe("tool.started");
+    expect(String(payload?.toolUseId)).toBe("nested-agent-1");
+    expect(String(payload?.parentToolUseId)).toBe("parent-agent-1");
+    expect(payload?.subagentType).toBe("code-reviewer");
+  });
+
+  it("surfaces the subagent triple onto completed collab-agent activities", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-nested-agent-completed"),
+      provider: ProviderDriverKind.make("claudeAgent"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-nested-agent"),
+      itemId: asItemId("nested-agent-1"),
+      payload: {
+        itemType: "collab_agent_tool_call",
+        status: "completed",
+        title: "Delegate to subagent",
+        parentToolUseId: asItemId("parent-agent-1"),
+        subagentType: "code-reviewer",
+        data: {
+          toolName: "Task",
+          result: { content: "review complete" },
+        },
+      },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-nested-agent-completed",
+      ),
+    );
+    const activity = thread.activities.find(
+      (entry: ProviderRuntimeTestActivity) => entry.id === "evt-nested-agent-completed",
+    );
+    const payload =
+      activity?.payload && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>)
+        : undefined;
+
+    expect(activity?.kind).toBe("tool.completed");
+    expect(String(payload?.toolUseId)).toBe("nested-agent-1");
+    expect(String(payload?.parentToolUseId)).toBe("parent-agent-1");
+    expect(payload?.subagentType).toBe("code-reviewer");
   });
 
   it("normalizes command execution activities to ran-command summaries", async () => {

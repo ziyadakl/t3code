@@ -165,6 +165,10 @@ interface ToolInFlight {
   readonly input: Record<string, unknown>;
   readonly partialInputJson: string;
   readonly lastEmittedInputFingerprint?: string;
+  // Nested subagent tagging: the tool_use_id of the parent Agent call (nested
+  // subagents only) and the subagent_type this call was dispatched with.
+  readonly parentToolUseId?: string;
+  readonly subagentType?: string;
 }
 
 interface ClaudeSessionContext {
@@ -183,6 +187,14 @@ interface ClaudeSessionContext {
     items: Array<unknown>;
   }>;
   readonly inFlightTools: Map<number, ToolInFlight>;
+  // Nested (grandchild) subagent tool_use ids already emitted as item.started.
+  // Nested calls arrive only as cumulative/repeated assistant snapshots, so this
+  // guards against re-emitting the lifecycle for the same block on every repeat.
+  readonly nestedStartedToolUseIds: Set<string>;
+  // Monotonically-decreasing synthetic index for registering nested subagent tools
+  // into inFlightTools (which is keyed by the streamed block index; nested calls
+  // never stream, so they get negative indices that cannot collide with real ones).
+  nextNestedToolIndex: number;
   turnState: ClaudeTurnState | undefined;
   lastKnownContextWindow: number | undefined;
   lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
@@ -567,6 +579,28 @@ function classifyToolItemType(toolName: string): CanonicalItemType {
     return "image_view";
   }
   return "dynamic_tool_call";
+}
+
+// The subagent_type/name a Claude Agent/Task tool_use call was invoked with.
+// Only present on collab-agent tool inputs; returns undefined for everything else.
+function subagentTypeFromInput(input: Record<string, unknown>): string | undefined {
+  const raw = input["subagent_type"];
+  return typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : undefined;
+}
+
+// Computes the subagent-tagging payload additions ({parentToolUseId, subagentType})
+// for a tool. Nested subagent tools carry an explicit parent; top-level agent tools
+// backfill their type from the (eventually) parsed input. Both keys are optional so
+// non-agent tools contribute nothing and the contract's non-empty guards hold.
+function subagentPayloadFields(tool: ToolInFlight): {
+  parentToolUseId?: RuntimeItemId;
+  subagentType?: string;
+} {
+  const subagentType = tool.subagentType ?? subagentTypeFromInput(tool.input);
+  return {
+    ...(tool.parentToolUseId ? { parentToolUseId: asRuntimeItemId(tool.parentToolUseId) } : {}),
+    ...(subagentType ? { subagentType } : {}),
+  };
 }
 
 function isReadOnlyToolName(toolName: string): boolean {
@@ -1890,6 +1924,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             status: "inProgress",
             title: nextTool.title,
             ...(nextTool.detail ? { detail: nextTool.detail } : {}),
+            ...subagentPayloadFields(nextTool),
             data: {
               toolName: nextTool.toolName,
               input: nextTool.input,
@@ -1985,6 +2020,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           status: "inProgress",
           title: tool.title,
           ...(tool.detail ? { detail: tool.detail } : {}),
+          ...subagentPayloadFields(tool),
           data: {
             toolName: tool.toolName,
             input: toolInput,
@@ -2062,6 +2098,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           status: toolResult.isError ? "failed" : "inProgress",
           title: tool.title,
           ...(tool.detail ? { detail: tool.detail } : {}),
+          ...subagentPayloadFields(tool),
           data: toolData,
         },
         providerRefs: nativeProviderRefs(context, {
@@ -2114,6 +2151,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           status: itemStatus,
           title: tool.title,
           ...(tool.detail ? { detail: tool.detail } : {}),
+          ...subagentPayloadFields(tool),
           data: toolData,
         },
         providerRefs: nativeProviderRefs(context, {
@@ -2128,6 +2166,78 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
       context.inFlightTools.delete(index);
     }
+  });
+
+  // Nested (grandchild) subagent Agent/Task calls arrive only inside batched
+  // assistant snapshots tagged with a parent_tool_use_id — they never stream
+  // content_block_start, so the normal streaming lifecycle path never sees them.
+  // This registers the nested tool into inFlightTools (so the existing
+  // tool_result completion loop can close it) and emits item.started tagged with
+  // the {toolUseId, parentToolUseId, subagentType} triple. Snapshots are
+  // cumulative, so the first sighting of a block.id emits and repeats are skipped.
+  const startNestedSubagentTool = Effect.fn("startNestedSubagentTool")(function* (
+    context: ClaudeSessionContext,
+    args: {
+      readonly toolUseId: string;
+      readonly toolName: string;
+      readonly input: Record<string, unknown>;
+      readonly parentToolUseId: string;
+      readonly rawPayload: unknown;
+    },
+  ) {
+    if (context.nestedStartedToolUseIds.has(args.toolUseId)) {
+      return;
+    }
+    context.nestedStartedToolUseIds.add(args.toolUseId);
+
+    const itemType = classifyToolItemType(args.toolName);
+    const subagentType = subagentTypeFromInput(args.input);
+    const detail = summarizeToolRequest(args.toolName, args.input);
+    const index = context.nextNestedToolIndex;
+    context.nextNestedToolIndex -= 1;
+
+    const tool: ToolInFlight = {
+      itemId: args.toolUseId,
+      itemType,
+      toolName: args.toolName,
+      title: titleForTool(itemType),
+      ...(detail ? { detail } : {}),
+      input: args.input,
+      partialInputJson: "",
+      parentToolUseId: args.parentToolUseId,
+      ...(subagentType ? { subagentType } : {}),
+    };
+    context.inFlightTools.set(index, tool);
+
+    const stamp = yield* makeEventStamp();
+    yield* offerRuntimeEvent({
+      type: "item.started",
+      eventId: stamp.eventId,
+      provider: PROVIDER,
+      createdAt: stamp.createdAt,
+      threadId: context.session.threadId,
+      ...(context.turnState ? { turnId: asCanonicalTurnId(context.turnState.turnId) } : {}),
+      itemId: asRuntimeItemId(tool.itemId),
+      payload: {
+        itemType: tool.itemType,
+        status: "inProgress",
+        title: tool.title,
+        ...(tool.detail ? { detail: tool.detail } : {}),
+        ...subagentPayloadFields(tool),
+        data: {
+          toolName: tool.toolName,
+          input: tool.input,
+        },
+      },
+      providerRefs: nativeProviderRefs(context, {
+        providerItemId: tool.itemId,
+      }),
+      raw: {
+        source: "claude.sdk.message",
+        method: "claude/assistant/nested-subagent",
+        payload: args.rawPayload,
+      },
+    });
   });
 
   const handleAssistantMessage = Effect.fn("handleAssistantMessage")(function* (
@@ -2191,6 +2301,28 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           name?: unknown;
           input?: unknown;
         };
+        // Gate on parent_tool_use_id != null so this fires ONLY for nested
+        // (grandchild) subagent calls. Top-level subagent tool_use blocks stream
+        // separately via content_block_start, so emitting here too would double up.
+        if (
+          message.parent_tool_use_id != null &&
+          toolUse.type === "tool_use" &&
+          typeof toolUse.id === "string" &&
+          typeof toolUse.name === "string" &&
+          classifyToolItemType(toolUse.name) === "collab_agent_tool_call"
+        ) {
+          yield* startNestedSubagentTool(context, {
+            toolUseId: toolUse.id,
+            toolName: toolUse.name,
+            input:
+              typeof toolUse.input === "object" && toolUse.input !== null
+                ? (toolUse.input as Record<string, unknown>)
+                : {},
+            parentToolUseId: message.parent_tool_use_id,
+            rawPayload: message,
+          });
+          continue;
+        }
         if (toolUse.type !== "tool_use" || toolUse.name !== "ExitPlanMode") {
           continue;
         }
@@ -3242,6 +3374,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         pendingUserInputs,
         turns: [],
         inFlightTools,
+        nestedStartedToolUseIds: new Set<string>(),
+        nextNestedToolIndex: -1,
         turnState: undefined,
         lastKnownContextWindow: undefined,
         lastKnownTokenUsage: undefined,

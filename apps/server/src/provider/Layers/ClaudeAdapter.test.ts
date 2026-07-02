@@ -1125,6 +1125,117 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect(
+    "emits nested subagent lifecycle tagged with the parent/type triple and dedupes cumulative snapshots",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+
+        const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.takeUntil((event) => event.type === "turn.completed"),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+
+        const session = yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          runtimeMode: "full-access",
+        });
+
+        yield* adapter.sendTurn({
+          threadId: session.threadId,
+          input: "spawn a nested subagent",
+          attachments: [],
+        });
+
+        const nestedSnapshot = {
+          type: "assistant",
+          session_id: "sdk-session-nested",
+          uuid: "assistant-nested-1",
+          parent_tool_use_id: "parent-agent-1",
+          message: {
+            id: "assistant-message-nested-1",
+            content: [
+              {
+                type: "tool_use",
+                id: "nested-agent-1",
+                name: "Task",
+                input: {
+                  subagent_type: "code-reviewer",
+                  description: "review the diff",
+                },
+              },
+            ],
+          },
+        } as unknown as SDKMessage;
+
+        // First sighting → one item.started.
+        harness.query.emit(nestedSnapshot);
+        // Cumulative snapshots repeat the same block.id → must NOT re-emit.
+        harness.query.emit(nestedSnapshot);
+
+        // Nested completion arrives as a tool_result in a user message.
+        harness.query.emit({
+          type: "user",
+          session_id: "sdk-session-nested",
+          uuid: "user-nested-result",
+          parent_tool_use_id: "parent-agent-1",
+          message: {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "nested-agent-1",
+                content: "review complete",
+              },
+            ],
+          },
+        } as unknown as SDKMessage);
+
+        harness.query.emit({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          errors: [],
+          session_id: "sdk-session-nested",
+          uuid: "result-nested",
+        } as unknown as SDKMessage);
+
+        const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+
+        const nestedStarts = runtimeEvents.filter(
+          (event) => event.type === "item.started" && String(event.itemId) === "nested-agent-1",
+        );
+        assert.equal(nestedStarts.length, 1, "exactly one item.started despite repeated snapshots");
+        const nestedStart = runtimeEvents.find(
+          (event) => event.type === "item.started" && String(event.itemId) === "nested-agent-1",
+        );
+        assert.equal(nestedStart?.type, "item.started");
+        if (nestedStart?.type === "item.started") {
+          assert.equal(nestedStart.payload.itemType, "collab_agent_tool_call");
+          assert.equal(String(nestedStart.itemId), "nested-agent-1");
+          assert.equal(String(nestedStart.payload.parentToolUseId), "parent-agent-1");
+          assert.equal(nestedStart.payload.subagentType, "code-reviewer");
+        }
+
+        const nestedCompleted = runtimeEvents.find(
+          (event) => event.type === "item.completed" && String(event.itemId) === "nested-agent-1",
+        );
+        assert.equal(nestedCompleted?.type, "item.completed");
+        if (nestedCompleted?.type === "item.completed") {
+          assert.equal(nestedCompleted.payload.itemType, "collab_agent_tool_call");
+          assert.equal(String(nestedCompleted.payload.parentToolUseId), "parent-agent-1");
+          assert.equal(nestedCompleted.payload.subagentType, "code-reviewer");
+        }
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
   it.effect("falls back to a default plan step label for blank TodoWrite content", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

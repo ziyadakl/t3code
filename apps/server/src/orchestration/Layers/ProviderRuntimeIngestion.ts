@@ -610,6 +610,13 @@ function runtimeEventToActivities(
           summary: event.payload.title ?? "Tool",
           payload: {
             itemType: event.payload.itemType,
+            ...(event.itemId !== undefined ? { toolUseId: event.itemId } : {}),
+            ...(event.payload.parentToolUseId !== undefined
+              ? { parentToolUseId: event.payload.parentToolUseId }
+              : {}),
+            ...(event.payload.subagentType !== undefined
+              ? { subagentType: event.payload.subagentType }
+              : {}),
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
             ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
           },
@@ -632,6 +639,13 @@ function runtimeEventToActivities(
           summary: `${event.payload.title ?? "Tool"} started`,
           payload: {
             itemType: event.payload.itemType,
+            ...(event.itemId !== undefined ? { toolUseId: event.itemId } : {}),
+            ...(event.payload.parentToolUseId !== undefined
+              ? { parentToolUseId: event.payload.parentToolUseId }
+              : {}),
+            ...(event.payload.subagentType !== undefined
+              ? { subagentType: event.payload.subagentType }
+              : {}),
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
