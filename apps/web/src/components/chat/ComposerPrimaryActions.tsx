@@ -24,10 +24,25 @@ interface ComposerPrimaryActionsProps {
   isPreparingWorktree: boolean;
   hasSendableContent: boolean;
   preserveComposerFocusOnPointerDown?: boolean;
+  runningSubagentCount?: number;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
   onImplementPlanInNewThread: () => void;
 }
+
+/**
+ * Terse always-visible label for the number of top-level subagents running under the
+ * active turn. Only shown while the turn is running and at least one subagent is live.
+ */
+export const formatRunningSubagentLabel = (input: {
+  isRunning: boolean;
+  count: number;
+}): string | null => {
+  if (!input.isRunning || input.count <= 0) {
+    return null;
+  }
+  return `${input.count} running`;
+};
 
 export const formatPendingPrimaryActionLabel = (input: {
   compact: boolean;
@@ -63,6 +78,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   isPreparingWorktree,
   hasSendableContent,
   preserveComposerFocusOnPointerDown = false,
+  runningSubagentCount = 0,
   onPreviousPendingQuestion,
   onInterrupt,
   onImplementPlanInNewThread,
@@ -123,18 +139,29 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   }
 
   if (isRunning) {
+    const runningLabel = formatRunningSubagentLabel({ isRunning, count: runningSubagentCount });
     return (
-      <button
-        type="button"
-        className="flex size-8 cursor-pointer items-center justify-center rounded-full bg-rose-500/90 text-white transition-all duration-150 hover:bg-rose-500 hover:scale-105 sm:h-8 sm:w-8"
-        {...pointerFocusProps}
-        onClick={onInterrupt}
-        aria-label="Stop generation"
-      >
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
-          <rect x="2" y="2" width="8" height="8" rx="1.5" />
-        </svg>
-      </button>
+      <div className={cn("flex items-center justify-end", compact ? "gap-1.5" : "gap-2")}>
+        {runningLabel ? (
+          <span
+            className="text-muted-foreground/70 whitespace-nowrap text-xs tabular-nums"
+            aria-live="polite"
+          >
+            {runningLabel}
+          </span>
+        ) : null}
+        <button
+          type="button"
+          className="flex size-8 cursor-pointer items-center justify-center rounded-full bg-rose-500/90 text-white transition-all duration-150 hover:bg-rose-500 hover:scale-105 sm:h-8 sm:w-8"
+          {...pointerFocusProps}
+          onClick={onInterrupt}
+          aria-label="Stop generation"
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+            <rect x="2" y="2" width="8" height="8" rx="1.5" />
+          </svg>
+        </button>
+      </div>
     );
   }
 

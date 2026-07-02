@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { formatPendingPrimaryActionLabel } from "./ComposerPrimaryActions";
+import {
+  formatPendingPrimaryActionLabel,
+  formatRunningSubagentLabel,
+} from "./ComposerPrimaryActions";
 
 describe("formatPendingPrimaryActionLabel", () => {
   it("returns 'Submitting...' while responding", () => {
@@ -89,5 +92,20 @@ describe("formatPendingPrimaryActionLabel", () => {
         questionIndex: 5,
       }),
     ).toBe("Submit answers");
+  });
+});
+
+describe("formatRunningSubagentLabel", () => {
+  it("shows the count while running with at least one subagent", () => {
+    expect(formatRunningSubagentLabel({ isRunning: true, count: 1 })).toBe("1 running");
+    expect(formatRunningSubagentLabel({ isRunning: true, count: 3 })).toBe("3 running");
+  });
+
+  it("is hidden when no subagents are running", () => {
+    expect(formatRunningSubagentLabel({ isRunning: true, count: 0 })).toBeNull();
+  });
+
+  it("is hidden when the turn is not running", () => {
+    expect(formatRunningSubagentLabel({ isRunning: false, count: 2 })).toBeNull();
   });
 });

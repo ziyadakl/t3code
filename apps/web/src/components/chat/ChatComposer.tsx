@@ -111,6 +111,7 @@ import type { PendingUserInputDraftAnswer } from "../../pendingUserInput";
 import type { PendingApproval, PendingUserInput } from "../../session-logic";
 import { deriveLatestContextWindowSnapshot } from "../../lib/contextWindow";
 import { useHeldContextWindow } from "./useHeldContextWindow";
+import { useRunningSubagentCount } from "../../hooks/useRunningSubagentCount";
 import { formatProviderSkillDisplayName } from "../../providerSkillPresentation";
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
@@ -297,6 +298,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
     isComplete: boolean;
   } | null;
   isRunning: boolean;
+  runningSubagentCount: number;
   showPlanFollowUpPrompt: boolean;
   promptHasText: boolean;
   isSendBusy: boolean;
@@ -318,6 +320,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         compact={props.compact}
         pendingAction={props.pendingAction}
         isRunning={props.isRunning}
+        runningSubagentCount={props.runningSubagentCount}
         showPlanFollowUpPrompt={props.showPlanFollowUpPrompt}
         promptHasText={props.promptHasText}
         isSendBusy={props.isSendBusy}
@@ -750,6 +753,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // Held steady while a turn runs, and reset per-thread on a thread switch — see
   // useHeldContextWindow for the why (mid-run balloon + cross-thread leak).
   const activeContextWindow = useHeldContextWindow(activeThreadId, liveContextWindow, phase);
+  // Live count of top-level subagents running under the active turn, read from the store so
+  // it stays anchored to the always-on-screen composer working state (see useRunningSubagentCount).
+  const runningSubagentCount = useRunningSubagentCount(activeThreadId);
 
   // ------------------------------------------------------------------
   // Composer-local state
@@ -2372,6 +2378,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   activeContextWindow={activeContextWindow}
                   pendingAction={pendingPrimaryAction}
                   isRunning={phase === "running"}
+                  runningSubagentCount={runningSubagentCount}
                   showPlanFollowUpPrompt={pendingUserInputs.length === 0 && showPlanFollowUpPrompt}
                   promptHasText={prompt.trim().length > 0}
                   isSendBusy={isSendBusy}
