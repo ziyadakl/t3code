@@ -147,6 +147,16 @@ describe("buildRunningSubagentTree", () => {
     expect(rows).toEqual([{ subagentType: "Explore", descendantCount: 0 }]);
   });
 
+  it('falls back to "agent" while a top-level node is running without a known type', () => {
+    // The server streams `content_block_start` (item.started) with empty input, so the
+    // real subagent_type only lands on a later `item.updated`. Until that update carries
+    // the type, the running top-level row must show the generic fallback. This is the
+    // bug the server-side fix addresses: the update now surfaces subagentType so the row
+    // upgrades from "agent" to the real type mid-run (see the backfill test above).
+    const rows = buildRunningSubagentTree([collab({ kind: "tool.started", toolUseId: "a" })]);
+    expect(rows).toEqual([{ subagentType: "agent", descendantCount: 0 }]);
+  });
+
   it("ignores non-collab activities", () => {
     const rows = buildRunningSubagentTree([
       other("tool.started"),

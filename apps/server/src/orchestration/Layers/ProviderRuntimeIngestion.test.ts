@@ -1070,6 +1070,50 @@ describe("ProviderRuntimeIngestion", () => {
     expect(payload?.subagentType).toBe("code-reviewer");
   });
 
+  it("surfaces the subagent triple onto updated collab-agent activities", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "item.updated",
+      eventId: asEventId("evt-nested-agent-updated"),
+      provider: ProviderDriverKind.make("claudeAgent"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-nested-agent"),
+      itemId: asItemId("nested-agent-1"),
+      payload: {
+        itemType: "collab_agent_tool_call",
+        status: "inProgress",
+        title: "Delegate to subagent",
+        parentToolUseId: asItemId("parent-agent-1"),
+        subagentType: "general-purpose",
+        data: {
+          toolName: "Task",
+          input: { subagent_type: "general-purpose" },
+        },
+      },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-nested-agent-updated",
+      ),
+    );
+    const activity = thread.activities.find(
+      (entry: ProviderRuntimeTestActivity) => entry.id === "evt-nested-agent-updated",
+    );
+    const payload =
+      activity?.payload && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>)
+        : undefined;
+
+    expect(activity?.kind).toBe("tool.updated");
+    expect(String(payload?.toolUseId)).toBe("nested-agent-1");
+    expect(String(payload?.parentToolUseId)).toBe("parent-agent-1");
+    expect(payload?.subagentType).toBe("general-purpose");
+  });
+
   it("normalizes command execution activities to ran-command summaries", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
