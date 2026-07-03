@@ -319,26 +319,18 @@ describe("MessagesTimeline", () => {
     }
   });
 
-  it("raises the jump button above the scroll-to-bottom slot when both are visible (F6)", async () => {
-    // Not raised: shares the bottom-most slot (bottom-1) with the scroll pill.
-    const flat = await render(<JumpToLastMessageButton onJump={() => {}} />);
+  it("anchors the jump button top-left so it never collides with the scroll-to-bottom pill", async () => {
+    const screen = await render(<JumpToLastMessageButton onJump={() => {}} />);
     try {
       const button = page.getByRole("button", { name: "Jump to previous message" }).element();
       const wrapper = button.closest("div");
-      expect(wrapper?.className).toContain("bottom-1");
+      expect(wrapper?.className).toContain("top-2");
+      expect(wrapper?.className).toContain("left-3");
+      expect(wrapper?.className).not.toContain("bottom-1");
       expect(wrapper?.className).not.toContain("bottom-12");
+      expect(wrapper?.className).not.toContain("-translate-x-1/2");
     } finally {
-      await flat.unmount();
-    }
-
-    // Raised: offset up so it does not overlap the scroll-to-bottom pill.
-    const raised = await render(<JumpToLastMessageButton onJump={() => {}} raised />);
-    try {
-      const button = page.getByRole("button", { name: "Jump to previous message" }).element();
-      const wrapper = button.closest("div");
-      expect(wrapper?.className).toContain("bottom-12");
-    } finally {
-      await raised.unmount();
+      await screen.unmount();
     }
   });
 });

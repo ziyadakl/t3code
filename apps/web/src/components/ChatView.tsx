@@ -797,25 +797,13 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
 /**
  * Step-back navigator — a compact up-chevron that walks the transcript backward
  * through the user's own prompts, one per click (see nextJumpStep). The parent
- * owns the cursor + scroll; this component just fires {@link onJump}. Sibling of
- * the scroll-to-bottom pill; when {@link raised} it sits above that pill so the
- * two controls never overlap (both are meaningful while scrolled up: step back
- * through your prompts OR jump to the end).
+ * owns the cursor + scroll; this component just fires {@link onJump}. Anchored
+ * top-left of the transcript viewport so it never collides with the
+ * scroll-to-bottom pill (bottom-center).
  */
-export function JumpToLastMessageButton({
-  onJump,
-  raised = false,
-}: {
-  onJump: () => void;
-  raised?: boolean;
-}) {
+export function JumpToLastMessageButton({ onJump }: { onJump: () => void }) {
   return (
-    <div
-      className={cn(
-        "pointer-events-none absolute left-1/2 z-30 flex -translate-x-1/2 justify-center py-1.5",
-        raised ? "bottom-12" : "bottom-1",
-      )}
-    >
+    <div className="pointer-events-none absolute left-3 top-2 z-30 flex justify-start py-1.5">
       <button
         type="button"
         aria-label="Jump to previous message"
@@ -4534,17 +4522,13 @@ export default function ChatView(props: ChatViewProps) {
             {/* step-back navigator — a compact up-chevron that walks backward
                 through the user's own prompts, one per click. Hidden when the
                 latest prompt is already on screen (idle) and shown mid-cycle so
-                repeated clicks keep stepping up. Independent of the
-                scroll-to-bottom pill: while scrolled up BOTH are useful (step
-                back through your prompts OR jump to the end), so when that pill
-                is showing this one is raised above it to avoid overlap. */}
+                repeated clicks keep stepping up. Anchored top-left so it never
+                overlaps the scroll-to-bottom pill (bottom-center). */}
             {shouldShowJumpButton({
               targetsLength: jumpToUserMessages.targets.length,
               cursor: jumpCursor,
               latestVisible: latestUserMessageVisible,
-            }) && (
-              <JumpToLastMessageButton onJump={handleJumpStep} raised={showScrollToBottom} />
-            )}
+            }) && <JumpToLastMessageButton onJump={handleJumpStep} />}
 
             {/* Floating "Add to input" pill over transcript text selections. */}
             <SelectionQuoteToolbar
