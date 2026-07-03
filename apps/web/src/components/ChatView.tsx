@@ -165,6 +165,8 @@ import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
+import { SelectionQuoteToolbar } from "./chat/SelectionQuoteToolbar";
+import { appendQuoteToDraft } from "./chat/selectionQuote.logic";
 import {
   deriveMessagesTimelineRows,
   isEffectivelyAtEnd,
@@ -3208,6 +3210,25 @@ export default function ChatView(props: ChatViewProps) {
     [composerDraftTarget, composerRef, promptTextByUserMessageId, setComposerDraftPrompt],
   );
 
+  // Append highlighted transcript text into the composer draft (never replaces
+  // an in-progress draft). Mirrors prefillComposerWithPrompt but appends.
+  const quoteSelectionIntoComposer = useCallback(
+    (quoted: string) => {
+      const current = promptRef.current ?? "";
+      const { text, cursor } = appendQuoteToDraft(current, quoted);
+      if (text === current) return;
+      promptRef.current = text;
+      setComposerDraftPrompt(composerDraftTarget, text);
+      composerRef.current?.resetCursorState({
+        cursor: collapseExpandedComposerCursor(text, cursor),
+        prompt: text,
+        detectTrigger: true,
+      });
+      window.requestAnimationFrame(() => composerRef.current?.focusAtEnd());
+    },
+    [composerDraftTarget, composerRef, setComposerDraftPrompt],
+  );
+
   // Guard shared by every rewind action. Returns null when blocked.
   const resolveRewindContext = useCallback(() => {
     const localApi = readLocalApi();
@@ -4524,6 +4545,12 @@ export default function ChatView(props: ChatViewProps) {
             }) && (
               <JumpToLastMessageButton onJump={handleJumpStep} raised={showScrollToBottom} />
             )}
+
+            {/* Floating "Add to input" pill over transcript text selections. */}
+            <SelectionQuoteToolbar
+              boundaryRef={messagesWrapperRef}
+              onQuote={quoteSelectionIntoComposer}
+            />
           </div>
 
           {/* Input bar */}
