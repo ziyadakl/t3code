@@ -21,11 +21,14 @@ export interface PersistedUiState {
   projectOrderCwds?: string[];
   defaultAdvertisedEndpointKey?: string | null;
   threadChangedFilesExpandedById?: Record<string, Record<string, boolean>>;
+  sandcastleIdleCollapsed?: boolean;
 }
 
 export interface UiProjectState {
   projectExpandedById: Record<string, boolean>;
   projectOrder: string[];
+  /** Whether the Sandcastle dashboard "Idle" group is collapsed (default false). */
+  sandcastleIdleCollapsed: boolean;
 }
 
 export interface UiThreadState {
@@ -55,6 +58,7 @@ export interface SyncThreadInput {
 const initialState: UiState = {
   projectExpandedById: {},
   projectOrder: [],
+  sandcastleIdleCollapsed: false,
   threadLastVisitedAtById: {},
   threadChangedFilesExpandedById: {},
   defaultAdvertisedEndpointKey: null,
@@ -103,6 +107,7 @@ function readPersistedState(): UiState {
       threadChangedFilesExpandedById: sanitizePersistedThreadChangedFilesExpanded(
         parsed.threadChangedFilesExpandedById,
       ),
+      sandcastleIdleCollapsed: parsed.sandcastleIdleCollapsed === true,
     };
   } catch {
     return initialState;
@@ -195,6 +200,7 @@ export function persistState(state: UiState): void {
         projectOrderCwds,
         defaultAdvertisedEndpointKey: state.defaultAdvertisedEndpointKey,
         threadChangedFilesExpandedById,
+        sandcastleIdleCollapsed: state.sandcastleIdleCollapsed,
       } satisfies PersistedUiState),
     );
     if (!legacyKeysCleanedUp) {
@@ -577,6 +583,13 @@ export function toggleProject(state: UiState, projectId: string): UiState {
   };
 }
 
+export function toggleSandcastleIdleCollapsed(state: UiState): UiState {
+  return {
+    ...state,
+    sandcastleIdleCollapsed: !state.sandcastleIdleCollapsed,
+  };
+}
+
 export function setProjectExpanded(state: UiState, projectId: string, expanded: boolean): UiState {
   if ((state.projectExpandedById[projectId] ?? true) === expanded) {
     return state;
@@ -642,6 +655,7 @@ interface UiStateStore extends UiState {
   setThreadChangedFilesExpanded: (threadId: string, turnId: string, expanded: boolean) => void;
   setDefaultAdvertisedEndpointKey: (key: string | null) => void;
   toggleProject: (projectId: string) => void;
+  toggleSandcastleIdleCollapsed: () => void;
   setProjectExpanded: (projectId: string, expanded: boolean) => void;
   reorderProjects: (
     draggedProjectIds: readonly string[],
@@ -663,6 +677,7 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
   setDefaultAdvertisedEndpointKey: (key) =>
     set((state) => setDefaultAdvertisedEndpointKey(state, key)),
   toggleProject: (projectId) => set((state) => toggleProject(state, projectId)),
+  toggleSandcastleIdleCollapsed: () => set((state) => toggleSandcastleIdleCollapsed(state)),
   setProjectExpanded: (projectId, expanded) =>
     set((state) => setProjectExpanded(state, projectId, expanded)),
   reorderProjects: (draggedProjectIds, targetProjectIds) =>

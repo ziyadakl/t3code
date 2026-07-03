@@ -12,7 +12,9 @@ import {
   formatRelativeAge,
   finishedRunAgeHint,
   historyLinksForPhase,
+  groupSandcastleRows,
   STALE_AFTER_MS,
+  type SandcastleGroupItem,
 } from "./sandcastleView.ts";
 import type {
   RepositoryIdentity,
@@ -412,5 +414,104 @@ describe("queueReadyDisplay", () => {
     });
     expect(d?.text).toBe("queue unavailable");
     expect(d?.muted).toBe(true);
+  });
+});
+
+describe("groupSandcastleRows", () => {
+  function row(
+    id: string,
+    state: SandcastleGroupItem<string>["state"],
+    updatedAt: string | null,
+  ): SandcastleGroupItem<string> {
+    return { item: id, state, updatedAt };
+  }
+
+  it("returns empty groups for empty input", () => {
+    const g = groupSandcastleRows<string>([]);
+    expect(g.running).toEqual([]);
+    expect(g.idle).toEqual([]);
+  });
+
+  it("sorts an all-running set most-recent first", () => {
+    const g = groupSandcastleRows([
+      row("a", "running", "2026-06-01T00:00:00Z"),
+      row("b", "running", "2026-06-03T00:00:00Z"),
+      row("c", "restarting", "2026-06-02T00:00:00Z"),
+    ]);
+    expect(g.running).toEqual(["b", "c", "a"]);
+    expect(g.idle).toEqual([]);
+  });
+
+  it("sorts an all-idle set most-recent first", () => {
+    const g = groupSandcastleRows([
+      row("a", "done", "2026-06-01T00:00:00Z"),
+      row("b", "stopped", "2026-06-03T00:00:00Z"),
+      row("c", "unhealthy", "2026-06-02T00:00:00Z"),
+    ]);
+    expect(g.idle).toEqual(["b", "c", "a"]);
+    expect(g.running).toEqual([]);
+  });
+
+  it("splits a mixed set and sorts each group desc", () => {
+    const g = groupSandcastleRows([
+      row("run-old", "running", "2026-06-01T00:00:00Z"),
+      row("idle-new", "done", "2026-06-05T00:00:00Z"),
+      row("run-new", "restarting", "2026-06-04T00:00:00Z"),
+      row("idle-old", "stopped", "2026-06-02T00:00:00Z"),
+    ]);
+    expect(g.running).toEqual(["run-new", "run-old"]);
+    expect(g.idle).toEqual(["idle-new", "idle-old"]);
+  });
+
+  it("sorts rows with null updatedAt to the end, keeping input order among them", () => {
+    const g = groupSandcastleRows([
+      row("no-ts-1", "done", null),
+      row("has-ts", "done", "2026-06-02T00:00:00Z"),
+      row("no-ts-2", "done", null),
+    ]);
+    expect(g.idle).toEqual(["has-ts", "no-ts-1", "no-ts-2"]);
+  });
+
+  it("sorts unparseable updatedAt to the end like null", () => {
+    const g = groupSandcastleRows([
+      row("bad", "done", "not-a-date"),
+      row("good", "done", "2026-06-02T00:00:00Z"),
+    ]);
+    expect(g.idle).toEqual(["good", "bad"]);
+  });
+
+  it("treats a null state as idle", () => {
+    const g = groupSandcastleRows([row("no-run", null, null)]);
+    expect(g.idle).toEqual(["no-run"]);
+    expect(g.running).toEqual([]);
+  });
+
+  it("classifies running and restarting as running", () => {
+    const g = groupSandcastleRows([
+      row("r1", "running", "2026-06-01T00:00:00Z"),
+      row("r2", "restarting", "2026-06-01T00:00:00Z"),
+    ]);
+    expect(new Set(g.running)).toEqual(new Set(["r1", "r2"]));
+    expect(g.idle).toEqual([]);
+  });
+
+  it("classifies done, stopped and unhealthy as idle", () => {
+    const g = groupSandcastleRows([
+      row("d", "done", "2026-06-01T00:00:00Z"),
+      row("s", "stopped", "2026-06-01T00:00:00Z"),
+      row("u", "unhealthy", "2026-06-01T00:00:00Z"),
+    ]);
+    expect(g.running).toEqual([]);
+    expect(new Set(g.idle)).toEqual(new Set(["d", "s", "u"]));
+  });
+
+  it("keeps stable input order for equal timestamps", () => {
+    const ts = "2026-06-01T00:00:00Z";
+    const g = groupSandcastleRows([
+      row("first", "running", ts),
+      row("second", "running", ts),
+      row("third", "running", ts),
+    ]);
+    expect(g.running).toEqual(["first", "second", "third"]);
   });
 });

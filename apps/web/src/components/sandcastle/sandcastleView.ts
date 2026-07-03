@@ -39,7 +39,53 @@ export function isStale(updatedAtIso: string, serverNowIso: string): boolean {
 
 /** Run states where the loop is actively progressing — the live/stale banner
  *  already conveys freshness, so no age hint is needed. */
-const ACTIVE_RUN_STATES = new Set<SandcastleRunState>(["running", "restarting"]);
+export const ACTIVE_RUN_STATES = new Set<SandcastleRunState>(["running", "restarting"]);
+
+/** True when a run state means the loop is actively progressing. */
+export function isActiveRunState(state: SandcastleRunState): boolean {
+  return ACTIVE_RUN_STATES.has(state);
+}
+
+/** Minimal shape the dashboard grouping needs from one row. */
+export interface SandcastleGroupItem<T> {
+  readonly item: T;
+  /** null = no snapshot ("No run yet"). */
+  readonly state: SandcastleRunState | null;
+  /** ISO timestamp of the last snapshot update, or null when unknown. */
+  readonly updatedAt: string | null;
+}
+
+export interface SandcastleGroups<T> {
+  readonly running: T[];
+  readonly idle: T[];
+}
+
+/**
+ * Split dashboard rows into a `running` group (state running|restarting) vs an
+ * `idle` group (done/stopped/unhealthy/no-run), each sorted by `updatedAt`
+ * descending (most recent first). Rows with a null or unparseable `updatedAt`
+ * sort last, preserving input order among ties (stable, index-tiebroken sort).
+ * Returns the original `T` items in each group.
+ */
+export function groupSandcastleRows<T>(
+  rows: readonly SandcastleGroupItem<T>[],
+): SandcastleGroups<T> {
+  const running: { item: T; ts: number; index: number }[] = [];
+  const idle: { item: T; ts: number; index: number }[] = [];
+  rows.forEach((row, index) => {
+    const parsed = row.updatedAt !== null ? Date.parse(row.updatedAt) : NaN;
+    const ts = Number.isNaN(parsed) ? Number.NEGATIVE_INFINITY : parsed;
+    const bucket = row.state !== null && ACTIVE_RUN_STATES.has(row.state) ? running : idle;
+    bucket.push({ item: row.item, ts, index });
+  });
+  const sortDescStable = (
+    entries: { item: T; ts: number; index: number }[],
+  ): T[] =>
+    entries
+      .toSorted((a, b) => (a.ts !== b.ts ? b.ts - a.ts : a.index - b.index))
+      .map((e) => e.item);
+  return { running: sortDescStable(running), idle: sortDescStable(idle) };
+}
 
 /** Human relative age of a snapshot vs the reading server's clock, e.g. "11h ago".
  *  Skew-safe (uses serverNow, clamps future timestamps); null if unparseable. */
