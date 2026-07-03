@@ -13,16 +13,29 @@ describe("appendQuoteToDraft", () => {
     });
   });
 
-  it("appends after existing text on a new line", () => {
-    const result = appendQuoteToDraft("first line", "quoted");
-    expect(result.text).toBe("first line\nquoted");
-    expect(result.cursor).toBe("first line\nquoted".length);
+  it("appends after existing text inline with a single space", () => {
+    const result = appendQuoteToDraft(
+      "if im typing something and press the button",
+      "insert here",
+    );
+    expect(result.text).toBe(
+      "if im typing something and press the button insert here",
+    );
+    expect(result.cursor).toBe(
+      "if im typing something and press the button insert here".length,
+    );
   });
 
-  it("trims trailing whitespace/newlines on the existing draft before joining", () => {
+  it("joins with a single space when the draft already ends in a space", () => {
+    const result = appendQuoteToDraft("foo ", "bar");
+    expect(result.text).toBe("foo bar");
+    expect(result.cursor).toBe("foo bar".length);
+  });
+
+  it("trims trailing whitespace/newlines on the existing draft before the space join", () => {
     const result = appendQuoteToDraft("draft   \n\n", "quoted");
-    expect(result.text).toBe("draft\nquoted");
-    expect(result.cursor).toBe("draft\nquoted".length);
+    expect(result.text).toBe("draft quoted");
+    expect(result.cursor).toBe("draft quoted".length);
   });
 
   it("trims whitespace surrounding the quote", () => {

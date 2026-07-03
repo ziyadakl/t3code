@@ -5,8 +5,9 @@
 
 /**
  * Append quoted transcript text to the current composer draft. Never clobbers
- * existing text: when the draft is non-empty the quote goes on a new line after
- * it. Returns the new text and the cursor offset (end of text).
+ * existing text: when the draft is non-empty the quote is appended inline after
+ * a single space, so quoting mid-sentence continues on the same line. Returns
+ * the new text and the cursor offset (end of text).
  */
 export function appendQuoteToDraft(
   current: string,
@@ -15,7 +16,7 @@ export function appendQuoteToDraft(
   const trimmedQuote = quoted.trim();
   if (trimmedQuote.length === 0) return { text: current, cursor: current.length };
   const base = current.replace(/\s+$/u, ""); // drop trailing whitespace on existing draft
-  const text = base.length === 0 ? trimmedQuote : `${base}\n${trimmedQuote}`;
+  const text = base.length === 0 ? trimmedQuote : `${base} ${trimmedQuote}`;
   return { text, cursor: text.length };
 }
 
