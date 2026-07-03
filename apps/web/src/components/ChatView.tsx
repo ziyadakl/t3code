@@ -166,7 +166,6 @@ import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 import { SelectionQuoteToolbar } from "./chat/SelectionQuoteToolbar";
-import { appendQuoteToDraft } from "./chat/selectionQuote.logic";
 import {
   deriveMessagesTimelineRows,
   isEffectivelyAtEnd,
@@ -3202,19 +3201,9 @@ export default function ChatView(props: ChatViewProps) {
   // an in-progress draft). Mirrors prefillComposerWithPrompt but appends.
   const quoteSelectionIntoComposer = useCallback(
     (quoted: string) => {
-      const current = promptRef.current ?? "";
-      const { text, cursor } = appendQuoteToDraft(current, quoted);
-      if (text === current) return;
-      promptRef.current = text;
-      setComposerDraftPrompt(composerDraftTarget, text);
-      composerRef.current?.resetCursorState({
-        cursor: collapseExpandedComposerCursor(text, cursor),
-        prompt: text,
-        detectTrigger: true,
-      });
-      window.requestAnimationFrame(() => composerRef.current?.focusAtEnd());
+      composerRef.current?.insertQuoteAtCursor(quoted);
     },
-    [composerDraftTarget, composerRef, setComposerDraftPrompt],
+    [composerRef],
   );
 
   // Guard shared by every rewind action. Returns null when blocked.

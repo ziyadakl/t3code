@@ -1,60 +1,78 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
-  appendQuoteToDraft,
   computeSelectionToolbarPosition,
+  insertQuoteAtCursor,
   isNodeWithinBoundary,
 } from "./selectionQuote.logic";
 
-describe("appendQuoteToDraft", () => {
-  it("returns just the quote when the current draft is empty", () => {
-    expect(appendQuoteToDraft("", "hello world")).toEqual({
-      text: "hello world",
-      cursor: "hello world".length,
+describe("insertQuoteAtCursor", () => {
+  it("appends a space + quote when the caret is at the end of a non-empty draft", () => {
+    expect(insertQuoteAtCursor("foo", 3, "bar")).toEqual({
+      text: "foo bar",
+      cursor: 7,
     });
   });
 
-  it("appends after existing text inline with a single space", () => {
-    const result = appendQuoteToDraft(
-      "if im typing something and press the button",
-      "insert here",
-    );
-    expect(result.text).toBe(
-      "if im typing something and press the button insert here",
-    );
-    expect(result.cursor).toBe(
-      "if im typing something and press the button insert here".length,
-    );
+  it("adds a trailing space (no leading space) when the caret is at the start", () => {
+    expect(insertQuoteAtCursor("foo", 0, "bar")).toEqual({
+      text: "bar foo",
+      cursor: 3,
+    });
   });
 
-  it("joins with a single space when the draft already ends in a space", () => {
-    const result = appendQuoteToDraft("foo ", "bar");
-    expect(result.text).toBe("foo bar");
-    expect(result.cursor).toBe("foo bar".length);
+  it("does not add a leading space right after a newline", () => {
+    expect(insertQuoteAtCursor("a\n", 2, "b")).toEqual({
+      text: "a\nb",
+      cursor: 3,
+    });
   });
 
-  it("trims trailing whitespace/newlines on the existing draft before the space join", () => {
-    const result = appendQuoteToDraft("draft   \n\n", "quoted");
-    expect(result.text).toBe("draft quoted");
-    expect(result.cursor).toBe("draft quoted".length);
+  it("adds leading + trailing spaces in the middle between two words", () => {
+    expect(insertQuoteAtCursor("foobaz", 3, "X")).toEqual({
+      text: "foo X baz",
+      cursor: 5,
+    });
+  });
+
+  it("does not double a leading space when the caret already follows a space", () => {
+    expect(insertQuoteAtCursor("foo ", 4, "bar")).toEqual({
+      text: "foo bar",
+      cursor: 7,
+    });
+  });
+
+  it("returns just the quote when the draft is empty", () => {
+    expect(insertQuoteAtCursor("", 0, "bar")).toEqual({
+      text: "bar",
+      cursor: 3,
+    });
   });
 
   it("trims whitespace surrounding the quote", () => {
-    const result = appendQuoteToDraft("", "   spaced quote  \n");
-    expect(result.text).toBe("spaced quote");
-    expect(result.cursor).toBe("spaced quote".length);
-  });
-
-  it("returns the current draft unchanged (cursor at end) for an empty quote", () => {
-    expect(appendQuoteToDraft("keep me", "")).toEqual({
-      text: "keep me",
-      cursor: "keep me".length,
+    expect(insertQuoteAtCursor("foo", 3, "  spaced quote \n")).toEqual({
+      text: "foo spaced quote",
+      cursor: "foo spaced quote".length,
     });
   });
 
-  it("returns the current draft unchanged for a whitespace-only quote", () => {
-    expect(appendQuoteToDraft("keep me", "   \n\t ")).toEqual({
+  it("is a no-op (clamped cursor) for a whitespace-only quote", () => {
+    expect(insertQuoteAtCursor("keep me", 3, "   \n\t ")).toEqual({
       text: "keep me",
-      cursor: "keep me".length,
+      cursor: 3,
+    });
+  });
+
+  it("clamps a negative cursor to 0", () => {
+    expect(insertQuoteAtCursor("foo", -5, "bar")).toEqual({
+      text: "bar foo",
+      cursor: 3,
+    });
+  });
+
+  it("clamps an out-of-range cursor to the draft length", () => {
+    expect(insertQuoteAtCursor("foo", 99, "bar")).toEqual({
+      text: "foo bar",
+      cursor: 7,
     });
   });
 });

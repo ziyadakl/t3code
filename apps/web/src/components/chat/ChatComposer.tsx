@@ -38,6 +38,7 @@ import {
   replaceTextRange,
 } from "../../composer-logic";
 import { deriveComposerSendState, readFileAsDataUrl } from "../ChatView.logic";
+import { insertQuoteAtCursor as computeQuoteInsertion } from "./selectionQuote.logic";
 import {
   type ComposerImageAttachment,
   type DraftId,
@@ -364,6 +365,8 @@ export interface ChatComposerHandle {
   }) => void;
   /** Insert a terminal context from the terminal drawer. */
   addTerminalContext: (selection: TerminalContextSelection) => void;
+  /** Insert selection-quote text at the current caret position. */
+  insertQuoteAtCursor: (quoted: string) => void;
   /** Get the current prompt/effort/model state for use in send. */
   getSendContext: () => {
     prompt: string;
@@ -1862,6 +1865,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               )
             : null,
         );
+      },
+      insertQuoteAtCursor: (quoted: string) => {
+        const currentText = promptRef.current;
+        const expandedCursor = expandCollapsedComposerCursor(currentText, composerCursor);
+        const { text, cursor } = computeQuoteInsertion(currentText, expandedCursor, quoted);
+        if (text === currentText) return;
+        const collapsed = collapseExpandedComposerCursor(text, cursor);
+        promptRef.current = text;
+        setPrompt(text);
+        setComposerHighlightedItemId(null);
+        setComposerCursor(collapsed);
+        setComposerTrigger(detectComposerTrigger(text, cursor));
+        window.requestAnimationFrame(() => composerEditorRef.current?.focusAt(collapsed));
       },
       addTerminalContext: (selection: TerminalContextSelection) => {
         if (!activeThread) return;
