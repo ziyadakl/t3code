@@ -19,7 +19,7 @@ import { EnvironmentAuthorizationError } from "./auth.ts";
 /** Highest status.json schema version t3 can read. A status.json whose
  *  `schemaVersion` is GREATER than this ⇒ "outdated" (genuinely newer than we
  *  understand); anything at or below decodes (v1 and v2 both read fine). */
-export const SANDCASTLE_STATUS_SCHEMA_VERSION = 2;
+export const SANDCASTLE_STATUS_SCHEMA_VERSION = 3;
 
 // Stable method-id constant (mirrors DEV_SERVER_WS_METHODS in devServer.ts).
 export const SANDCASTLE_WS_METHODS = {
@@ -59,6 +59,9 @@ export const SandcastleStatusHistoryEntry = Schema.Struct({
   branch: Schema.String,
   phase: SandcastleIssuePhase,
   completedAt: Schema.String,
+  // Cross-host (schema v3): the host that completed this issue. Optional so
+  // pre-v3 files (no per-entry host tag) still decode.
+  hostId: Schema.optional(Schema.String),
 });
 export type SandcastleStatusHistoryEntry = typeof SandcastleStatusHistoryEntry.Type;
 
@@ -81,17 +84,35 @@ export const SandcastleStatusTotals = Schema.Struct({
 });
 export type SandcastleStatusTotals = typeof SandcastleStatusTotals.Type;
 
+// Shared sub-shape used by both the run block and each cross-host PeerStatus.
+export const SandcastleIterations = Schema.Struct({
+  current: Schema.Number,
+  total: Schema.Number,
+});
+export type SandcastleIterations = typeof SandcastleIterations.Type;
+
 export const SandcastleStatusRun = Schema.Struct({
   branch: Schema.String,
   repo: Schema.String,
   startedAt: Schema.String,
-  iterations: Schema.Struct({
-    current: Schema.Number,
-    total: Schema.Number,
-  }),
+  iterations: SandcastleIterations,
   maxConcurrent: Schema.Number,
 });
 export type SandcastleStatusRun = typeof SandcastleStatusRun.Type;
+
+// Cross-host (schema v3): a flattened projection of one peer host's loop, as
+// seen by the host that fused the status. NO nested run/history/peers — just
+// the fields the unified viewer renders per host-tagged card.
+export const PeerStatus = Schema.Struct({
+  hostId: Schema.String,
+  state: SandcastleRunState,
+  activity: Schema.optional(Schema.String),
+  iterations: SandcastleIterations,
+  totals: SandcastleStatusTotals,
+  issues: Schema.Array(SandcastleStatusIssue),
+  updatedAt: Schema.String,
+});
+export type PeerStatus = typeof PeerStatus.Type;
 
 export const SandcastleStatusSnapshot = Schema.Struct({
   // Loose Number (not Literal) on purpose: we detect version mismatch in code so
@@ -106,6 +127,15 @@ export const SandcastleStatusSnapshot = Schema.Struct({
   // Append-only outcome log added in sandcastle-loop PR #14 (upstream). Absent
   // from the local Sandcastle checkout because that clone predates PR #14.
   history: Schema.optional(Schema.Array(SandcastleStatusHistoryEntry)),
+  // Cross-host (schema v3). Upstream always writes hostId/runId, but they are
+  // OPTIONAL here on purpose: t3 is a read-only viewer for a mixed fleet, and an
+  // old (v2) Sandcastle writes a status.json with no host fields. The version
+  // gate (version > SANDCASTLE_STATUS_SCHEMA_VERSION) lets v2 files fall through
+  // to decode; keeping these optional means those files still decode (rendering
+  // a single-host card) while v3 files carry the fused multi-host view.
+  hostId: Schema.optional(Schema.String),
+  runId: Schema.optional(Schema.String),
+  peers: Schema.optional(Schema.Array(PeerStatus)),
 });
 export type SandcastleStatusSnapshot = typeof SandcastleStatusSnapshot.Type;
 

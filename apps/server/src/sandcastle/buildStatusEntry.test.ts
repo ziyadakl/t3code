@@ -55,11 +55,47 @@ describe("buildStatusEntry", () => {
     expect(e.readError).toBeNull();
   });
 
-  it("flags schemaOutdated only when the file is newer than t3 understands (v3+)", () => {
-    const future = JSON.stringify({ ...JSON.parse(VALID), schemaVersion: 3 });
+  it("flags schemaOutdated only when the file is newer than t3 understands (v4+)", () => {
+    const future = JSON.stringify({ ...JSON.parse(VALID), schemaVersion: 4 });
     const e = buildStatusEntry({ cwd: "/p", hasSandcastleDir: true, rawJson: future });
     expect(e.schemaOutdated).toBe(true);
     expect(e.snapshot).toBeNull();
+    expect(e.readError).toBeNull();
+  });
+
+  it("decodes a v3 cross-host status.json (v3 is now current, not outdated)", () => {
+    const v3 = JSON.stringify({
+      ...JSON.parse(VALID),
+      schemaVersion: 3,
+      hostId: "host-a",
+      runId: "run-2026-07-14",
+      peers: [
+        {
+          hostId: "host-b",
+          state: "running",
+          activity: "reviewing",
+          iterations: { current: 3, total: 20 },
+          totals: { merged: 2, needsHuman: 0, requeued: 1, running: 1 },
+          issues: [{ number: 401, title: "peer issue", branch: "agent/issue-401", phase: "reviewer" }],
+          updatedAt: "2026-07-14T10:00:00.000Z",
+        },
+      ],
+    });
+    const e = buildStatusEntry({ cwd: "/p", hasSandcastleDir: true, rawJson: v3 });
+    expect(e.schemaOutdated).toBe(false);
+    expect(e.readError).toBeNull();
+    expect(e.snapshot?.hostId).toBe("host-a");
+    expect(e.snapshot?.runId).toBe("run-2026-07-14");
+    expect(e.snapshot?.peers).toHaveLength(1);
+    expect(e.snapshot?.peers?.[0]?.hostId).toBe("host-b");
+  });
+
+  it("decodes a v2-shaped status.json with no host fields (back-compat after v3 bump)", () => {
+    const v2 = JSON.stringify({ ...JSON.parse(VALID), schemaVersion: 2 });
+    const e = buildStatusEntry({ cwd: "/p", hasSandcastleDir: true, rawJson: v2 });
+    expect(e.schemaOutdated).toBe(false);
+    expect(e.snapshot?.state).toBe("running");
+    expect(e.snapshot?.hostId).toBeUndefined();
     expect(e.readError).toBeNull();
   });
 
