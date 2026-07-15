@@ -13,10 +13,17 @@ import {
   finishedRunAgeHint,
   historyLinksForPhase,
   groupSandcastleRows,
+  sumTotalsAcrossHosts,
+  perMachineIterations,
+  formatPerMachineIterations,
+  hostBadgeLabel,
+  unionActiveIssuesByHost,
+  mergedRecentAcrossHosts,
   STALE_AFTER_MS,
   type SandcastleGroupItem,
 } from "./sandcastleView.ts";
 import type {
+  PeerStatus,
   RepositoryIdentity,
   SandcastleStatusEntry,
   SandcastleStatusHistoryEntry,
@@ -513,5 +520,224 @@ describe("groupSandcastleRows", () => {
       row("third", "running", ts),
     ]);
     expect(g.running).toEqual(["first", "second", "third"]);
+  });
+});
+
+// --- cross-host fusion helpers (schema v3) ---------------------------------
+
+/** A snapshot builder that also carries the v3 cross-host fields. */
+function xSnapshot(over: Partial<SandcastleStatusSnapshot>): SandcastleStatusSnapshot {
+  return { ...runningSnapshot, ...over } as SandcastleStatusSnapshot;
+}
+
+function peer(over: Partial<PeerStatus> & Pick<PeerStatus, "hostId">): PeerStatus {
+  return {
+    state: "running",
+    iterations: { current: 1, total: 9 },
+    totals: { merged: 0, needsHuman: 0, requeued: 0, running: 1 },
+    issues: [],
+    updatedAt: "2026-06-04T12:00:00.000Z",
+    ...over,
+  };
+}
+
+function xHist(
+  number: number,
+  phase: SandcastleStatusHistoryEntry["phase"],
+  completedAt: string,
+): SandcastleStatusHistoryEntry {
+  return { number, title: `#${number}`, branch: `issue-${number}`, phase, completedAt };
+}
+
+describe("hostBadgeLabel", () => {
+  it("title-cases a hyphenated hostId", () => {
+    expect(hostBadgeLabel("ziyads-macbook-air")).toBe("Ziyads Macbook Air");
+  });
+  it("upcases a single short word", () => {
+    expect(hostBadgeLabel("vps")).toBe("Vps");
+  });
+  it("preserves an already-capitalized word", () => {
+    expect(hostBadgeLabel("Mac")).toBe("Mac");
+  });
+  it("splits on underscores and dots too", () => {
+    expect(hostBadgeLabel("build_box.local")).toBe("Build Box Local");
+  });
+  it("trims surrounding whitespace", () => {
+    expect(hostBadgeLabel("  vps  ")).toBe("Vps");
+  });
+  it("returns empty string for empty/whitespace input", () => {
+    expect(hostBadgeLabel("")).toBe("");
+    expect(hostBadgeLabel("   ")).toBe("");
+  });
+});
+
+describe("sumTotalsAcrossHosts", () => {
+  it("field-wise sums own totals with each peer's totals", () => {
+    const snap = xSnapshot({
+      totals: { merged: 2, needsHuman: 1, requeued: 0, running: 1 },
+      hostId: "mac",
+      peers: [
+        peer({ hostId: "vps", totals: { merged: 3, needsHuman: 0, requeued: 2, running: 1 } }),
+        peer({ hostId: "pi", totals: { merged: 1, needsHuman: 1, requeued: 1, running: 0 } }),
+      ],
+    });
+    expect(sumTotalsAcrossHosts(snap)).toEqual({
+      merged: 6,
+      needsHuman: 2,
+      requeued: 3,
+      running: 2,
+    });
+  });
+
+  it("returns own totals unchanged when peers is absent", () => {
+    const snap = xSnapshot({ totals: { merged: 5, needsHuman: 1, requeued: 2, running: 3 } });
+    expect(sumTotalsAcrossHosts(snap)).toEqual({
+      merged: 5,
+      needsHuman: 1,
+      requeued: 2,
+      running: 3,
+    });
+  });
+
+  it("returns own totals unchanged when peers is empty", () => {
+    const snap = xSnapshot({
+      totals: { merged: 5, needsHuman: 1, requeued: 2, running: 3 },
+      peers: [],
+    });
+    expect(sumTotalsAcrossHosts(snap)).toEqual({
+      merged: 5,
+      needsHuman: 1,
+      requeued: 2,
+      running: 3,
+    });
+  });
+});
+
+describe("perMachineIterations", () => {
+  it("lists own first, then one entry per peer", () => {
+    const snap = xSnapshot({
+      hostId: "mac",
+      run: { ...runningSnapshot.run, iterations: { current: 3, total: 8 } },
+      peers: [
+        peer({ hostId: "vps", iterations: { current: 5, total: 8 } }),
+        peer({ hostId: "pi", iterations: { current: 2, total: 8 } }),
+      ],
+    });
+    expect(perMachineIterations(snap)).toEqual([
+      { hostId: "mac", current: 3, total: 8 },
+      { hostId: "vps", current: 5, total: 8 },
+      { hostId: "pi", current: 2, total: 8 },
+    ]);
+  });
+
+  it("returns a single own entry when there are no peers", () => {
+    const snap = xSnapshot({
+      hostId: "mac",
+      run: { ...runningSnapshot.run, iterations: { current: 3, total: 8 } },
+    });
+    expect(perMachineIterations(snap)).toEqual([{ hostId: "mac", current: 3, total: 8 }]);
+  });
+});
+
+describe("formatPerMachineIterations", () => {
+  it("labels each machine when there are peers", () => {
+    const snap = xSnapshot({
+      hostId: "mac",
+      run: { ...runningSnapshot.run, iterations: { current: 3, total: 8 } },
+      peers: [peer({ hostId: "vps", iterations: { current: 5, total: 8 } })],
+    });
+    expect(formatPerMachineIterations(snap)).toBe("Mac 3/8 · Vps 5/8");
+  });
+
+  it("omits the host label for a single machine (no peers)", () => {
+    const snap = xSnapshot({
+      hostId: "mac",
+      run: { ...runningSnapshot.run, iterations: { current: 3, total: 8 } },
+    });
+    expect(formatPerMachineIterations(snap)).toBe("3/8");
+  });
+});
+
+describe("unionActiveIssuesByHost", () => {
+  it("tags own active issues then each peer's active issues", () => {
+    const snap = xSnapshot({
+      hostId: "mac",
+      issues: [issue(1, "implementer"), issue(2, "merged"), issue(3, "reviewer")],
+      peers: [
+        peer({ hostId: "vps", issues: [issue(10, "implementer"), issue(11, "merged")] }),
+      ],
+    });
+    expect(unionActiveIssuesByHost(snap)).toEqual([
+      { issue: issue(1, "implementer"), hostId: "mac" },
+      { issue: issue(3, "reviewer"), hostId: "mac" },
+      { issue: issue(10, "implementer"), hostId: "vps" },
+    ]);
+  });
+});
+
+describe("mergedRecentAcrossHosts", () => {
+  it("combines own and peer finished rows, newest-first, tagged by host", () => {
+    const snap = xSnapshot({
+      hostId: "mac",
+      history: [
+        xHist(489, "needs-human", "2026-06-28T17:13:00Z"),
+        xHist(491, "merged", "2026-06-28T18:23:00Z"),
+      ],
+      issues: [issue(492, "implementer")],
+      peers: [
+        peer({
+          hostId: "vps",
+          // no history on a peer; terminal issues surface with a null completedAt
+          issues: [issue(700, "merged"), issue(701, "reviewer")],
+        }),
+      ],
+    });
+    const rows = mergedRecentAcrossHosts(snap);
+    // 700 has a null completedAt -> sorts to the top; then 491, then 489.
+    expect(rows.map((r) => ({ number: r.number, hostId: r.hostId }))).toEqual([
+      { number: 700, hostId: "vps" },
+      { number: 491, hostId: "mac" },
+      { number: 489, hostId: "mac" },
+    ]);
+    expect(rows[0]!.completedAt).toBeNull();
+  });
+});
+
+describe("cross-host helpers degrade to single-host output (v2 file: no peers, no hostId)", () => {
+  const v2 = xSnapshot({
+    run: { ...runningSnapshot.run, iterations: { current: 3, total: 8 } },
+    totals: { merged: 4, needsHuman: 1, requeued: 2, running: 1 },
+    history: [
+      xHist(489, "needs-human", "2026-06-28T17:13:00Z"),
+      xHist(491, "merged", "2026-06-28T18:23:00Z"),
+    ],
+    issues: [issue(492, "implementer"), issue(493, "merged")],
+  });
+
+  it("sumTotalsAcrossHosts equals snap.totals", () => {
+    expect(sumTotalsAcrossHosts(v2)).toEqual(v2.totals);
+  });
+
+  it("perMachineIterations is one entry with undefined hostId", () => {
+    expect(perMachineIterations(v2)).toEqual([{ hostId: undefined, current: 3, total: 8 }]);
+  });
+
+  it("formatPerMachineIterations is plain c/t with no label", () => {
+    expect(formatPerMachineIterations(v2)).toBe("3/8");
+  });
+
+  it("unionActiveIssuesByHost is own active issues with undefined hostId", () => {
+    expect(unionActiveIssuesByHost(v2)).toEqual([
+      { issue: issue(492, "implementer"), hostId: undefined },
+    ]);
+  });
+
+  it("mergedRecentAcrossHosts matches recentFinishedIssues rows/order (plus undefined hostId)", () => {
+    const merged = mergedRecentAcrossHosts(v2);
+    const own = recentFinishedIssues(v2);
+    expect(merged.map((r) => ({ number: r.number, completedAt: r.completedAt }))).toEqual(
+      own.map((r) => ({ number: r.number, completedAt: r.completedAt })),
+    );
+    expect(merged.every((r) => r.hostId === undefined)).toBe(true);
   });
 });

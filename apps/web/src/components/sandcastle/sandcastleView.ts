@@ -8,6 +8,7 @@ import type {
   SandcastleStatusHistoryEntry,
   SandcastleStatusIssue,
   SandcastleStatusSnapshot,
+  SandcastleStatusTotals,
 } from "@t3tools/contracts";
 import type { RepositoryIdentity } from "@t3tools/contracts";
 import { parseGitHubRepositoryNameWithOwnerFromRemoteUrl } from "@t3tools/shared/git";
@@ -188,6 +189,62 @@ export interface RecentFinishedRow {
   /** ISO completion time (from history); null for a current-batch terminal issue
    *  not yet recorded to history (so no timestamp is known yet). */
   readonly completedAt: string | null;
+  /** The host that produced this row (schema v3 cross-host fusion). Undefined for
+   *  a single-host / pre-v3 snapshot. */
+  readonly hostId?: string | undefined;
+}
+
+/** Newest-first comparator for finished rows. A null completedAt means "just
+ *  finished this batch, not yet logged" and sorts ahead of any timestamped row. */
+function byCompletedAtDesc(a: RecentFinishedRow, b: RecentFinishedRow): number {
+  if (a.completedAt === null && b.completedAt === null) return 0;
+  if (a.completedAt === null) return -1;
+  if (b.completedAt === null) return 1;
+  return Date.parse(b.completedAt) - Date.parse(a.completedAt);
+}
+
+/**
+ * Core row-derivation shared by the single-host `recentFinishedIssues` and the
+ * cross-host `mergedRecentAcrossHosts` (which calls it once per host). Takes a
+ * host's own `issues` + optional `history` and tags every produced row with
+ * `hostId`. Same logic as the single-host path documented on
+ * `recentFinishedIssues` below; kept DRY so a peer (which has `issues` but no
+ * `history`) derives rows identically.
+ */
+function finishedRowsFromIssues(
+  issues: readonly SandcastleStatusIssue[],
+  history: readonly SandcastleStatusHistoryEntry[] | undefined,
+  hostId?: string,
+): RecentFinishedRow[] {
+  const currentBatchTerminal = partitionIssuesByPhase(issues).recent;
+
+  if (!history) {
+    return currentBatchTerminal.map((i) => ({
+      number: i.number,
+      title: i.title,
+      phase: i.phase,
+      completedAt: null,
+      hostId,
+    }));
+  }
+
+  const rows: RecentFinishedRow[] = history.map((e) => ({
+    number: e.number,
+    title: e.title,
+    phase: e.phase,
+    completedAt: e.completedAt,
+    hostId,
+  }));
+
+  const seen = new Set(rows.map((r) => r.number));
+  for (const i of currentBatchTerminal) {
+    if (seen.has(i.number)) continue;
+    seen.add(i.number);
+    rows.push({ number: i.number, title: i.title, phase: i.phase, completedAt: null, hostId });
+  }
+
+  rows.sort(byCompletedAtDesc);
+  return rows;
 }
 
 /**
@@ -207,41 +264,133 @@ export interface RecentFinishedRow {
  * Not capped: the caller slices to its display limit so it can render "+N more".
  */
 export function recentFinishedIssues(snap: SandcastleStatusSnapshot): RecentFinishedRow[] {
-  const currentBatchTerminal = partitionIssuesByPhase(snap.issues).recent;
+  return finishedRowsFromIssues(snap.issues, snap.history, snap.hostId);
+}
 
-  if (!snap.history) {
-    return currentBatchTerminal.map((i) => ({
-      number: i.number,
-      title: i.title,
-      phase: i.phase,
-      completedAt: null,
-    }));
+// --- cross-host fusion (schema v3) -----------------------------------------
+// Pure helpers that fuse ONE snapshot's own data with its `peers[]` into
+// host-tagged view models. With no `peers` (and no `hostId`) — an old v2 file —
+// every helper degrades to the single-host output the viewer renders today.
+
+/**
+ * Field-wise sum of the snapshot's own totals plus each peer's totals. Ships are
+ * disjoint across hosts (each host merges its own issues), so summing never
+ * double-counts. Returns `snap.totals` unchanged when there are no peers.
+ */
+export function sumTotalsAcrossHosts(snap: SandcastleStatusSnapshot): SandcastleStatusTotals {
+  const peers = snap.peers ?? [];
+  if (peers.length === 0) return snap.totals;
+  return peers.reduce<SandcastleStatusTotals>(
+    (acc, p) => ({
+      merged: acc.merged + p.totals.merged,
+      needsHuman: acc.needsHuman + p.totals.needsHuman,
+      requeued: acc.requeued + p.totals.requeued,
+      running: acc.running + p.totals.running,
+    }),
+    { ...snap.totals },
+  );
+}
+
+/** One machine's iteration progress. `hostId` is undefined for a v2 own-only snapshot. */
+export interface MachineIterations {
+  readonly hostId?: string | undefined;
+  readonly current: number;
+  readonly total: number;
+}
+
+/**
+ * Iteration progress per machine: the snapshot's own run first, then one entry
+ * per peer. Single-host (no peers) ⇒ a one-element array.
+ */
+export function perMachineIterations(snap: SandcastleStatusSnapshot): MachineIterations[] {
+  const own: MachineIterations = {
+    hostId: snap.hostId,
+    current: snap.run.iterations.current,
+    total: snap.run.iterations.total,
+  };
+  const peers = (snap.peers ?? []).map(
+    (p): MachineIterations => ({
+      hostId: p.hostId,
+      current: p.iterations.current,
+      total: p.iterations.total,
+    }),
+  );
+  return [own, ...peers];
+}
+
+/**
+ * Formatted per-machine progress, e.g. `"Mac 3/8 · Vps 5/8"`. With exactly one
+ * machine (no peers) returns a bare `"c/t"` with NO host label, so a single-host
+ * snapshot renders exactly as it does today.
+ */
+export function formatPerMachineIterations(snap: SandcastleStatusSnapshot): string {
+  const machines = perMachineIterations(snap);
+  if (machines.length === 1) {
+    const m = machines[0]!;
+    return `${m.current}/${m.total}`;
   }
+  return machines
+    .map((m) => {
+      const label = m.hostId != null ? `${hostBadgeLabel(m.hostId)} ` : "";
+      return `${label}${m.current}/${m.total}`;
+    })
+    .join(" · ");
+}
 
-  const rows: RecentFinishedRow[] = snap.history.map((e) => ({
-    number: e.number,
-    title: e.title,
-    phase: e.phase,
-    completedAt: e.completedAt,
-  }));
+/**
+ * Humanize a raw hostId for display: trim, split on `-`/`_`/`.`/whitespace runs,
+ * and title-case each word (first letter upper, rest left as-is so an already
+ * mixed-case word is preserved). Empty/whitespace input returns "". No hardcoded
+ * id→name map — users get friendly names by setting SANDCASTLE_HOST_ID upstream.
+ */
+export function hostBadgeLabel(hostId: string): string {
+  const trimmed = hostId.trim();
+  if (trimmed === "") return trimmed;
+  return trimmed
+    .split(/[-_.\s]+/)
+    .filter((w) => w.length > 0)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
 
-  const seen = new Set(rows.map((r) => r.number));
-  for (const i of currentBatchTerminal) {
-    if (seen.has(i.number)) continue;
-    seen.add(i.number);
-    rows.push({ number: i.number, title: i.title, phase: i.phase, completedAt: null });
-  }
+/** One active (in-flight) issue tagged with the host running it. */
+export interface HostTaggedIssue {
+  readonly issue: SandcastleStatusIssue;
+  readonly hostId?: string | undefined;
+}
 
-  // Newest-first. A null completedAt means "just finished this batch, not yet
-  // logged", so it sorts ahead of any timestamped history entry.
-  rows.sort((a, b) => {
-    if (a.completedAt === null && b.completedAt === null) return 0;
-    if (a.completedAt === null) return -1;
-    if (b.completedAt === null) return 1;
-    return Date.parse(b.completedAt) - Date.parse(a.completedAt);
-  });
+/**
+ * Union of active (in-flight) issues across all hosts: the snapshot's own active
+ * issues (tagged `snap.hostId`) followed by each peer's active issues (tagged the
+ * peer's hostId). Single-host ⇒ just own active issues (hostId may be undefined
+ * for a v2 file).
+ */
+export function unionActiveIssuesByHost(snap: SandcastleStatusSnapshot): HostTaggedIssue[] {
+  const own = partitionIssuesByPhase(snap.issues).active.map(
+    (issue): HostTaggedIssue => ({ issue, hostId: snap.hostId }),
+  );
+  const peers = (snap.peers ?? []).flatMap((p) =>
+    partitionIssuesByPhase(p.issues).active.map(
+      (issue): HostTaggedIssue => ({ issue, hostId: p.hostId }),
+    ),
+  );
+  return [...own, ...peers];
+}
 
-  return rows;
+/**
+ * Finished-issue rows across ALL hosts, newest-first. Own rows come from
+ * `recentFinishedIssues` (history + current-batch), each tagged `snap.hostId`;
+ * each peer contributes rows derived from `peer.issues` the same way (a peer has
+ * no history, so its terminal issues surface with a null completedAt and sort to
+ * the top). NOT sliced — the component applies its own RECENT_LIMIT. Single-host
+ * ⇒ own rows only.
+ */
+export function mergedRecentAcrossHosts(snap: SandcastleStatusSnapshot): RecentFinishedRow[] {
+  const own = finishedRowsFromIssues(snap.issues, snap.history, snap.hostId);
+  const peers = (snap.peers ?? []).flatMap((p) =>
+    finishedRowsFromIssues(p.issues, undefined, p.hostId),
+  );
+  return [...own, ...peers].sort(byCompletedAtDesc);
 }
 
 /** One display row produced by historyLinksForPhase. */
