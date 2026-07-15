@@ -25,11 +25,15 @@ export function SandcastleIssueRow({
   href,
   variant,
   age,
+  hostLabel,
 }: {
   issue: IssueRowData;
   href: string | null;
   variant: "active" | "recent";
   age?: string | null;
+  /** When set (multi-host fused view), tag the row with a small host badge.
+   *  Omitted ⇒ the row renders byte-for-byte as a single-host row. */
+  hostLabel?: string | undefined;
 }) {
   const numberClass = variant === "active" ? "text-sm font-medium" : "font-medium";
   const number = href ? (
@@ -39,6 +43,11 @@ export function SandcastleIssueRow({
   ) : (
     <span className={numberClass}>#{i.number}</span>
   );
+  const hostBadge = hostLabel ? (
+    <Badge variant="outline" size="sm">
+      {hostLabel}
+    </Badge>
+  ) : null;
 
   if (variant === "active") {
     return (
@@ -46,6 +55,7 @@ export function SandcastleIssueRow({
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             {number}
+            {hostBadge}
             <span className="truncate text-sm">{i.title}</span>
           </div>
           {i.detail ? <span className="text-xs text-muted-foreground">{i.detail}</span> : null}
@@ -61,6 +71,7 @@ export function SandcastleIssueRow({
     <div className="flex items-center justify-between gap-3 px-1 py-1 text-sm">
       <div className="flex min-w-0 items-center gap-2">
         {number}
+        {hostBadge}
         <span className="truncate text-muted-foreground">{i.title}</span>
       </div>
       <div className="flex shrink-0 items-center gap-2">

@@ -14,8 +14,11 @@ import {
   bannerTone,
   githubIssueUrl,
   historyLinksForPhase,
-  partitionIssuesByPhase,
-  recentFinishedIssues,
+  hostBadgeLabel,
+  sumTotalsAcrossHosts,
+  formatPerMachineIterations,
+  unionActiveIssuesByHost,
+  mergedRecentAcrossHosts,
   queueReadyDisplay,
   formatRelativeAge,
   finishedRunAgeHint,
@@ -148,12 +151,17 @@ export function SandcastleProjectDetail({
   const snap = entry?.snapshot ?? null;
   const ageHint = snap ? finishedRunAgeHint(snap.state, snap.updatedAt, value!.serverNow) : null;
 
-  const active = partitionIssuesByPhase(snap?.issues ?? []).active;
+  // Fuse this one snapshot's own data with its peers[] into host-tagged view
+  // models (all pure helpers from sandcastleView). With no peers (a v2 file)
+  // every helper degrades to the single-host output the viewer renders today.
+  const multiHost = (snap?.peers?.length ?? 0) > 0;
+  const active = snap ? unionActiveIssuesByHost(snap) : [];
   // "Recent" reads the cumulative history log (across all iterations), not the
-  // current-iteration batch in snap.issues — see recentFinishedIssues.
-  const recentAll = snap ? recentFinishedIssues(snap) : [];
+  // current-iteration batch in snap.issues — see mergedRecentAcrossHosts.
+  const recentAll = snap ? mergedRecentAcrossHosts(snap) : [];
   const recent = recentAll.slice(0, RECENT_LIMIT);
   const recentMore = recentAll.length - recent.length;
+  const totals = snap ? sumTotalsAcrossHosts(snap) : null;
   const queueReady = queueReadyDisplay(entry?.queueReady);
 
   const issueLink = (n: number) => githubIssueUrl(project.repositoryIdentity ?? null, n);
@@ -195,9 +203,7 @@ export function SandcastleProjectDetail({
       ) : (
         <>
           <Card className="mx-auto w-full max-w-5xl shrink-0 flex-row flex-wrap items-center gap-3 px-4 py-6 text-sm">
-            <span className="text-muted-foreground">
-              {snap.run.iterations.current}/{snap.run.iterations.total}
-            </span>
+            <span className="text-muted-foreground">{formatPerMachineIterations(snap)}</span>
             <span className="text-muted-foreground">{snap.run.branch}</span>
             {queueReady ? (
               <span
@@ -212,7 +218,13 @@ export function SandcastleProjectDetail({
                 <PillPopover
                   key={spec.key}
                   spec={spec}
-                  count={snap.totals[spec.key]}
+                  count={totals![spec.key]}
+                  // TODO(cross-host): popover drilldown is own-host only; the
+                  // count above is fused (own+peers). PeerStatus carries no
+                  // history (only current-batch issues), so there are no peer
+                  // history rows to merge in here — fusing the drilldown isn't
+                  // clean until peers ship a history log. Multi-host users may
+                  // see a fused count with an own-host-only drilldown.
                   rows={historyLinksForPhase(
                     snap.history,
                     phase,
@@ -229,12 +241,15 @@ export function SandcastleProjectDetail({
               {active.length === 0 ? (
                 <p className="text-xs text-muted-foreground">No active issues.</p>
               ) : (
-                active.map((i) => (
+                active.map(({ issue: i, hostId }) => (
                   <SandcastleIssueRow
-                    key={i.number}
+                    // The same issue number can be in-flight on two hosts, so
+                    // tag the key with the host to keep it unique across hosts.
+                    key={`${hostId ?? "own"}-${i.number}`}
                     variant="active"
                     issue={i}
                     href={issueLink(i.number)}
+                    hostLabel={multiHost && hostId != null ? hostBadgeLabel(hostId) : undefined}
                   />
                 ))
               )}
@@ -251,7 +266,8 @@ export function SandcastleProjectDetail({
                   {recent.map((i, idx) => (
                     <SandcastleIssueRow
                       // History can list the same issue number more than once
-                      // (e.g. requeued then merged), so number alone isn't unique.
+                      // (e.g. requeued then merged) and across hosts, so number
+                      // alone isn't unique — index keeps the key stable.
                       // oxlint-disable-next-line react/no-array-index-key
                       key={`${i.number}-${idx}`}
                       variant="recent"
@@ -259,6 +275,9 @@ export function SandcastleProjectDetail({
                       href={issueLink(i.number)}
                       age={
                         i.completedAt ? formatRelativeAge(i.completedAt, value!.serverNow) : null
+                      }
+                      hostLabel={
+                        multiHost && i.hostId != null ? hostBadgeLabel(i.hostId) : undefined
                       }
                     />
                   ))}
