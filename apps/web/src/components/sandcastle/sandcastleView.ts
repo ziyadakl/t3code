@@ -215,15 +215,22 @@ function finishedRowsFromIssues(
   issues: readonly SandcastleStatusIssue[],
   history: readonly SandcastleStatusHistoryEntry[] | undefined,
   hostId?: string,
+  fallbackCompletedAt?: string,
 ): RecentFinishedRow[] {
   const currentBatchTerminal = partitionIssuesByPhase(issues).recent;
+  // A current-batch terminal issue has no history timestamp of its own. For an
+  // OWN row that means "just finished this batch, not yet logged" (null → sorts
+  // first). For a PEER row we have no per-issue time, so callers pass the peer
+  // snapshot's `updatedAt` as an honest fallback so peer rows sort by the peer's
+  // real clock instead of crowding the top as nulls.
+  const batchCompletedAt = fallbackCompletedAt ?? null;
 
   if (!history) {
     return currentBatchTerminal.map((i) => ({
       number: i.number,
       title: i.title,
       phase: i.phase,
-      completedAt: null,
+      completedAt: batchCompletedAt,
       hostId,
     }));
   }
@@ -233,14 +240,23 @@ function finishedRowsFromIssues(
     title: e.title,
     phase: e.phase,
     completedAt: e.completedAt,
-    hostId,
+    // A fused (v3) top-level history carries per-entry hostId (foldPeers tags each
+    // row with the host that completed it); honor it and fall back to the param
+    // host only for a pre-v3 / single-host entry that has none.
+    hostId: e.hostId ?? hostId,
   }));
 
   const seen = new Set(rows.map((r) => r.number));
   for (const i of currentBatchTerminal) {
     if (seen.has(i.number)) continue;
     seen.add(i.number);
-    rows.push({ number: i.number, title: i.title, phase: i.phase, completedAt: null, hostId });
+    rows.push({
+      number: i.number,
+      title: i.title,
+      phase: i.phase,
+      completedAt: batchCompletedAt,
+      hostId,
+    });
   }
 
   rows.sort(byCompletedAtDesc);
@@ -381,14 +397,18 @@ export function unionActiveIssuesByHost(snap: SandcastleStatusSnapshot): HostTag
  * Finished-issue rows across ALL hosts, newest-first. Own rows come from
  * `recentFinishedIssues` (history + current-batch), each tagged `snap.hostId`;
  * each peer contributes rows derived from `peer.issues` the same way (a peer has
- * no history, so its terminal issues surface with a null completedAt and sort to
- * the top). NOT sliced — the component applies its own RECENT_LIMIT. Single-host
- * ⇒ own rows only.
+ * no per-issue history, so its terminal issues take the peer snapshot's
+ * `updatedAt` as their completion time and sort by the peer's real clock). NOT
+ * sliced — the component applies its own RECENT_LIMIT. Single-host ⇒ own rows only.
  */
 export function mergedRecentAcrossHosts(snap: SandcastleStatusSnapshot): RecentFinishedRow[] {
   const own = finishedRowsFromIssues(snap.issues, snap.history, snap.hostId);
   const peers = (snap.peers ?? []).flatMap((p) =>
-    finishedRowsFromIssues(p.issues, undefined, p.hostId),
+    // A peer carries no per-issue history, so its terminal issues have no
+    // completion time; pass the peer snapshot's `updatedAt` as a fallback so
+    // peer rows sort by the peer's real clock rather than null-first (which
+    // would shove genuinely-recent own-host merges below a display slice).
+    finishedRowsFromIssues(p.issues, undefined, p.hostId, p.updatedAt),
   );
   return [...own, ...peers].sort(byCompletedAtDesc);
 }

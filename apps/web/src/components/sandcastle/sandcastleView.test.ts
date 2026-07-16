@@ -687,19 +687,73 @@ describe("mergedRecentAcrossHosts", () => {
       peers: [
         peer({
           hostId: "vps",
-          // no history on a peer; terminal issues surface with a null completedAt
+          // A peer has no per-issue history; its terminal issues take the peer
+          // snapshot's `updatedAt` (default 2026-06-04) as their completion time.
           issues: [issue(700, "merged"), issue(701, "reviewer")],
         }),
       ],
     });
     const rows = mergedRecentAcrossHosts(snap);
-    // 700 has a null completedAt -> sorts to the top; then 491, then 489.
+    // 491 (Jun 28 18:23) > 489 (Jun 28 17:13) > 700 (peer updatedAt Jun 04).
     expect(rows.map((r) => ({ number: r.number, hostId: r.hostId }))).toEqual([
-      { number: 700, hostId: "vps" },
       { number: 491, hostId: "mac" },
       { number: 489, hostId: "mac" },
+      { number: 700, hostId: "vps" },
     ]);
-    expect(rows[0]!.completedAt).toBeNull();
+    // The peer row is timestamped from the peer snapshot, not null.
+    expect(rows.find((r) => r.number === 700)!.completedAt).toBe("2026-06-04T12:00:00.000Z");
+  });
+});
+
+describe("mergedRecentAcrossHosts — cross-host Recent finished fusion (regressions)", () => {
+  // BUG #2 (wrong-host label): the FUSED status.json foldPeers writes has a
+  // top-level `history` containing PEER-completed rows carrying their own
+  // e.hostId. The history branch of finishedRowsFromIssues must honor e.hostId,
+  // not tag every row with the PARAM (own) hostId.
+  it("preserves per-entry hostId for peer rows fused into top-level history", () => {
+    const snap = xSnapshot({
+      hostId: "mac",
+      // As produced by foldPeers: own row (mac) + a peer row (vps) both live in
+      // the top-level history, each carrying e.hostId.
+      history: [
+        { ...xHist(491, "merged", "2026-06-28T18:23:00Z"), hostId: "mac" },
+        { ...xHist(700, "merged", "2026-06-28T18:20:00Z"), hostId: "vps" },
+      ],
+      issues: [],
+    });
+    const rows = mergedRecentAcrossHosts(snap);
+    // The field's documented meaning is "the host that completed this issue".
+    expect(rows.find((r) => r.number === 700)!.hostId).toBe("vps");
+    expect(rows.find((r) => r.number === 491)!.hostId).toBe("mac");
+  });
+
+  // BUG #3 (undated peer rows sort to top): peer rows previously got
+  // completedAt=null, which byCompletedAtDesc sorts FIRST; the consuming
+  // component (SandcastleProjectDetail RECENT_LIMIT=10) slices, so a
+  // genuinely-recent own-host merge was pushed below the fold behind peer rows.
+  // Peer rows must take the peer snapshot's `updatedAt` as an honest timestamp.
+  it("keeps a fresh own-host merge on screen instead of behind undated peer rows", () => {
+    const RECENT_LIMIT = 10; // mirror of SandcastleProjectDetail.tsx
+    const snap = xSnapshot({
+      hostId: "mac",
+      // One genuinely-recent own merge, logged to history.
+      history: [{ ...xHist(999, "merged", "2026-06-28T23:59:00Z"), hostId: "mac" }],
+      issues: [],
+      peers: [
+        peer({
+          hostId: "vps",
+          // A stale peer snapshot: 10 current-batch terminal issues, all taking
+          // the peer's older updatedAt as their completion time.
+          updatedAt: "2026-06-01T00:00:00.000Z",
+          issues: Array.from({ length: 10 }, (_, k) => issue(100 + k, "merged")),
+        }),
+      ],
+    });
+    const shown = mergedRecentAcrossHosts(snap).slice(0, RECENT_LIMIT);
+    // The fresh own-host merge (Jun 28) sorts above the stale peer rows (Jun 01)
+    // and stays on screen, not shoved off by them.
+    expect(shown[0]!.number).toBe(999);
+    expect(shown.some((r) => r.number === 999)).toBe(true);
   });
 });
 
