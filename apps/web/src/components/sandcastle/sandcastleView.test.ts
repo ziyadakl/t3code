@@ -728,9 +728,7 @@ describe("unionActiveIssuesByHost", () => {
     const snap = xSnapshot({
       hostId: "mac",
       issues: [issue(1, "implementer"), issue(2, "merged"), issue(3, "reviewer")],
-      peers: [
-        peer({ hostId: "vps", issues: [issue(10, "implementer"), issue(11, "merged")] }),
-      ],
+      peers: [peer({ hostId: "vps", issues: [issue(10, "implementer"), issue(11, "merged")] })],
     });
     expect(unionActiveIssuesByHost(snap)).toEqual([
       { issue: issue(1, "implementer"), hostId: "mac" },

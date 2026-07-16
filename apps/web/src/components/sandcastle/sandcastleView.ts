@@ -80,9 +80,7 @@ export function groupSandcastleRows<T>(
     const bucket = row.state !== null && ACTIVE_RUN_STATES.has(row.state) ? running : idle;
     bucket.push({ item: row.item, ts, index });
   });
-  const sortDescStable = (
-    entries: { item: T; ts: number; index: number }[],
-  ): T[] =>
+  const sortDescStable = (entries: { item: T; ts: number; index: number }[]): T[] =>
     entries
       .toSorted((a, b) => (a.ts !== b.ts ? b.ts - a.ts : a.index - b.index))
       .map((e) => e.item);
