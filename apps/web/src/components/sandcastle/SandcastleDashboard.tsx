@@ -18,6 +18,7 @@ import {
   groupSandcastleRows,
   queueReadyDisplay,
   pillVariant,
+  sumTotalsAcrossHosts,
 } from "./sandcastleView.ts";
 import { SANDCASTLE_PILLS, pillIcon, type StatusPillSpec } from "./statusPills.tsx";
 
@@ -52,6 +53,9 @@ function SandcastleProjectCard({ project, value }: DashboardRow) {
   const snap = entry.snapshot;
   const ageHint = snap ? finishedRunAgeHint(snap.state, snap.updatedAt, value!.serverNow) : null;
   const queueReady = queueReadyDisplay(entry.queueReady);
+  // Fuse own totals with any peer hosts so the dashboard card matches the detail
+  // card (which also uses sumTotalsAcrossHosts). No peers ⇒ own totals unchanged.
+  const fusedTotals = snap ? sumTotalsAcrossHosts(snap) : null;
   return (
     <Link
       to="/sandcastle/$environmentId/$projectId"
@@ -92,7 +96,7 @@ function SandcastleProjectCard({ project, value }: DashboardRow) {
                 SANDCASTLE_PILLS.merged,
                 SANDCASTLE_PILLS.needsHuman,
               ].map((spec) => (
-                <CountBadge key={spec.key} spec={spec} count={snap.totals[spec.key]} />
+                <CountBadge key={spec.key} spec={spec} count={fusedTotals![spec.key]} />
               ))}
             </>
           ) : null}
