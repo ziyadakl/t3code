@@ -3,6 +3,7 @@ import type {
   QueueReadyError,
   QueueReadyStatus,
   SandcastleIssuePhase,
+  SandcastleIterations,
   SandcastleRunState,
   SandcastleStatusEntry,
   SandcastleStatusHistoryEntry,
@@ -289,6 +290,44 @@ export function recentFinishedIssues(snap: SandcastleStatusSnapshot): RecentFini
 // every helper degrades to the single-host output the viewer renders today.
 
 /**
+ * One host's slice of a snapshot, in a uniform shape so the fusion helpers can
+ * iterate "own then peers" once instead of repeating the scaffolding. `hostsOf`
+ * yields the snapshot's OWN host first (history = `snap.history`, iterations =
+ * `snap.run.iterations`) then each peer (history = undefined — a peer carries no
+ * per-issue history). A v2 snapshot (no `peers`) yields just the own slice.
+ */
+export interface HostSlice {
+  readonly hostId?: string | undefined;
+  readonly issues: readonly SandcastleStatusIssue[];
+  readonly history?: readonly SandcastleStatusHistoryEntry[] | undefined;
+  readonly totals: SandcastleStatusTotals;
+  readonly iterations: SandcastleIterations;
+  readonly updatedAt: string;
+}
+
+/** Own-first then per-peer iterator over a snapshot's host slices (see HostSlice). */
+export function* hostsOf(snap: SandcastleStatusSnapshot): Generator<HostSlice> {
+  yield {
+    hostId: snap.hostId,
+    issues: snap.issues,
+    history: snap.history,
+    totals: snap.totals,
+    iterations: snap.run.iterations,
+    updatedAt: snap.updatedAt,
+  };
+  for (const p of snap.peers ?? []) {
+    yield {
+      hostId: p.hostId,
+      issues: p.issues,
+      history: undefined,
+      totals: p.totals,
+      iterations: p.iterations,
+      updatedAt: p.updatedAt,
+    };
+  }
+}
+
+/**
  * Field-wise sum of the snapshot's own totals plus each peer's totals. Ships are
  * disjoint across hosts (each host merges its own issues), so summing never
  * double-counts. Returns `snap.totals` unchanged when there are no peers.
@@ -319,19 +358,13 @@ export interface MachineIterations {
  * per peer. Single-host (no peers) ⇒ a one-element array.
  */
 export function perMachineIterations(snap: SandcastleStatusSnapshot): MachineIterations[] {
-  const own: MachineIterations = {
-    hostId: snap.hostId,
-    current: snap.run.iterations.current,
-    total: snap.run.iterations.total,
-  };
-  const peers = (snap.peers ?? []).map(
-    (p): MachineIterations => ({
-      hostId: p.hostId,
-      current: p.iterations.current,
-      total: p.iterations.total,
+  return [...hostsOf(snap)].map(
+    (h): MachineIterations => ({
+      hostId: h.hostId,
+      current: h.iterations.current,
+      total: h.iterations.total,
     }),
   );
-  return [own, ...peers];
 }
 
 /**
@@ -382,15 +415,11 @@ export interface HostTaggedIssue {
  * for a v2 file).
  */
 export function unionActiveIssuesByHost(snap: SandcastleStatusSnapshot): HostTaggedIssue[] {
-  const own = partitionIssuesByPhase(snap.issues).active.map(
-    (issue): HostTaggedIssue => ({ issue, hostId: snap.hostId }),
-  );
-  const peers = (snap.peers ?? []).flatMap((p) =>
-    partitionIssuesByPhase(p.issues).active.map(
-      (issue): HostTaggedIssue => ({ issue, hostId: p.hostId }),
+  return [...hostsOf(snap)].flatMap((h) =>
+    partitionIssuesByPhase(h.issues).active.map(
+      (issue): HostTaggedIssue => ({ issue, hostId: h.hostId }),
     ),
   );
-  return [...own, ...peers];
 }
 
 /**
@@ -402,31 +431,27 @@ export function unionActiveIssuesByHost(snap: SandcastleStatusSnapshot): HostTag
  * sliced — the component applies its own RECENT_LIMIT. Single-host ⇒ own rows only.
  */
 export function mergedRecentAcrossHosts(snap: SandcastleStatusSnapshot): RecentFinishedRow[] {
-  const own = finishedRowsFromIssues(snap.issues, snap.history, snap.hostId);
-  const peers = (snap.peers ?? []).flatMap((p) =>
-    // A peer carries no per-issue history, so its terminal issues have no
-    // completion time; pass the peer snapshot's `updatedAt` as a fallback so
-    // peer rows sort by the peer's real clock rather than null-first (which
-    // would shove genuinely-recent own-host merges below a display slice).
-    finishedRowsFromIssues(p.issues, undefined, p.hostId, p.updatedAt),
+  // Own-first then per-peer rows (see hostsOf). The OWN host (first slice) carries
+  // real per-issue `history` and passes NO fallback, so its current-batch terminals
+  // sort first as nulls — unchanged single-host behavior. A PEER (later slices)
+  // carries no per-issue history, so its terminal issues take the peer snapshot's
+  // `updatedAt` as an honest completion time (rather than null-first, which would
+  // shove genuinely-recent own-host merges below a display slice).
+  const perHost = [...hostsOf(snap)].flatMap((h, i) =>
+    finishedRowsFromIssues(h.issues, h.history, h.hostId, i === 0 ? undefined : h.updatedAt),
   );
   // Dedup the fused own+peer union by issue `number` (a GitHub issue number is
   // globally unique on the shared queue — one issue is completed once). The
   // upstream producer records a peer-merged issue #N BOTH in top-level `history`
   // (real completedAt, via foldPeers) AND in that peer's `peers[].issues` (phase
-  // "merged"), so #N surfaces once from the own-call (history) and again from the
-  // peer-call (fallback timestamp). The `seen` Set inside finishedRowsFromIssues
-  // is local per call, so cross-call dedup has to happen here. When #N appears in
-  // both, PREFER the history row: its completedAt is the real clock (better
-  // ordering) rather than the peer's coarse updatedAt fallback.
+  // "merged"), so #N surfaces once from the own slice (history) and again from a
+  // peer slice (fallback timestamp). The `seen` Set inside finishedRowsFromIssues
+  // is local per call, so cross-call dedup has to happen here. `perHost` lists own
+  // rows first, so a first-writer-wins insert PREFERS the history-backed own row
+  // (real clock, better ordering) over a peer's coarse updatedAt fallback, and
+  // still fills in peer-only issues that have no own/history row.
   const byNumber = new Map<number, RecentFinishedRow>();
-  for (const row of own) {
-    // `own` rows come from the top-level history branch (real per-entry
-    // completedAt), so a first-writer-wins from the own set keeps the history row.
-    if (!byNumber.has(row.number)) byNumber.set(row.number, row);
-  }
-  for (const row of peers) {
-    // Only fill in peer-only issues; never overwrite a history-backed own row.
+  for (const row of perHost) {
     if (!byNumber.has(row.number)) byNumber.set(row.number, row);
   }
   return [...byNumber.values()].sort(byCompletedAtDesc);

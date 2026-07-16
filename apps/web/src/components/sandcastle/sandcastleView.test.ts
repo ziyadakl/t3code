@@ -19,6 +19,7 @@ import {
   hostBadgeLabel,
   unionActiveIssuesByHost,
   mergedRecentAcrossHosts,
+  hostsOf,
   STALE_AFTER_MS,
   type SandcastleGroupItem,
 } from "./sandcastleView.ts";
@@ -568,6 +569,70 @@ describe("hostBadgeLabel", () => {
   it("returns empty string for empty/whitespace input", () => {
     expect(hostBadgeLabel("")).toBe("");
     expect(hostBadgeLabel("   ")).toBe("");
+  });
+});
+
+describe("hostsOf", () => {
+  it("yields the own host first, then each peer in order", () => {
+    const snap = xSnapshot({
+      hostId: "mac",
+      peers: [peer({ hostId: "vps" }), peer({ hostId: "pi" })],
+    });
+    expect([...hostsOf(snap)].map((h) => h.hostId)).toEqual(["mac", "vps", "pi"]);
+  });
+
+  it("maps own fields: iterations from snap.run.iterations, history from snap.history", () => {
+    const snap = xSnapshot({
+      hostId: "mac",
+      run: { ...runningSnapshot.run, iterations: { current: 3, total: 8 } },
+      history: [xHist(491, "merged", "2026-06-28T18:23:00Z")],
+      totals: { merged: 2, needsHuman: 1, requeued: 0, running: 1 },
+      issues: [issue(1, "implementer")],
+      updatedAt: "2026-06-28T18:23:00Z",
+    });
+    const own = [...hostsOf(snap)][0]!;
+    expect(own).toEqual({
+      hostId: "mac",
+      issues: [issue(1, "implementer")],
+      history: [xHist(491, "merged", "2026-06-28T18:23:00Z")],
+      totals: { merged: 2, needsHuman: 1, requeued: 0, running: 1 },
+      iterations: { current: 3, total: 8 },
+      updatedAt: "2026-06-28T18:23:00Z",
+    });
+  });
+
+  it("maps peer fields from the peer, with history undefined", () => {
+    const snap = xSnapshot({
+      hostId: "mac",
+      peers: [
+        peer({
+          hostId: "vps",
+          iterations: { current: 5, total: 8 },
+          totals: { merged: 3, needsHuman: 0, requeued: 2, running: 1 },
+          issues: [issue(700, "merged")],
+          updatedAt: "2026-07-01T00:00:00.000Z",
+        }),
+      ],
+    });
+    const p = [...hostsOf(snap)][1]!;
+    expect(p).toEqual({
+      hostId: "vps",
+      issues: [issue(700, "merged")],
+      history: undefined,
+      totals: { merged: 3, needsHuman: 0, requeued: 2, running: 1 },
+      iterations: { current: 5, total: 8 },
+      updatedAt: "2026-07-01T00:00:00.000Z",
+    });
+  });
+
+  it("v2 no-peers snapshot yields only the own host (iterations from snap.run.iterations)", () => {
+    const snap = xSnapshot({
+      run: { ...runningSnapshot.run, iterations: { current: 3, total: 8 } },
+    });
+    const slices = [...hostsOf(snap)];
+    expect(slices).toHaveLength(1);
+    expect(slices[0]!.hostId).toBeUndefined();
+    expect(slices[0]!.iterations).toEqual({ current: 3, total: 8 });
   });
 });
 
