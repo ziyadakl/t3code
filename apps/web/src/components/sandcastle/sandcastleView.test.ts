@@ -755,6 +755,60 @@ describe("mergedRecentAcrossHosts — cross-host Recent finished fusion (regress
     expect(shown[0]!.number).toBe(999);
     expect(shown.some((r) => r.number === 999)).toBe(true);
   });
+
+  // BUG #4 (peer-merged issue double-emitted): recordOutcome sets phase=merged
+  // in place AND pushes to top-level history (tagged with the peer hostId via
+  // foldPeers). So a peer-merged issue #N lands SIMULTANEOUSLY in top-level
+  // `history` (real completedAt) and in `peers[].issues` (phase "merged"). The
+  // own-call emits #N from history; the peer-call emits #N again from p.issues
+  // with the fallback (peer updatedAt) timestamp. The `seen` Set is local per
+  // call, so there was no cross-call dedup → #N appeared twice in Recent.
+  it("dedups a peer-merged issue present in BOTH top-level history and peer issues", () => {
+    const snap = xSnapshot({
+      hostId: "mac",
+      // foldPeers put #700 (completed by vps) into the fused top-level history.
+      history: [{ ...xHist(700, "merged", "2026-06-28T18:20:00Z"), hostId: "vps" }],
+      issues: [],
+      peers: [
+        peer({
+          hostId: "vps",
+          // recordOutcome also set #700 phase=merged in place on the peer.
+          updatedAt: "2026-06-04T12:00:00.000Z",
+          issues: [issue(700, "merged")],
+        }),
+      ],
+    });
+    const rows = mergedRecentAcrossHosts(snap);
+    const sevenHundreds = rows.filter((r) => r.number === 700);
+    expect(sevenHundreds).toHaveLength(1);
+    // The kept row is the history one: real completedAt + the completing host.
+    expect(sevenHundreds[0]!.completedAt).toBe("2026-06-28T18:20:00Z");
+    expect(sevenHundreds[0]!.hostId).toBe("vps");
+  });
+
+  // Guard against over-dedup: a peer issue that is NOT in top-level history must
+  // still appear (it's the only source for that issue).
+  it("still emits a peer issue that is absent from top-level history (no over-dedup)", () => {
+    const snap = xSnapshot({
+      hostId: "mac",
+      history: [{ ...xHist(700, "merged", "2026-06-28T18:20:00Z"), hostId: "vps" }],
+      issues: [],
+      peers: [
+        peer({
+          hostId: "vps",
+          updatedAt: "2026-06-04T12:00:00.000Z",
+          // #700 is a duplicate of history; #701 is peer-only.
+          issues: [issue(700, "merged"), issue(701, "merged")],
+        }),
+      ],
+    });
+    const rows = mergedRecentAcrossHosts(snap);
+    expect(rows.filter((r) => r.number === 700)).toHaveLength(1);
+    const peerOnly = rows.filter((r) => r.number === 701);
+    expect(peerOnly).toHaveLength(1);
+    expect(peerOnly[0]!.hostId).toBe("vps");
+    expect(peerOnly[0]!.completedAt).toBe("2026-06-04T12:00:00.000Z");
+  });
 });
 
 describe("cross-host helpers degrade to single-host output (v2 file: no peers, no hostId)", () => {

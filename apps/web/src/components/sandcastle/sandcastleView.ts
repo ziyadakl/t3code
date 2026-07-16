@@ -410,7 +410,26 @@ export function mergedRecentAcrossHosts(snap: SandcastleStatusSnapshot): RecentF
     // would shove genuinely-recent own-host merges below a display slice).
     finishedRowsFromIssues(p.issues, undefined, p.hostId, p.updatedAt),
   );
-  return [...own, ...peers].sort(byCompletedAtDesc);
+  // Dedup the fused own+peer union by issue `number` (a GitHub issue number is
+  // globally unique on the shared queue — one issue is completed once). The
+  // upstream producer records a peer-merged issue #N BOTH in top-level `history`
+  // (real completedAt, via foldPeers) AND in that peer's `peers[].issues` (phase
+  // "merged"), so #N surfaces once from the own-call (history) and again from the
+  // peer-call (fallback timestamp). The `seen` Set inside finishedRowsFromIssues
+  // is local per call, so cross-call dedup has to happen here. When #N appears in
+  // both, PREFER the history row: its completedAt is the real clock (better
+  // ordering) rather than the peer's coarse updatedAt fallback.
+  const byNumber = new Map<number, RecentFinishedRow>();
+  for (const row of own) {
+    // `own` rows come from the top-level history branch (real per-entry
+    // completedAt), so a first-writer-wins from the own set keeps the history row.
+    if (!byNumber.has(row.number)) byNumber.set(row.number, row);
+  }
+  for (const row of peers) {
+    // Only fill in peer-only issues; never overwrite a history-backed own row.
+    if (!byNumber.has(row.number)) byNumber.set(row.number, row);
+  }
+  return [...byNumber.values()].sort(byCompletedAtDesc);
 }
 
 /** One display row produced by historyLinksForPhase. */
