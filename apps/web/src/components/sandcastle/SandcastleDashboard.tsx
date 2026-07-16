@@ -3,7 +3,7 @@ import { useMemo } from "react";
 import { Link } from "@tanstack/react-router";
 import { ChevronRightIcon } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, SandcastleStatusSnapshot } from "@t3tools/contracts";
 import { useStore, selectProjectsAcrossEnvironments } from "../../store.ts";
 import { useSavedEnvironmentRegistryStore } from "../../environments/runtime";
 import { useUiStateStore } from "../../uiStateStore.ts";
@@ -33,6 +33,22 @@ function CountBadge({ spec, count }: { spec: StatusPillSpec; count: number }) {
   );
 }
 
+/** The running/merged/needs-you count pills for a live snapshot. Fusing the
+ *  totals here — inside a non-null `snap` boundary — lets TS narrow the per-spec
+ *  index so no non-null assertion is needed. No peers ⇒ own totals unchanged. */
+function SnapshotTotalsPills({ snap }: { snap: SandcastleStatusSnapshot }) {
+  const fusedTotals = sumTotalsAcrossHosts(snap);
+  return (
+    <>
+      {[SANDCASTLE_PILLS.running, SANDCASTLE_PILLS.merged, SANDCASTLE_PILLS.needsHuman].map(
+        (spec) => (
+          <CountBadge key={spec.key} spec={spec} count={fusedTotals[spec.key]} />
+        ),
+      )}
+    </>
+  );
+}
+
 function EnvLabel({ environmentId }: { environmentId: EnvironmentId }) {
   const label = useSavedEnvironmentRegistryStore((s) => s.byId[environmentId]?.label ?? "Local");
   return <span className="text-xs text-muted-foreground">{label}</span>;
@@ -53,9 +69,6 @@ function SandcastleProjectCard({ project, value }: DashboardRow) {
   const snap = entry.snapshot;
   const ageHint = snap ? finishedRunAgeHint(snap.state, snap.updatedAt, value!.serverNow) : null;
   const queueReady = queueReadyDisplay(entry.queueReady);
-  // Fuse own totals with any peer hosts so the dashboard card matches the detail
-  // card (which also uses sumTotalsAcrossHosts). No peers ⇒ own totals unchanged.
-  const fusedTotals = snap ? sumTotalsAcrossHosts(snap) : null;
   return (
     <Link
       to="/sandcastle/$environmentId/$projectId"
@@ -89,17 +102,7 @@ function SandcastleProjectCard({ project, value }: DashboardRow) {
           ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {snap ? (
-            <>
-              {[
-                SANDCASTLE_PILLS.running,
-                SANDCASTLE_PILLS.merged,
-                SANDCASTLE_PILLS.needsHuman,
-              ].map((spec) => (
-                <CountBadge key={spec.key} spec={spec} count={fusedTotals![spec.key]} />
-              ))}
-            </>
-          ) : null}
+          {snap ? <SnapshotTotalsPills snap={snap} /> : null}
           <Badge variant={bannerTone(banner.kind)} size="xl">
             {banner.kind === "live" ? <LiveDot /> : null}
             {banner.text}

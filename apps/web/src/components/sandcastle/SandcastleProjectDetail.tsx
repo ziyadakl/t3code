@@ -27,7 +27,11 @@ import {
 import { SandcastleIssueRow } from "./SandcastleIssueRow.tsx";
 import { LiveDot } from "./LiveDot.tsx";
 import { SANDCASTLE_PILLS, pillIcon, type StatusPillSpec } from "./statusPills.tsx";
-import type { SandcastleIssuePhase } from "@t3tools/contracts";
+import type {
+  RepositoryIdentity,
+  SandcastleIssuePhase,
+  SandcastleStatusSnapshot,
+} from "@t3tools/contracts";
 import type { HistoryLinkRow } from "./sandcastleView.ts";
 
 /** Clickable pill that opens a popover listing the history entries for a phase. */
@@ -108,6 +112,37 @@ const DETAIL_POPOVER_PILLS: ReadonlyArray<{
   { spec: SANDCASTLE_PILLS.requeued, phase: "deferred" },
 ];
 
+/** The fused count pills (each opening a history popover) for a live snapshot.
+ *  Fusing the totals here — inside a non-null `snap` boundary — lets TS narrow
+ *  the per-spec index so no non-null assertion is needed. */
+function DetailStatusPills({
+  snap,
+  identity,
+}: {
+  snap: SandcastleStatusSnapshot;
+  identity: RepositoryIdentity | null;
+}) {
+  const totals = sumTotalsAcrossHosts(snap);
+  return (
+    <div className="ms-auto flex gap-2">
+      {DETAIL_POPOVER_PILLS.map(({ spec, phase }) => (
+        <PillPopover
+          key={spec.key}
+          spec={spec}
+          count={totals[spec.key]}
+          // TODO(cross-host): popover drilldown is own-host only; the count
+          // above is fused (own+peers). PeerStatus carries no history (only
+          // current-batch issues), so there are no peer history rows to merge
+          // in here — fusing the drilldown isn't clean until peers ship a
+          // history log. Multi-host users may see a fused count with an
+          // own-host-only drilldown.
+          rows={historyLinksForPhase(snap.history, phase, identity)}
+        />
+      ))}
+    </div>
+  );
+}
+
 /** Max finished issues shown in "Recent"; the rest collapse into a "+N more"
  *  line (the pills already carry the full cumulative counts). */
 const RECENT_LIMIT = 10;
@@ -161,7 +196,6 @@ export function SandcastleProjectDetail({
   const recentAll = snap ? mergedRecentAcrossHosts(snap) : [];
   const recent = recentAll.slice(0, RECENT_LIMIT);
   const recentMore = recentAll.length - recent.length;
-  const totals = snap ? sumTotalsAcrossHosts(snap) : null;
   const queueReady = queueReadyDisplay(entry?.queueReady);
 
   const issueLink = (n: number) => githubIssueUrl(project.repositoryIdentity ?? null, n);
@@ -213,26 +247,7 @@ export function SandcastleProjectDetail({
                 · {queueReady.text}
               </span>
             ) : null}
-            <div className="ms-auto flex gap-2">
-              {DETAIL_POPOVER_PILLS.map(({ spec, phase }) => (
-                <PillPopover
-                  key={spec.key}
-                  spec={spec}
-                  count={totals![spec.key]}
-                  // TODO(cross-host): popover drilldown is own-host only; the
-                  // count above is fused (own+peers). PeerStatus carries no
-                  // history (only current-batch issues), so there are no peer
-                  // history rows to merge in here — fusing the drilldown isn't
-                  // clean until peers ship a history log. Multi-host users may
-                  // see a fused count with an own-host-only drilldown.
-                  rows={historyLinksForPhase(
-                    snap.history,
-                    phase,
-                    project.repositoryIdentity ?? null,
-                  )}
-                />
-              ))}
-            </div>
+            <DetailStatusPills snap={snap} identity={project.repositoryIdentity ?? null} />
           </Card>
 
           <Card className="mx-auto w-full max-w-5xl min-h-0 gap-4 overflow-y-auto p-4">
