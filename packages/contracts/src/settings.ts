@@ -1443,6 +1443,16 @@ export const ServerSettings = Schema.Struct({
   usageModelAliases: Schema.Record(TrimmedNonEmptyString, TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  /**
+   * Tailscale device names (MagicDNS short names such as `my-laptop`) whose
+   * browsers get a session without pairing. Empty means every device pairs.
+   * Deliberately absent from `ServerSettingsPatch`: only someone who can edit
+   * the server's settings.json can widen who skips pairing, never a client.
+   * See apps/server/src/auth/TrustedDevices.ts for how callers are identified.
+   */
+  trustedTailscaleDevices: Schema.Array(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 

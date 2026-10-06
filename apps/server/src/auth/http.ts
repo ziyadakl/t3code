@@ -22,13 +22,14 @@ import {
   EnvironmentAuthenticatedAuth,
   EnvironmentAuthenticatedPrincipal,
 } from "@t3tools/contracts";
-import type { AuthEnvironmentScope, DpopFailureReason } from "@t3tools/contracts";
+import type { AuthEnvironmentScope, AuthSessionState, DpopFailureReason } from "@t3tools/contracts";
 import { parseAllowedOAuthScope } from "@t3tools/shared/oauthScope";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Cookies from "effect/http/Cookies";
 import * as HttpEffect from "effect/http/HttpEffect";
 import { HttpServerRequest, HttpServerResponse } from "effect/http";
@@ -36,6 +37,7 @@ import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import * as SessionStore from "./SessionStore.ts";
+import * as TrustedDevices from "./TrustedDevices.ts";
 import { traceAuthenticatedRelayRequest, traceRelayRequest } from "../cloud/traceRelayRequest.ts";
 import { deriveAuthClientMetadata } from "./utils.ts";
 import { verifyRequestDpopProof } from "./dpop.ts";
@@ -267,6 +269,7 @@ export const layer = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
     const sessions = yield* SessionStore.SessionStore;
+    const trustedDevices = yield* TrustedDevices.TrustedDevices;
 
     return handlers
       .handle(
@@ -290,7 +293,35 @@ export const layer = HttpApiBuilder.group(
               yield* appendSessionCookie(sessions.cookieName, credential.token, result.expiresAt);
               yield* appendCredentialResponseHeaders;
             }
-            return result;
+            if (result.authenticated) {
+              return result;
+            }
+            // An allow-listed Tailscale device gets a session instead of the
+            // pairing screen. Off (always none) while the allow-list is empty.
+            const trustedDevice = yield* trustedDevices.resolve(request);
+            if (Option.isNone(trustedDevice)) {
+              return result;
+            }
+            const issued = yield* serverAuth.issueTrustedDeviceBrowserSession(
+              trustedDevice.value,
+              deriveAuthClientMetadata({ request }),
+            );
+            yield* Effect.logInfo("Issued a trusted-device session", {
+              device: trustedDevice.value,
+            });
+            yield* appendSessionCookie(
+              sessions.cookieName,
+              issued.sessionToken,
+              issued.response.expiresAt,
+            );
+            yield* appendCredentialResponseHeaders;
+            return {
+              authenticated: true,
+              auth: result.auth,
+              scopes: issued.response.scopes,
+              sessionMethod: issued.response.sessionMethod,
+              expiresAt: issued.response.expiresAt,
+            } satisfies AuthSessionState;
           },
           Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
             failEnvironmentInternal("internal_error", error),

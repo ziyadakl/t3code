@@ -1120,3 +1120,21 @@ describe("ServerSettings.removeAgentCreditsOnMerge", () => {
     ).toBe(true);
   });
 });
+
+describe("ServerSettings.trustedTailscaleDevices", () => {
+  it("defaults to pairing everyone and reads a device list from settings.json", () => {
+    expect(decodeServerSettings({}).trustedTailscaleDevices).toEqual([]);
+    expect(
+      decodeServerSettings({ trustedTailscaleDevices: ["ziyads-macbook-air", "affinity"] })
+        .trustedTailscaleDevices,
+    ).toEqual(["ziyads-macbook-air", "affinity"]);
+  });
+
+  it("cannot be widened over the wire, only by editing settings.json", () => {
+    // A client patch carrying the key must not reach the stored settings, or
+    // anyone who can change settings could grant themselves pairing-free access.
+    expect(
+      decodeServerSettingsPatch({ trustedTailscaleDevices: ["srv1360790"] }),
+    ).not.toHaveProperty("trustedTailscaleDevices");
+  });
+});
