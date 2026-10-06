@@ -27,6 +27,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as AuthHttp from "./http.ts";
+import * as TrustedDevices from "./TrustedDevices.ts";
 
 const DEV_TOKEN = "reusable-dev-auth-token-that-is-long-enough";
 class AuthTestApi extends HttpApi.make("environment").add(EnvironmentHttpApi.groups.auth) {}
@@ -50,8 +51,15 @@ const layerEnvironmentAuth = EnvironmentAuth.layer.pipe(
   Layer.provide(ServerEnvironment.layerIdentity),
   Layer.provide(layerConfig),
 );
+// Caller identification is covered in TrustedDevices.test.ts; here a test
+// header stands in for "TrustedDevices recognised an allow-listed device".
+const layerTrustedDevicesStub = Layer.succeed(TrustedDevices.TrustedDevices, {
+  resolve: (request) =>
+    Effect.succeed(Option.fromNullishOr(request.headers["x-test-trusted-device"])),
+});
 const layerRoutes = HttpApiBuilder.layer(AuthTestApi).pipe(
   Layer.provide(AuthHttp.layer),
+  Layer.provide(layerTrustedDevicesStub),
   Layer.provide(AuthHttp.layerAuthenticatedAuth),
   Layer.provideMerge(layerEnvironmentAuth),
   Layer.provide(layerConfig),
@@ -217,4 +225,56 @@ it.effect("exports only verified T3 Connect requests", () =>
     expect(productSpans).toEqual([]);
     expect(localSpans).toEqual(["EnvironmentAuth.authenticateHttpRequest", "environment.handler"]);
   }).pipe(Effect.scoped),
+);
+
+it.effect("gives an allow-listed device a standard session instead of the pairing screen", () =>
+  Effect.gen(function* () {
+    const crypto = yield* Crypto.Crypto;
+    const unusedSecretStore = ServerSecretStore.ServerSecretStore.of({
+      get: () => Effect.succeedNone,
+      set: () => Effect.void,
+      create: () => Effect.void,
+      getOrCreateRandom: () => Effect.die("Not used by these routes."),
+      remove: () => Effect.void,
+    });
+    const requestContext = Context.make(Crypto.Crypto, crypto).pipe(
+      Context.add(ServerSecretStore.ServerSecretStore, unusedSecretStore),
+    );
+    return yield* Effect.acquireUseRelease(
+      Effect.sync(() => HttpRouter.toWebHandler(layerRoutes, { disableLogger: true })),
+      (environment) =>
+        Effect.tryPromise(async () => {
+          const untrusted = await environment.handler(
+            new Request("http://127.0.0.1/api/auth/session"),
+            requestContext,
+          );
+          expect(await untrusted.json()).toMatchObject({ authenticated: false });
+          expect(untrusted.headers.getSetCookie()).toEqual([]);
+
+          const trusted = await environment.handler(
+            new Request("http://127.0.0.1/api/auth/session", {
+              headers: { "x-test-trusted-device": "affinity" },
+            }),
+            requestContext,
+          );
+          expect(trusted.status).toBe(200);
+          const state = (await trusted.json()) as { authenticated: boolean; scopes: string[] };
+          expect(state.authenticated).toBe(true);
+          expect(state.scopes).toContain("orchestration:operate");
+          expect(state.scopes).not.toContain("access:write");
+          const cookie = trusted.headers.getSetCookie().find((c) => c.startsWith("t3_session_"));
+          expect(cookie).toContain("HttpOnly");
+
+          // The cookie alone authenticates the next request.
+          const next = await environment.handler(
+            new Request("http://127.0.0.1/api/auth/session", {
+              headers: { cookie: cookie?.split(";", 1)[0] ?? "" },
+            }),
+            requestContext,
+          );
+          expect(await next.json()).toMatchObject({ authenticated: true });
+        }),
+      (environment) => Effect.promise(() => environment.dispose()),
+    );
+  }).pipe(Effect.provide(NodeServices.layer)),
 );

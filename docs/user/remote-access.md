@@ -137,6 +137,44 @@ tailscale serve --https=443 off
 If that port is already in use, choose another with
 `--tailscale-serve-port`. See `t3 pair --help` for other pairing options.
 
+### Skip pairing for your own Tailscale devices
+
+By default every browser pairs once, even on your own tailnet. You can name
+Tailscale devices that get a session straight away. Add them to
+`trustedTailscaleDevices` in the server's settings file,
+`~/.t3/userdata/settings.json` by default. A server started with
+`--home-dir <path>` uses `<path>/userdata/settings.json`.
+
+```json
+{
+  "trustedTailscaleDevices": ["my-laptop", "my-phone"]
+}
+```
+
+Use each device's Tailscale machine name — the short name in `tailscale status`
+or on the Machines page of the Tailscale admin console, not its local computer
+name, which is often different. Restart the server after editing the file.
+
+An empty list, the default, means every device pairs. There is no setting for
+this in the apps: a list that decides who skips pairing can only be changed by
+someone who can already edit the server's files.
+
+What a listed device gets is an ordinary session with normal app permissions,
+not the ability to manage access. Revoke one at any time under
+**Settings → Connections**; removing the device from the list stops new
+sessions.
+
+T3 Code identifies the device by asking the Tailscale daemon on the server
+which machine the connection came from, so a browser cannot claim to be one of
+your devices. Two cases do not count as a trusted device and still pair:
+traffic from Tailscale Funnel or a T3 Connect tunnel, which comes from the
+public internet, and a device from another tailnet that reuses one of your
+names.
+
+Naming the server's own machine in the list also trusts any program running on
+that machine, because those connections arrive the same way a local browser's
+do. List it only if you open T3 Code in a browser on the server itself.
+
 ### Hosted web app
 
 [app.t3.codes](https://app.t3.codes) needs an HTTPS endpoint. It connects directly

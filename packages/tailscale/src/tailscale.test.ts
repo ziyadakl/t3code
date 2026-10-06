@@ -18,11 +18,13 @@ import {
   parseTailscaleMagicDnsName,
   parseTailscaleStatus,
   readTailscaleStatus,
+  readTailscaleWhois,
   TAILSCALE_STATUS_TIMEOUT,
   TailscaleCommandExitError,
   TailscaleCommandSpawnError,
   TailscaleCommandTimeoutError,
   TailscaleStatusParseError,
+  TailscaleWhoisParseError,
 } from "./tailscale.ts";
 
 const encoder = new TextEncoder();
@@ -194,6 +196,38 @@ describe("tailscale", () => {
       });
     });
   });
+
+  it.effect("reads the peer node name from tailscale whois", () => {
+    const layer = layerMockSpawner((command, args) => {
+      assert.equal(command, "tailscale");
+      assert.deepEqual(args, ["whois", "--json", "100.79.86.27"]);
+      return {
+        stdout: `{"Node":{"Name":"laptop.tail.ts.net.","Tags":null},"UserProfile":{"LoginName":"a@b.c"}}`,
+      };
+    });
+
+    return Effect.gen(function* () {
+      const whois = yield* readTailscaleWhois("100.79.86.27").pipe(Effect.provide(layer));
+      assert.deepEqual(whois, { nodeName: "laptop.tail.ts.net" });
+    });
+  });
+
+  it.effect("fails tailscale whois for an unknown peer or unexpected output", () =>
+    Effect.gen(function* () {
+      const unknownPeer = yield* readTailscaleWhois("100.64.0.9").pipe(
+        Effect.provide(layerMockSpawner(() => ({ code: 1, stderr: "peer not found" }))),
+        Effect.flip,
+      );
+      assert.instanceOf(unknownPeer, TailscaleCommandExitError);
+      assert.equal(unknownPeer.subcommand, "whois");
+
+      const malformed = yield* readTailscaleWhois("100.64.0.9").pipe(
+        Effect.provide(layerMockSpawner(() => ({ stdout: `{"Node":{}}` }))),
+        Effect.flip,
+      );
+      assert.instanceOf(malformed, TailscaleWhoisParseError);
+    }),
+  );
 
   it.effect("preserves tailscale spawn failures as causes", () => {
     const systemCause = new Error("private executable lookup detail");
