@@ -53,6 +53,20 @@ You can also send `/compact` in an existing conversation. Web and desktop offer
 a large older thread. See [commands and skills](./composer.md#commands-and-skills)
 for using composer commands.
 
+## Claude desktop sessions in the sidebar
+
+On macOS, T3 Code shows every open chat from the Claude desktop app's Code tab in
+the sidebar, grouped by project folder, with its past conversation. Sending a
+message continues the same Claude session. New desktop chats, renames and
+archives follow within a minute; archiving in the desktop app archives the thread
+in T3 Code and never deletes it. Chats whose folder is not on this machine are
+skipped.
+
+Turn it off, or on for another operating system, in `settings.json` with
+`"desktopMirror": { "enabled": false }`. To mirror on a server, copy the desktop
+app's `~/Library/Application Support/Claude/claude-code-sessions` folder to it and
+set `"desktopMirror": { "enabled": true, "sessionsDir": "<copied folder>" }`.
+
 ## Usage limits
 
 If your Claude subscription runs out of usage mid-turn, the thread shows which

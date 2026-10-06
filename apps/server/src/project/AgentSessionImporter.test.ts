@@ -5,6 +5,7 @@ import {
   ThreadId,
   type OrchestrationV2DomainEvent,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -147,3 +148,131 @@ it.effect("imports messages once and preserves the provider native resume bindin
     expect(recorded).toHaveLength(2);
   }).pipe(Effect.provide(layerTest));
 });
+
+it.effect(
+  "imports into the active list and later appends only the messages it has not seen",
+  () => {
+    const writes: Array<ReadonlyArray<OrchestrationV2DomainEvent>> = [];
+    let runs: Array<unknown> = [];
+    let messageCount = 0;
+    const claudeSessionId = "11111111-1111-4111-8111-111111111111";
+    const claudeInstanceId = ProviderInstanceId.make("claudeAgent");
+    const claudeThreadId = ThreadId.make(`import:${claudeInstanceId}:${claudeSessionId}`);
+    const source = {
+      provider: "claudeAgent" as const,
+      providerInstanceId: claudeInstanceId,
+      providerSessionId: claudeSessionId,
+      filePath: "/tmp/session.jsonl",
+      size: 100,
+      mtimeMs: 2,
+      device: 3,
+      inode: 4,
+      birthtimeMs: 1,
+    };
+    const thread = (texts: ReadonlyArray<string>) => ({
+      source: "claudeAgent" as const,
+      providerInstanceId: claudeInstanceId,
+      providerSessionId: claudeSessionId,
+      title: "Desktop chat",
+      model: null,
+      createdAt: "2026-09-01T10:00:00.000Z",
+      updatedAt: "2026-09-01T10:01:00.000Z",
+      messages: texts.map((text, index) => ({
+        role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+        text,
+        createdAt: "2026-09-01T10:00:00.000Z",
+      })),
+    });
+    const layerTest = AgentSessionImporter.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.mock(AgentSessionScanner.AgentSessionScanner)({}),
+          Layer.mock(ProjectService.ProjectService)({}),
+          Layer.mock(Orchestrator.OrchestratorV2)({
+            getThreadRecords: () =>
+              writes.length === 0
+                ? Effect.fail(
+                    new Orchestrator.OrchestratorProjectionError({ threadId: claudeThreadId }),
+                  )
+                : Effect.succeed({
+                    thread: {
+                      id: claudeThreadId,
+                      projectId,
+                      historyOrigin: "v1_import",
+                      deletedAt: null,
+                    },
+                    runs,
+                    messages: Array.from({ length: messageCount }),
+                  } as never),
+          }),
+          Layer.mock(EventSink.EventSinkV2)({
+            write: (input) =>
+              Effect.sync(() => {
+                writes.push(input.events);
+                messageCount += input.events.filter(
+                  (event) => event.type === "message.updated",
+                ).length;
+                return [];
+              }),
+          }),
+          Layer.mock(ProviderSessionRuntime.ProviderSessionRuntimeRepository)({
+            upsert: () => Effect.void,
+            recordImportedTranscript: () => Effect.void,
+          }),
+          IdAllocator.layer,
+        ),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      const importer = yield* AgentSessionImporter.AgentSessionImporter;
+      yield* importer.importThread({
+        projectId,
+        workspaceRoot: "/workspace/project",
+        threadId: claudeThreadId,
+        thread: thread(["Fix it", "Fixed"]),
+        source,
+        activeAt: DateTime.makeUnsafe("2026-10-05T09:00:00.000Z"),
+      });
+      const created = writes[0]?.find((event) => event.type === "thread.created");
+      expect(created?.payload).toMatchObject({ settledOverride: "active", settledAt: null });
+      expect(
+        created?.type === "thread.created" && created.payload.unsettledAt != null
+          ? DateTime.formatIso(created.payload.unsettledAt)
+          : null,
+      ).toBe("2026-10-05T09:00:00.000Z");
+
+      const longer = thread(["Fix it", "Fixed", "Now the header", "Done"]);
+      expect(
+        yield* importer.appendImportedMessages({
+          threadId: claudeThreadId,
+          thread: longer,
+          source,
+        }),
+      ).toBe(2);
+      expect(
+        writes[1]
+          ?.filter((event) => event.type === "message.updated")
+          .map((event) => event.payload.text),
+      ).toEqual(["Now the header", "Done"]);
+      expect(
+        yield* importer.appendImportedMessages({
+          threadId: claudeThreadId,
+          thread: longer,
+          source,
+        }),
+      ).toBe(0);
+
+      // Once a turn ran in T3 Code, its copy of the session is the live one.
+      runs = [{}];
+      expect(
+        yield* importer.appendImportedMessages({
+          threadId: claudeThreadId,
+          thread: thread(["Fix it", "Fixed", "Now the header", "Done", "More"]),
+          source,
+        }),
+      ).toBe(0);
+      expect(yield* importer.isUntouchedImport(claudeThreadId)).toBe(false);
+    }).pipe(Effect.provide(layerTest));
+  },
+);

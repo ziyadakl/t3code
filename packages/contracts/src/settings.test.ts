@@ -1138,3 +1138,14 @@ describe("ServerSettings.trustedTailscaleDevices", () => {
     ).not.toHaveProperty("trustedTailscaleDevices");
   });
 });
+
+describe("ServerSettings.desktopMirror", () => {
+  it("leaves the platform default to the server and reads a synced sessions folder", () => {
+    expect(decodeServerSettings({}).desktopMirror).toEqual({});
+    expect(
+      decodeServerSettings({
+        desktopMirror: { enabled: true, sessionsDir: "/home/deploy/claude-code-sessions" },
+      }).desktopMirror,
+    ).toEqual({ enabled: true, sessionsDir: "/home/deploy/claude-code-sessions" });
+  });
+});

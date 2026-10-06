@@ -185,6 +185,11 @@ const make = Effect.gen(function* () {
     readonly source: AgentSessionImportSource;
     /** Existing worktree the session ran in; the thread runs there when set. */
     readonly worktreePath?: string;
+    /**
+     * Keep the thread in the active list, sorted as if it last became active
+     * at this time, instead of importing it settled.
+     */
+    readonly activeAt?: DateTime.Utc;
   }) {
     const { thread, source, threadId } = input;
     if (
@@ -245,9 +250,9 @@ const make = Effect.gen(function* () {
       createdAt,
       updatedAt,
       archivedAt: null,
-      settledOverride: "settled",
-      settledAt: updatedAt,
-      unsettledAt: null,
+      ...(input.activeAt === undefined
+        ? { settledOverride: "settled", settledAt: updatedAt, unsettledAt: null }
+        : { settledOverride: "active", settledAt: null, unsettledAt: input.activeAt }),
       snoozedUntil: null,
       snoozedAt: null,
       pinnedAt: null,
@@ -320,6 +325,47 @@ const make = Effect.gen(function* () {
     });
     yield* runtimes.recordImportedTranscript({ threadId, source });
     return true;
+  });
+
+  /** An imported thread's records, while no turn has run on it in T3 Code. */
+  const untouchedImport = Effect.fn("untouchedAgentImportV2")(function* (threadId: ThreadId) {
+    const existing = yield* Effect.option(
+      orchestrator.getThreadRecords(threadId, ["runs", "messages"]),
+    );
+    return Option.filter(
+      existing,
+      (records) =>
+        records.thread.historyOrigin === "v1_import" &&
+        records.thread.deletedAt === null &&
+        records.runs.length === 0,
+    );
+  });
+
+  /**
+   * Append the messages a transcript gained since `threadId` was imported from
+   * it. Only a thread that never ran a turn in T3 Code is refreshed: once it
+   * has, T3 Code's copy of the session is the one being continued. Returns the
+   * number of messages appended.
+   */
+  const appendImportedMessages = Effect.fn("appendImportedAgentMessagesV2")(function* (input: {
+    readonly threadId: ThreadId;
+    readonly thread: AgentSessionScanner.AgentSessionThread;
+    readonly source: AgentSessionImportSource;
+  }) {
+    const { threadId } = input;
+    const existing = yield* untouchedImport(threadId);
+    if (Option.isNone(existing)) return 0;
+    const known = existing.value.messages.length;
+    const added = input.thread.messages.slice(known);
+    if (added.length > 0) {
+      yield* eventSink.write({
+        events: added.flatMap((message, offset) =>
+          messageEvents({ threadId, index: known + offset, message }),
+        ),
+      });
+    }
+    yield* runtimes.recordImportedTranscript({ threadId, source: input.source });
+    return added.length;
   });
 
   const importRecentAgentThreads = Effect.fn("importRecentAgentThreadsV2")(function* (
@@ -416,7 +462,13 @@ const make = Effect.gen(function* () {
     return { importedCount, skippedCount } satisfies AgentSessionImportResult;
   });
 
-  return { importRecentAgentThreads, importThread };
+  return {
+    importRecentAgentThreads,
+    importThread,
+    appendImportedMessages,
+    isUntouchedImport: (threadId: ThreadId) =>
+      untouchedImport(threadId).pipe(Effect.map(Option.isSome)),
+  };
 });
 
 type AgentSessionImporterShape = Effect.Success<typeof make>;

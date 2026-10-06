@@ -80,6 +80,22 @@ export interface ResumableClaudeSession {
   readonly cwd: string;
 }
 
+const DESKTOP_SESSIONS_DIR = ["Library", "Application Support", "Claude", "claude-code-sessions"];
+
+/**
+ * The folder holding the desktop app's session cards: the `desktopMirror.sessionsDir`
+ * setting when set (a leading `~` is the home folder), else the app's own folder.
+ */
+export function resolveDesktopSessionsDir(
+  homeDir: string,
+  configured: string | undefined,
+  join: (...segments: ReadonlyArray<string>) => string,
+): string {
+  if (configured === undefined) return join(homeDir, ...DESKTOP_SESSIONS_DIR);
+  if (configured === "~" || configured.startsWith("~/")) return join(homeDir, configured.slice(1));
+  return configured;
+}
+
 /** Claude Code's folder name for a cwd under `<home>/projects`. */
 export function encodeClaudeProjectDir(cwd: string): string {
   return cwd.replace(/[^a-zA-Z0-9]/g, "-");
@@ -145,7 +161,7 @@ export function mergeDesktopCards(files: ReadonlyArray<DesktopCardFile>): Deskto
  * empty picker. The shared comparison helper already case folds Windows paths,
  * so only macOS needs folding here; other platforms keep exact matching.
  */
-function foldPathCase(value: string, caseInsensitive: boolean): string {
+export function foldPathCase(value: string, caseInsensitive: boolean): string {
   const normalized = normalizeProjectPathForComparison(value);
   return caseInsensitive ? normalized.toLowerCase() : normalized;
 }
@@ -172,13 +188,22 @@ function desktopSessionInProject(
   );
 }
 
-/** Every `local_*.json` card under the desktop store, across all account and org folders. */
-const readDesktopCards = Effect.fn("ClaudeSessionSources.readDesktopCards")(function* (
+/** Cards already read, by path, so an unchanged card is only stat'ed on the next read. */
+export type DesktopCardCache = Map<string, DesktopCardFile>;
+
+/**
+ * Every `local_*.json` card under the desktop store, across all account and org
+ * folders. With a `cache`, a card whose mtime is unchanged is not re-read, and
+ * the cache is pruned to the cards still present.
+ */
+export const readDesktopCards = Effect.fn("ClaudeSessionSources.readDesktopCards")(function* (
   storeDir: string,
+  cache?: DesktopCardCache,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const cards: DesktopCardFile[] = [];
+  const seen = new Set<string>();
 
   const visit = (directory: string, depth: number): Effect.Effect<void> =>
     Effect.gen(function* () {
@@ -200,23 +225,53 @@ const readDesktopCards = Effect.fn("ClaudeSessionSources.readDesktopCards")(func
         ) {
           continue;
         }
+        const mtimeMs = Option.match(stats.value.mtime, {
+          onNone: () => 0,
+          onSome: (date) => date.getTime(),
+        });
+        seen.add(entryPath);
+        const cached = cache?.get(entryPath);
+        if (cached !== undefined && cached.mtimeMs === mtimeMs) {
+          cards.push(cached);
+          continue;
+        }
         const contents = yield* Effect.option(fileSystem.readFileString(entryPath));
         if (Option.isNone(contents)) continue;
         const card = decodeDesktopSessionCard(contents.value);
         if (Option.isNone(card)) continue;
-        cards.push({
-          card: card.value,
-          mtimeMs: Option.match(stats.value.mtime, {
-            onNone: () => 0,
-            onSome: (date) => date.getTime(),
-          }),
-        });
+        const file = { card: card.value, mtimeMs };
+        cache?.set(entryPath, file);
+        cards.push(file);
       }
     });
 
   yield* visit(storeDir, 1);
+  if (cache !== undefined) {
+    for (const key of cache.keys()) if (!seen.has(key)) cache.delete(key);
+  }
   return cards;
 });
+
+/** The desktop session's current transcript under `claudeHome`, or null when it is not on this machine. */
+export const findDesktopTranscript = Effect.fn("ClaudeSessionSources.findDesktopTranscript")(
+  function* (claudeHome: string, session: DesktopSession) {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    if (!CLAUDE_SESSION_ID_PATTERN.test(session.cliSessionId)) return null;
+    for (const cwd of new Set([session.cwd, session.originCwd])) {
+      const candidate = path.join(
+        claudeHome,
+        "projects",
+        encodeClaudeProjectDir(cwd),
+        `${session.cliSessionId}.jsonl`,
+      );
+      if (yield* fileSystem.exists(candidate).pipe(Effect.orElseSucceed(() => false))) {
+        return candidate;
+      }
+    }
+    return null;
+  },
+);
 
 /** The first records of a transcript, cut at the last complete line. */
 const readTranscriptPrefix = Effect.fn("ClaudeSessionSources.readTranscriptPrefix")(function* (
@@ -285,8 +340,6 @@ export const listClaudeSessions = Effect.fn("ClaudeSessionSources.listClaudeSess
     const path = yield* Path.Path;
     const caseInsensitive = (yield* HostProcessPlatform) === "darwin";
     const projectsDir = path.join(input.claudeHome, "projects");
-    const exists = (target: string) =>
-      fileSystem.exists(target).pipe(Effect.orElseSucceed(() => false));
     const mtimeMs = (target: string) =>
       fileSystem.stat(target).pipe(
         Effect.map((stats) =>
@@ -307,19 +360,7 @@ export const listClaudeSessions = Effect.fn("ClaudeSessionSources.listClaudeSess
     for (const session of desktopSessions) {
       if (!desktopSessionInProject(session, input.workspaceRoot, caseInsensitive)) continue;
       if (session.archived && !input.includeArchived) continue;
-      if (!CLAUDE_SESSION_ID_PATTERN.test(session.cliSessionId)) continue;
-      let transcriptPath: string | null = null;
-      for (const cwd of new Set([session.cwd, session.originCwd])) {
-        const candidate = path.join(
-          projectsDir,
-          encodeClaudeProjectDir(cwd),
-          `${session.cliSessionId}.jsonl`,
-        );
-        if (yield* exists(candidate)) {
-          transcriptPath = candidate;
-          break;
-        }
-      }
+      const transcriptPath = yield* findDesktopTranscript(input.claudeHome, session);
       if (transcriptPath === null) continue;
       rows.push({
         providerSessionId: session.cliSessionId,

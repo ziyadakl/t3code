@@ -1212,6 +1212,18 @@ export const StorageCleanupSettings = Schema.Struct({
 });
 export type StorageCleanupSettings = typeof StorageCleanupSettings.Type;
 
+/**
+ * Mirror the Claude desktop app's open Code-tab sessions into the sidebar.
+ * `enabled` unset means on for macOS and off elsewhere. `sessionsDir` unset
+ * reads the desktop app's own `claude-code-sessions` folder; another machine
+ * can point it at a synced copy of that folder.
+ */
+export const DesktopMirrorSettings = Schema.Struct({
+  enabled: Schema.optional(Schema.Boolean),
+  sessionsDir: Schema.optional(TrimmedNonEmptyString),
+});
+export type DesktopMirrorSettings = typeof DesktopMirrorSettings.Type;
+
 export const ServerSettings = Schema.Struct({
   worktreeCleanup: WorktreeCleanup.pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   storageCleanup: StorageCleanupSettings.pipe(
@@ -1453,6 +1465,8 @@ export const ServerSettings = Schema.Struct({
   trustedTailscaleDevices: Schema.Array(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
+  /** Edited in settings.json only, like `trustedTailscaleDevices`. */
+  desktopMirror: DesktopMirrorSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 

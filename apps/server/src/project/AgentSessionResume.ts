@@ -15,6 +15,7 @@ import {
   AgentSessionScanError,
   ThreadId,
   type AgentSessionListResumableInput,
+  type ProjectId,
   type AgentSessionListResumableResult,
   type AgentSessionResumeInput,
   type AgentSessionResumeResult,
@@ -28,23 +29,22 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import { ServerSettingsService } from "../serverSettings.ts";
 import * as AgentSessionImporter from "./AgentSessionImporter.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
 import * as ClaudeSessionSources from "./ClaudeSessionSources.ts";
 import * as ProjectService from "./ProjectService.ts";
-
-const DESKTOP_STORE_DIR = ["Library", "Application Support", "Claude", "claude-code-sessions"];
 
 const make = Effect.gen(function* () {
   const projects = yield* ProjectService.ProjectService;
   const scanner = yield* AgentSessionScanner.AgentSessionScanner;
   const importer = yield* AgentSessionImporter.AgentSessionImporter;
   const sql = yield* SqlClient.SqlClient;
+  const settingsService = yield* ServerSettingsService;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const homeDir = NodeOS.homedir();
   const sourceClaudeHome = path.join(homeDir, ".claude");
-  const desktopStoreDir = path.join(homeDir, ...DESKTOP_STORE_DIR);
 
   const getProject = Effect.fn("AgentSessionResume.getProject")(function* (
     projectId: AgentSessionListResumableInput["projectId"],
@@ -87,13 +87,23 @@ const make = Effect.gen(function* () {
     return new Map(rows.map((row) => [row.nativeId, ThreadId.make(row.threadId)]));
   });
 
+  // The desktop mirror's sessionsDir setting moves where cards are read from
+  // for the picker too, so a machine reading a synced copy lists those sessions.
   const listSessions = (workspaceRoot: string, includeArchived: boolean) =>
-    ClaudeSessionSources.listClaudeSessions({
-      claudeHome: sourceClaudeHome,
-      desktopStoreDir,
-      workspaceRoot,
-      includeArchived,
-    }).pipe(
+    settingsService.getSettings.pipe(
+      Effect.mapError((cause) => new AgentSessionScanError({ operation: "read-settings", cause })),
+      Effect.flatMap((settings) =>
+        ClaudeSessionSources.listClaudeSessions({
+          claudeHome: sourceClaudeHome,
+          desktopStoreDir: ClaudeSessionSources.resolveDesktopSessionsDir(
+            homeDir,
+            settings.desktopMirror.sessionsDir,
+            path.join,
+          ),
+          workspaceRoot,
+          includeArchived,
+        }),
+      ),
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
     );
@@ -132,6 +142,18 @@ const make = Effect.gen(function* () {
         detail: "That Claude session is no longer in this project's folder.",
       });
     }
+    return yield* continueSession({ project, session });
+  });
+
+  /**
+   * Copy a session's transcript into T3 Code's Claude home, where it resumes,
+   * and read the copy. A session that ran in a worktree resumes there while
+   * the worktree exists.
+   */
+  const handOffAndRead = Effect.fn("AgentSessionResume.handOffAndRead")(function* (
+    project: { readonly id: ProjectId; readonly workspaceRoot: string },
+    session: ClaudeSessionSources.ResumableClaudeSession,
+  ) {
     const target = (yield* scanner.providerHomes("claudeAgent"))[0];
     if (target === undefined) {
       return yield* new AgentSessionResumeError({
@@ -140,7 +162,6 @@ const make = Effect.gen(function* () {
       });
     }
 
-    // A session that ran in a worktree resumes there while the worktree exists.
     const inWorktree =
       session.cwd !== project.workspaceRoot &&
       (yield* fileSystem.exists(session.cwd).pipe(Effect.orElseSucceed(() => false)));
@@ -172,20 +193,47 @@ const make = Effect.gen(function* () {
         detail: "The session has no conversation T3 Code can read.",
       });
     }
+    return { target, inWorktree, runCwd, read: read.value };
+  });
+
+  /**
+   * Continue one listed session in `project`: reopen the thread already bound
+   * to it, or hand its transcript off and import it as a new thread.
+   */
+  const continueSession = Effect.fn("AgentSessionResume.continueSession")(function* (input: {
+    readonly project: { readonly id: ProjectId; readonly workspaceRoot: string };
+    readonly session: ClaudeSessionSources.ResumableClaudeSession;
+    /** Import into the active list at the session's last activity, not settled. */
+    readonly keepActive?: boolean;
+  }) {
+    const { project, session } = input;
+    const continued = (yield* continuedThreads(project.id)).get(session.providerSessionId);
+    if (continued !== undefined) {
+      return { threadId: continued, created: false } satisfies AgentSessionResumeResult;
+    }
+    const { target, inWorktree, runCwd, read } = yield* handOffAndRead(project, session);
     const threadId = ThreadId.make(
-      `import:${target.providerInstanceId}:${read.value.thread.providerSessionId}`,
+      `import:${target.providerInstanceId}:${read.thread.providerSessionId}`,
     );
     const created = yield* importer
       .importThread({
         projectId: project.id,
         workspaceRoot: project.workspaceRoot,
         threadId,
+        // A desktop card's title and last activity are what the desktop app shows.
         thread:
           session.origin === "desktop"
-            ? { ...read.value.thread, title: session.title }
-            : read.value.thread,
-        source: read.value.source,
+            ? {
+                ...read.thread,
+                title: session.title,
+                updatedAt: DateTime.formatIso(DateTime.makeUnsafe(session.updatedAtMs)),
+              }
+            : read.thread,
+        source: read.source,
         ...(inWorktree ? { worktreePath: runCwd } : {}),
+        ...(input.keepActive === true
+          ? { activeAt: DateTime.makeUnsafe(session.updatedAtMs) }
+          : {}),
       })
       .pipe(
         Effect.mapError(
@@ -196,7 +244,27 @@ const make = Effect.gen(function* () {
     return { threadId, created } satisfies AgentSessionResumeResult;
   });
 
-  return { listResumable, resume };
+  /**
+   * Bring a thread imported from `session` up to date with the transcript:
+   * copy it into T3 Code's Claude home again and append the new messages.
+   * A thread that already ran a turn in T3 Code is left alone, because its
+   * copy in T3 Code's home now holds that turn. Returns the messages added.
+   */
+  const refreshSession = Effect.fn("AgentSessionResume.refreshSession")(function* (input: {
+    readonly project: { readonly id: ProjectId; readonly workspaceRoot: string };
+    readonly session: ClaudeSessionSources.ResumableClaudeSession;
+    readonly threadId: ThreadId;
+  }) {
+    if (!(yield* importer.isUntouchedImport(input.threadId))) return 0;
+    const { read } = yield* handOffAndRead(input.project, input.session);
+    return yield* importer.appendImportedMessages({
+      threadId: input.threadId,
+      thread: read.thread,
+      source: read.source,
+    });
+  });
+
+  return { listResumable, resume, continueSession, refreshSession };
 });
 
 type AgentSessionResumeShape = Effect.Success<typeof make>;
