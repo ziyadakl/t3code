@@ -87,9 +87,8 @@ import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import { makeWorkspaceFileDropHandlers } from "./chat/workspaceFileDrop";
 import {
   readThreadShell,
-  useProjects,
-  useThreadShells,
   useThreadShellsForProjectRefs,
+  useUnarchivedProjectsAndThreads,
 } from "../state/entities";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { useThreadRunningTerminalIds } from "../state/terminalSessions";
@@ -1680,6 +1679,34 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     [memberThreadCountByPhysicalKey, removeProject],
   );
 
+  const handleArchiveProject = useCallback(
+    async (member: SidebarProjectGroupMember) => {
+      const result = await updateProject({
+        environmentId: member.environmentId,
+        input: { projectId: member.id, archived: true },
+      });
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: `Failed to archive "${member.title}"`,
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+        return;
+      }
+      toastManager.add({
+        type: "success",
+        title: `Archived "${member.title}"`,
+        description: "Restore it from Settings, Archive.",
+      });
+    },
+    [updateProject],
+  );
+
   const handleProjectButtonContextMenu = useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
       event.preventDefault();
@@ -1690,7 +1717,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
 
         const actionHandlers = new Map<string, () => Promise<void> | void>();
         const makeLeaf = (
-          action: "rename" | "grouping" | "copy-path" | "delete",
+          action: "rename" | "grouping" | "copy-path" | "archive" | "delete",
           member: SidebarProjectGroupMember,
           options?: {
             destructive?: boolean;
@@ -1709,6 +1736,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
               case "copy-path":
                 copyPathToClipboard(member.workspaceRoot, { path: member.workspaceRoot });
                 return;
+              case "archive":
+                return handleArchiveProject(member);
               case "delete":
                 return handleRemoveProject(member);
             }
@@ -1723,7 +1752,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         };
 
         const buildTargetedItem = (
-          action: "rename" | "grouping" | "copy-path" | "delete",
+          action: "rename" | "grouping" | "copy-path" | "archive" | "delete",
           label: string,
           options?: {
             destructive?: boolean;
@@ -1769,6 +1798,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             buildTargetedItem("grouping", "Group into..."),
             buildTargetedItem("copy-path", "Copy Path"),
             { id: "project-settings", label: "Project settings", icon: "settings" },
+            buildTargetedItem("archive", "Archive"),
             buildTargetedItem("delete", "Remove", {
               destructive: true,
             }),
@@ -1788,6 +1818,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     },
     [
       copyPathToClipboard,
+      handleArchiveProject,
       handleRemoveProject,
       isMobile,
       openProjectGroupingDialog,
@@ -3137,8 +3168,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
 });
 
 export default function LegacySidebar() {
-  const projects = useProjects();
-  const sidebarThreads = useThreadShells();
+  const { projects, threads: sidebarThreads } = useUnarchivedProjectsAndThreads();
   const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const reorderProjects = useUiStateStore((store) => store.reorderProjects);

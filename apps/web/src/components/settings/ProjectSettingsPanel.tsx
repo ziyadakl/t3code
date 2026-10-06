@@ -10,7 +10,7 @@ import { AsyncResult } from "effect/reactivity";
 import { type EnvironmentId, type ProjectIconOverride } from "@t3tools/contracts";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import * as Cause from "effect/Cause";
-import { InfoIcon, Trash2Icon } from "lucide-react";
+import { ArchiveIcon, InfoIcon, Trash2Icon } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useComposerDraftStore } from "../../composerDraftStore";
@@ -212,6 +212,7 @@ function ProjectDetail({
         title: string;
         faviconPath: string | null;
         projectIcon: ProjectIconOverride | null;
+        archived: boolean;
       }>,
       failureTitle: string,
     ): Promise<AtomCommandResult<void, unknown>> => {
@@ -384,6 +385,17 @@ function ProjectDetail({
     ],
   );
 
+  const archiveMembers = useCallback(async () => {
+    const result = await updateAllMembers({ archived: true }, "Failed to archive project");
+    if (result._tag !== "Success") return;
+    toastManager.add({
+      type: "success",
+      title: `Archived "${group.displayName}"`,
+      description: "Restore it from Settings, Archive.",
+    });
+    void navigate({ to: "/settings/archived", replace: true });
+  }, [group.displayName, navigate, updateAllMembers]);
+
   const checkoutChoices = (
     <SettingsSection title="Checkouts">
       {group.memberProjects.map((member) => (
@@ -493,6 +505,16 @@ function ProjectDetail({
         <ProjectActionsSettings />
         {hasMultipleCheckouts ? checkoutChoices : null}
         <SettingsSection title="Danger">
+          <SettingsRow
+            title={hasOtherMembers ? "Archive checkout" : "Archive project"}
+            description="Hides it and its threads from the sidebar and lists. Nothing is deleted; restore it from Settings, Archive."
+            control={
+              <Button size="sm" variant="outline" onClick={() => void archiveMembers()}>
+                <ArchiveIcon />
+                Archive
+              </Button>
+            }
+          />
           <SettingsRow
             title={
               hasOtherMembers

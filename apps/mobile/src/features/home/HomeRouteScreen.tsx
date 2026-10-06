@@ -7,7 +7,7 @@ import { Platform, useWindowDimensions } from "react-native";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
-import { useProjects, useNavigationThreadShells } from "../../state/entities";
+import { useUnarchivedNavigationProjectsAndThreads } from "../../state/entities";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
@@ -30,8 +30,7 @@ import { getConnectionAwareBrandHeaderOptions } from "./WorkspaceConnectionTitle
 export function HomeRouteScreen() {
   const { width: windowWidth } = useWindowDimensions();
   const { layout, panes } = useAdaptiveWorkspaceLayout();
-  const projects = useProjects();
-  const threads = useNavigationThreadShells();
+  const { projects, threads } = useUnarchivedNavigationProjectsAndThreads();
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const navigation = useNavigation();

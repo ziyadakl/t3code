@@ -108,9 +108,15 @@ import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useScratchProject } from "../hooks/useScratchProject";
 import { useNewProject } from "../hooks/useNewProject";
-import { isScratchProject } from "@t3tools/client-runtime/state/projects";
+import { isProjectArchived, isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
-import { useProjects, useServerConfigs, useThreadShells, waitForProject } from "../state/entities";
+import {
+  useProjects,
+  useServerConfigs,
+  useThreadShells,
+  useUnarchivedProjectsAndThreads,
+  waitForProject,
+} from "../state/entities";
 import { useThreadSearch } from "../state/queries";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import {
@@ -713,6 +719,9 @@ function OpenCommandPaletteDialog(props: {
   const createProject = useAtomCommand(projectEnvironment.create, {
     reportFailure: false,
   });
+  const updateProject = useAtomCommand(projectEnvironment.update, {
+    reportFailure: false,
+  });
   const { scratchEnvironmentId, scratchWorkspaceRootFor, startScratchThread } = useScratchProject();
   const lookupRepository = useAtomQueryRunner(sourceControlEnvironment.repository, {
     reportFailure: false,
@@ -739,7 +748,11 @@ function OpenCommandPaletteDialog(props: {
   const availableSettingsSearchItems = useAvailableSettingsSearchItems();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
-  const projects = useProjects();
+  // Archived projects and their threads stay out of every list here; only
+  // re-adding an archived project's folder reaches them, to restore it.
+  const allProjects = useProjects();
+  const allThreads = useThreadShells();
+  const { projects, threads } = useUnarchivedProjectsAndThreads();
   const referenceThreadRef =
     pathname === "/pull-requests"
       ? environments.some(
@@ -787,7 +800,6 @@ function OpenCommandPaletteDialog(props: {
     }
   }, [activeThreadReferenceCopyTarget]);
   const projectOrder = useUiStateStore((store) => store.projectOrder);
-  const threads = useThreadShells();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const {
     theme,
@@ -2399,12 +2411,35 @@ function OpenCommandPaletteDialog(props: {
       if (cwd.length === 0) return;
 
       const existing = findProjectByPath(
-        projects.filter((project) => project.environmentId === input.environmentId),
+        allProjects.filter((project) => project.environmentId === input.environmentId),
         cwd,
       );
       if (existing) {
+        if (isProjectArchived(existing)) {
+          const restoreResult = await updateProject({
+            environmentId: existing.environmentId,
+            input: { projectId: existing.id, archived: false },
+          });
+          if (restoreResult._tag === "Failure") {
+            if (!isAtomCommandInterrupted(restoreResult)) {
+              const error = squashAtomCommandFailure(restoreResult);
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: "Failed to restore archived project",
+                  description: error instanceof Error ? error.message : "An error occurred.",
+                }),
+              );
+            }
+            return;
+          }
+          toastManager.add({
+            type: "success",
+            title: `Restored "${existing.title}" from the archive`,
+          });
+        }
         const latestThread = getLatestThreadForProject(
-          threads.filter((thread) => thread.environmentId === existing.environmentId),
+          allThreads.filter((thread) => thread.environmentId === existing.environmentId),
           existing.id,
           clientSettings.sidebarThreadSortOrder,
         );
@@ -2482,11 +2517,12 @@ function OpenCommandPaletteDialog(props: {
       environments,
       navigate,
       primaryEnvironmentId,
-      projects,
+      allProjects,
+      allThreads,
       providers,
       setOpen,
       clientSettings.sidebarThreadSortOrder,
-      threads,
+      updateProject,
     ],
   );
 

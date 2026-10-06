@@ -174,6 +174,7 @@ export const make = Effect.gen(function* () {
     scripts: row.scripts,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+    archivedAt: row.archivedAt,
     deletedAt: row.deletedAt,
   });
 
@@ -384,6 +385,7 @@ export const make = Effect.gen(function* () {
           ? {}
           : { defaultThreadEnvMode: input.defaultThreadEnvMode }),
         ...(input.scripts === undefined ? {} : { scripts: input.scripts }),
+        ...(input.archived === undefined ? {} : { archived: input.archived }),
       });
       if (workspaceRoot !== previousRoot) {
         yield* projectEnrichment.invalidate([previousRoot, workspaceRoot]);

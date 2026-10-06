@@ -11,6 +11,7 @@
 import * as Migrator from "effect/sql/Migrator";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
+import { ensureProjectArchiveColumn } from "./projectArchiveColumn.ts";
 import { reconcileV2PreviewMigration } from "./reconcileV2PreviewMigration.ts";
 
 // Import all migrations statically
@@ -188,6 +189,7 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     ...previewMigrations,
     ...(yield* run({ loader: makeMigrationLoader(toMigrationInclusive) })),
   ];
+  if (toMigrationInclusive === undefined) yield* ensureProjectArchiveColumn();
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
   yield* migrations.length === 0
     ? Effect.logDebug("Database schema is current")

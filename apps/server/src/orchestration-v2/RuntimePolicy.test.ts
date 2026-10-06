@@ -102,6 +102,7 @@ const layerTest = RuntimePolicy.layerFromProjectStore.pipe(
             scripts: [],
             createdAt: "2026-06-21T00:00:00.000Z",
             updatedAt: "2026-06-21T00:00:00.000Z",
+            archivedAt: null,
             deletedAt: null,
           }),
         ),

@@ -15,8 +15,7 @@ import { WorkspacePageHeader } from "../components/WorkspacePageHeader";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import {
   useAllEnvironmentShellsBootstrapped,
-  useProjects,
-  useThreadShells,
+  useUnarchivedProjectsAndThreads,
 } from "../state/entities";
 import { useEnvironments } from "../state/environments";
 import { APP_DISPLAY_NAME } from "~/branding";
@@ -40,8 +39,7 @@ function ChatIndexRouteView() {
  * end. Falls back to an add-project hero when no project exists yet.
  */
 function IndexDraftLanding() {
-  const projects = useProjects();
-  const threads = useThreadShells();
+  const { projects, threads } = useUnarchivedProjectsAndThreads();
   const bootstrapped = useAllEnvironmentShellsBootstrapped();
   const handleNewThread = useNewThreadHandler();
   const startingRef = useRef(false);

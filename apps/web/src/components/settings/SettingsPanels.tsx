@@ -100,6 +100,7 @@ import { ensureLocalApi, readLocalApi } from "../../localApi";
 import { isMacPlatform } from "../../lib/utils";
 import { EMPTY_SERVER_PROVIDERS } from "../../state/server";
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
+import { ArchivedProjectsSection } from "./ArchivedProjectsSection";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
@@ -3491,6 +3492,7 @@ export function ArchivedThreadsPanel() {
 
   return (
     <SettingsPageContainer>
+      <ArchivedProjectsSection environmentIds={scope.environmentIds} />
       {archivedGroups.length === 0 ? (
         <SettingsSection
           id={isLoadingArchive ? undefined : searchableSetting("archive").id}

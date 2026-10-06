@@ -23,7 +23,7 @@ import {
   buildSidebarProjectSnapshots,
   projectGroupsSpanEnvironments,
 } from "~/sidebarProjectGrouping";
-import { useProjects, useThreadShells } from "~/state/entities";
+import { useUnarchivedProjectsAndThreads } from "~/state/entities";
 import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
 import { ProjectEnvironmentBadge } from "../ProjectEnvironmentBadge";
 import { ProjectFavicon } from "../ProjectFavicon";
@@ -55,8 +55,7 @@ export function DraftHeroHeadline({
   activeProjectRef,
   activeProjectTitle,
 }: DraftHeroHeadlineProps) {
-  const projects = useProjects();
-  const threads = useThreadShells();
+  const { projects, threads } = useUnarchivedProjectsAndThreads();
   const { environments } = useEnvironments();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);

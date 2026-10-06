@@ -11,7 +11,9 @@ import {
 } from "@t3tools/client-runtime/state/threads";
 import type { ScopedProjectRef, ScopedThreadRef, ServerConfig } from "@t3tools/contracts";
 import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@t3tools/contracts";
+import { withoutArchivedProjects } from "@t3tools/client-runtime/state/projects";
 import { Atom } from "effect/reactivity";
+import { useMemo } from "react";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentProjects } from "./projects";
 import { environmentServerConfigsAtom } from "./server";
@@ -91,6 +93,16 @@ export function useThreadShells(enabled = true): ReadonlyArray<EnvironmentThread
   return useAtomValue(
     enabled ? environmentThreadShells.threadShellsAtom : EMPTY_THREAD_SHELLS_ATOM,
   );
+}
+
+/** Projects and thread shells minus archived projects and their threads, for lists that hide the archive. */
+export function useUnarchivedProjectsAndThreads(): {
+  readonly projects: ReadonlyArray<EnvironmentProject>;
+  readonly threads: ReadonlyArray<EnvironmentThreadShell>;
+} {
+  const projects = useProjects();
+  const threads = useThreadShells();
+  return useMemo(() => withoutArchivedProjects(projects, threads), [projects, threads]);
 }
 
 export function useAllEnvironmentShellsBootstrapped(): boolean {

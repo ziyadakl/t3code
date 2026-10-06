@@ -23,7 +23,12 @@ import {
   selectProjectGroupingSettings,
 } from "../logicalProject";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
-import { readProjects, readThreadShell, useProjects, useThreadShell } from "../state/entities";
+import {
+  readProjects,
+  readThreadShell,
+  useThreadShell,
+  useUnarchivedProjectsAndThreads,
+} from "../state/entities";
 import {
   hasExplicitComposerModelSelection,
   resolveNewDraftStartFromOrigin,
@@ -451,7 +456,7 @@ export function useHandleNewThread() {
         : useComposerDraftStore.getState().getDraftSession(routeTarget.draftId)
       : null,
   );
-  const projects = useProjects();
+  const { projects } = useUnarchivedProjectsAndThreads();
   const orderedProjects = useMemo(() => {
     return orderItemsByPreferredIds({
       items: projects,

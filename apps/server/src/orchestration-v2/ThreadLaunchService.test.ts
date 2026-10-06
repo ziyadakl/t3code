@@ -79,6 +79,7 @@ const project = {
   scripts: [],
   createdAt: "2026-06-20T00:00:00.000Z",
   updatedAt: "2026-06-20T00:00:00.000Z",
+  archivedAt: null,
   deletedAt: null,
 } as const;
 
@@ -217,6 +218,7 @@ function makeHarness(options: HarnessOptions = {}) {
               scripts: project.scripts,
               createdAt: project.createdAt,
               updatedAt: project.updatedAt,
+              archivedAt: project.archivedAt,
               deletedAt: project.deletedAt,
             })
           : Option.none(),

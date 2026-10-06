@@ -59,6 +59,7 @@ export interface UpdateProjectInput extends CommandMetadata {
   readonly faviconPath?: string | null;
   readonly defaultThreadEnvMode?: ThreadEnvMode | null;
   readonly scripts?: ReadonlyArray<ProjectScript>;
+  readonly archived?: boolean;
 }
 
 export interface DeleteProjectInput extends CommandMetadata {
@@ -327,6 +328,7 @@ const mutateProject = Effect.fn("EnvironmentCommands.mutateProject")(function* (
         readonly workspaceRoot?: string;
         readonly defaultModelSelection?: ModelSelection | null;
         readonly scripts?: ReadonlyArray<ProjectScript>;
+        readonly archived?: boolean;
       }
     | {
         readonly type: "project.delete";
@@ -376,6 +378,7 @@ export const updateProject = Effect.fn("EnvironmentCommands.updateProject")(func
       ? {}
       : { defaultThreadEnvMode: input.defaultThreadEnvMode }),
     ...(input.scripts === undefined ? {} : { scripts: input.scripts }),
+    ...(input.archived === undefined ? {} : { archived: input.archived }),
   });
 });
 

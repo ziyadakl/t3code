@@ -24,5 +24,8 @@ export const OrchestrationProjectShell = Schema.Struct({
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
+  // Archived projects stay in the shell so clients can list and restore them;
+  // clients hide them and their threads. Absent from servers without archiving.
+  archivedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
 });
 export type OrchestrationProjectShell = typeof OrchestrationProjectShell.Type;

@@ -174,6 +174,7 @@ export const Project = Schema.Struct({
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
+  archivedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   deletedAt: Schema.NullOr(IsoDateTime),
 });
 export type Project = typeof Project.Type;
@@ -212,6 +213,8 @@ export const ProjectUpdatePayload = Schema.Struct({
   faviconPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
+  /** Archive hides the project and its threads; unarchive restores them. */
+  archived: Schema.optional(Schema.Boolean),
 });
 export type ProjectUpdatePayload = typeof ProjectUpdatePayload.Type;
 

@@ -52,5 +52,63 @@ it.layer(ProjectStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemor
         );
       }),
     );
+
+    it.effect("persists the archive time, keeps it across other updates, and clears it", () =>
+      Effect.gen(function* () {
+        const projects = yield* ProjectStore.ProjectStoreV2;
+        const projectId = ProjectId.make("project-archive");
+        const event = {
+          aggregateKind: "project",
+          aggregateId: projectId,
+          commandId: null,
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+        } as const;
+        const metaUpdated = (
+          sequence: number,
+          payload: { title?: string; archivedAt?: string | null },
+        ) =>
+          projects.apply({
+            ...event,
+            sequence,
+            eventId: EventId.make(`event-archive-${sequence}`),
+            occurredAt: "2026-03-25T00:00:00.000Z",
+            type: "project.meta-updated",
+            payload: { projectId, ...payload, updatedAt: "2026-03-25T00:00:00.000Z" },
+          });
+        const archivedAt = () =>
+          projects
+            .getShell(projectId)
+            .pipe(Effect.map((shell) => Option.getOrNull(shell)?.archivedAt));
+
+        yield* projects.apply({
+          ...event,
+          sequence: 1,
+          eventId: EventId.make("event-archive-1"),
+          occurredAt: "2026-03-24T00:00:00.000Z",
+          type: "project.created",
+          payload: {
+            projectId,
+            title: "Archive project",
+            workspaceRoot: "/tmp/project-archive",
+            defaultModelSelection: null,
+            scripts: [],
+            createdAt: "2026-03-24T00:00:00.000Z",
+            updatedAt: "2026-03-24T00:00:00.000Z",
+          },
+        });
+        assert.strictEqual(yield* archivedAt(), null);
+
+        yield* metaUpdated(2, { archivedAt: "2026-03-25T00:00:00.000Z" });
+        assert.strictEqual(yield* archivedAt(), "2026-03-25T00:00:00.000Z");
+
+        yield* metaUpdated(3, { title: "Renamed" });
+        assert.strictEqual(yield* archivedAt(), "2026-03-25T00:00:00.000Z");
+
+        yield* metaUpdated(4, { archivedAt: null });
+        assert.strictEqual(yield* archivedAt(), null);
+      }),
+    );
   },
 );
