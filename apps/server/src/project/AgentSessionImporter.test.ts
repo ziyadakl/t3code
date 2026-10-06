@@ -14,7 +14,9 @@ import * as Stream from "effect/Stream";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as IdAllocator from "../orchestration-v2/IdAllocator.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as AgentSessionImporter from "./AgentSessionImporter.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
 import * as ProjectService from "./ProjectService.ts";
@@ -276,3 +278,131 @@ it.effect(
     }).pipe(Effect.provide(layerTest));
   },
 );
+
+it.effect("imports a transcript with background tool calls as a thread at rest", () => {
+  const claudeSessionId = "22222222-2222-4222-8222-222222222222";
+  const claudeInstanceId = ProviderInstanceId.make("claudeAgent");
+  const claudeThreadId = ThreadId.make(`import:${claudeInstanceId}:${claudeSessionId}`);
+  const record = (at: string, type: "user" | "assistant", content: unknown) =>
+    JSON.stringify({
+      type,
+      sessionId: claudeSessionId,
+      cwd: "/workspace/project",
+      isSidechain: false,
+      timestamp: at,
+      message:
+        type === "user"
+          ? { role: "user", content }
+          : { role: "assistant", model: "claude-opus-5", type: "message", content },
+    });
+  const toolUse = (id: string, name: string, input: unknown) => ({
+    type: "tool_use",
+    id,
+    name,
+    input,
+  });
+  // Shapes copied from Claude Code transcripts: background Bash, Monitor and a
+  // background Agent start whose completions never appear in the transcript.
+  const contents = [
+    record("2026-09-01T10:00:00.000Z", "user", "Run the checks"),
+    record("2026-09-01T10:00:01.000Z", "assistant", [
+      toolUse("toolu_bash", "Bash", {
+        command: "pnpm typecheck 2>&1 | tail -30",
+        description: "Run typecheck",
+        run_in_background: true,
+      }),
+    ]),
+    record("2026-09-01T10:00:02.000Z", "user", [
+      { tool_use_id: "toolu_bash", type: "tool_result", content: "Command running in background" },
+    ]),
+    record("2026-09-01T10:00:03.000Z", "assistant", [
+      toolUse("toolu_monitor", "Monitor", {
+        command: "until grep -q done /tmp/out; do sleep 5; done",
+        description: "typecheck finishes",
+        timeout_ms: 300000,
+        persistent: false,
+      }),
+      toolUse("toolu_agent", "Agent", {
+        subagent_type: "Explore",
+        description: "Trace the bug",
+        prompt: "Find the cause",
+        run_in_background: true,
+      }),
+    ]),
+    record("2026-09-01T10:00:04.000Z", "assistant", [
+      { type: "text", text: "Checks are running." },
+    ]),
+  ].join("\n");
+  const thread = AgentSessionScanner.parseAgentSessionTranscript({
+    source: "claudeAgent",
+    providerInstanceId: claudeInstanceId,
+    fallbackSessionId: claudeSessionId,
+    lastActiveAtMs: Date.parse("2026-09-01T10:00:04.000Z"),
+    contents,
+  });
+  const storeLayer = ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory));
+  const importerLayer = Layer.unwrap(
+    Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      return AgentSessionImporter.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(AgentSessionScanner.AgentSessionScanner)({}),
+            Layer.mock(ProjectService.ProjectService)({}),
+            Layer.mock(Orchestrator.OrchestratorV2)({
+              getThreadRecords: () =>
+                Effect.fail(
+                  new Orchestrator.OrchestratorProjectionError({ threadId: claudeThreadId }),
+                ),
+            }),
+            Layer.mock(EventSink.EventSinkV2)({
+              write: (input) =>
+                Effect.forEach(input.events, (event) => store.apply(event)).pipe(
+                  Effect.as([]),
+                  Effect.orDie,
+                ),
+            }),
+            Layer.mock(ProviderSessionRuntime.ProviderSessionRuntimeRepository)({
+              upsert: () => Effect.void,
+              recordImportedTranscript: () => Effect.void,
+            }),
+            IdAllocator.layer,
+          ),
+        ),
+      );
+    }),
+  );
+
+  return Effect.gen(function* () {
+    expect(thread?.messages.map((message) => message.text)).toEqual([
+      "Run the checks",
+      "Checks are running.",
+    ]);
+    const importer = yield* AgentSessionImporter.AgentSessionImporter;
+    yield* importer.importThread({
+      projectId,
+      workspaceRoot: "/workspace/project",
+      threadId: claudeThreadId,
+      thread: thread!,
+      source: {
+        provider: "claudeAgent",
+        providerInstanceId: claudeInstanceId,
+        providerSessionId: claudeSessionId,
+        filePath: "/tmp/session.jsonl",
+        size: contents.length,
+        mtimeMs: 2,
+        device: 3,
+        inode: 4,
+        birthtimeMs: 1,
+      },
+      activeAt: DateTime.makeUnsafe("2026-10-05T09:00:00.000Z"),
+    });
+    const shell = yield* (yield* ProjectionStore.ProjectionStoreV2).getThreadShell(claudeThreadId);
+    expect(shell).toMatchObject({
+      latestRunId: null,
+      activeRunId: null,
+      status: "idle",
+      pendingBackgroundTasks: [],
+    });
+  }).pipe(Effect.provide(Layer.provideMerge(importerLayer, storeLayer)));
+});

@@ -62,7 +62,14 @@ import {
 } from "./Sidebar.logic";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
-import { EnvironmentId, ProjectId, ProviderInstanceId, RunId, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ProjectId,
+  ProviderInstanceId,
+  ProviderThreadId,
+  RunId,
+  ThreadId,
+} from "@t3tools/contracts";
 
 import {
   DEFAULT_INTERACTION_MODE,
@@ -2102,6 +2109,27 @@ describe("unseen completion with background work", () => {
     ).toBe(expected.receded);
     expect(isSidebarThreadWorking(thread)).toBe(expected.receded);
     expect(resolveThreadStatusPill({ thread })).toMatchObject({ label: expected.pill });
+  });
+});
+
+describe("imported session that never ran", () => {
+  it("rests as ready, unread-free and outside the Working shelf", () => {
+    const thread = presentThreadShell(localEnvironmentId, {
+      ...makeThreadFixture().source,
+      id: ThreadId.make("import:claudeAgent:22222222-2222-4222-8222-222222222222"),
+      latestRunId: null,
+      activeRunId: null,
+      activeProviderThreadId: ProviderThreadId.make("provider-thread:claudeAgent:session"),
+      status: "idle",
+      settledOverride: "active",
+      lastVisitedAt: null,
+      pendingBackgroundTasks: [],
+    });
+
+    expect(resolveSidebarThreadStatus(thread)).toBe("ready");
+    expect(hasUnseenCompletion(thread)).toBe(false);
+    expect(isSidebarThreadWorking(thread)).toBe(false);
+    expect(resolveThreadStatusPill({ thread })).toBeNull();
   });
 });
 

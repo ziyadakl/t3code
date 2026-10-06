@@ -177,6 +177,19 @@ describe("V2 client presentation", () => {
     ).toBeNull();
   });
 
+  it("presents no runtime for an imported thread bound to a provider thread that never ran", () => {
+    const shell = presentThreadShell(environmentId, {
+      ...v2ThreadShell,
+      latestRunId: null,
+      activeProviderThreadId: ProviderThreadId.make("provider-thread:claudeAgent:session"),
+      activeRunId: null,
+      status: "idle",
+      pendingBackgroundTasks: [],
+    });
+    // Sidebar and mobile list read runtime "idle" as Waiting and fold it into Working.
+    expect(shell.runtime).toBeNull();
+  });
+
   it.each([
     { kinds: ["command"], expected: "completed" },
     { kinds: ["command", "subagent"], expected: "idle" },

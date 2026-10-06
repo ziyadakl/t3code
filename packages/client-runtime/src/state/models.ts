@@ -182,6 +182,9 @@ function shellRuntime(thread: OrchestrationV2ThreadShell): ThreadRuntimeSummary 
     return null;
   }
   const status = parkAtIdle ? "idle" : (thread.activityRunStatus ?? thread.status);
+  // An imported session is bound to its provider thread before any run; its
+  // "idle" is rest, not background work, so it must not read as Waiting.
+  if (thread.latestRunId === null && status === "idle" && !parkAtIdle) return null;
   return {
     status,
     activeRunId: thread.activeRunId,
