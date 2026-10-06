@@ -312,6 +312,7 @@ import {
   nextProjectScriptId,
   projectScriptIdFromCommand,
 } from "~/projectScripts";
+import { DEV_SERVER_STOP_INPUT, DEV_SERVER_TERMINAL_ID, devServerScript } from "~/devServer";
 import { newDraftId, newMessageId, newThreadId } from "~/lib/utils";
 import { registerFaviconProjectForThread } from "~/browserFaviconStore";
 import { getProviderModelCapabilities } from "../providerModels";
@@ -4841,6 +4842,8 @@ export default function ChatView(props: ChatViewProps) {
         worktreePath?: string | null;
         preferNewTerminal?: boolean;
         rememberAsLastInvoked?: boolean;
+        /** Run in this terminal, creating it when the thread does not have it yet. */
+        terminalId?: string;
       },
     ) => {
       if (!activeThreadId || !activeProject || !activeThread) return;
@@ -4855,7 +4858,10 @@ export default function ChatView(props: ChatViewProps) {
         terminalUiState.activeTerminalId || activeKnownTerminalIds[0] || DEFAULT_THREAD_TERMINAL_ID;
       const isBaseTerminalBusy = runningTerminalIds.includes(baseTerminalId);
       const wantsNewTerminal = Boolean(options?.preferNewTerminal) || isBaseTerminalBusy;
-      const shouldCreateNewTerminal = wantsNewTerminal;
+      const shouldCreateNewTerminal =
+        options?.terminalId === undefined
+          ? wantsNewTerminal
+          : !activeKnownTerminalIds.includes(options.terminalId);
       const targetWorktreePath = options?.worktreePath ?? activeThread.worktreePath ?? null;
 
       setTerminalUiLaunchContext({
@@ -4876,9 +4882,9 @@ export default function ChatView(props: ChatViewProps) {
         worktreePath: targetWorktreePath,
         ...(options?.env ? { extraEnv: options.env } : {}),
       });
-      const targetTerminalId = shouldCreateNewTerminal
-        ? nextTerminalId(allocatableActiveTerminalIds)
-        : baseTerminalId;
+      const targetTerminalId =
+        options?.terminalId ??
+        (shouldCreateNewTerminal ? nextTerminalId(allocatableActiveTerminalIds) : baseTerminalId);
       const openTerminalInput: TerminalOpenInput = shouldCreateNewTerminal
         ? {
             threadId: activeThreadId,
@@ -4897,7 +4903,10 @@ export default function ChatView(props: ChatViewProps) {
             env: runtimeEnv,
           };
 
-      if (shouldCreateNewTerminal) {
+      if (options?.terminalId !== undefined) {
+        // A named terminal may exist on the server without a tab on this client.
+        storeEnsureTerminal(activeThreadRef, targetTerminalId);
+      } else if (shouldCreateNewTerminal) {
         storeNewTerminal(activeThreadRef, targetTerminalId);
       } else {
         storeSetActiveTerminal(activeThreadRef, targetTerminalId);
@@ -4962,6 +4971,7 @@ export default function ChatView(props: ChatViewProps) {
       storeNewTerminal,
       storeSetActiveTerminal,
       setLastInvokedScriptByProjectId,
+      storeEnsureTerminal,
       environmentId,
       openTerminal,
       openPreview,
@@ -4972,6 +4982,41 @@ export default function ChatView(props: ChatViewProps) {
       writeTerminal,
     ],
   );
+
+  const activeDevServerScript = useMemo(
+    () => (activeProject ? devServerScript(activeProject.scripts) : null),
+    [activeProject],
+  );
+  const startDevServer = useCallback(() => {
+    if (!activeDevServerScript) return;
+    void runProjectScript(activeDevServerScript, {
+      terminalId: DEV_SERVER_TERMINAL_ID,
+      rememberAsLastInvoked: false,
+    });
+  }, [activeDevServerScript, runProjectScript]);
+  const stopDevServer = useCallback(async () => {
+    if (!activeThreadId) return;
+    const result = await writeTerminal({
+      environmentId,
+      input: {
+        threadId: activeThreadId,
+        terminalId: DEV_SERVER_TERMINAL_ID,
+        data: DEV_SERVER_STOP_INPUT,
+      },
+    });
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      setThreadError(
+        activeThreadId,
+        error instanceof Error ? error.message : "Failed to stop the dev server.",
+      );
+    }
+  }, [activeThreadId, environmentId, setThreadError, writeTerminal]);
+  const showDevServerOutput = useCallback(() => {
+    if (!activeThreadRef) return;
+    storeEnsureTerminal(activeThreadRef, DEV_SERVER_TERMINAL_ID, { open: true });
+    setTerminalFocusRequestId((value) => value + 1);
+  }, [activeThreadRef, storeEnsureTerminal]);
 
   const runProjectScriptRef = useRef(runProjectScript);
   useLayoutEffect(() => {
@@ -10861,6 +10906,17 @@ export default function ChatView(props: ChatViewProps) {
     onAddProjectScript: saveProjectScript,
     onUpdateProjectScript: updateProjectScript,
     onDeleteProjectScript: deleteProjectScript,
+    devServer:
+      activeDevServerScript && isServerThread
+        ? {
+            script: activeDevServerScript,
+            running: runningTerminalIds.includes(DEV_SERVER_TERMINAL_ID),
+            hasOutput: activeServerOrderedTerminalIds.includes(DEV_SERVER_TERMINAL_ID),
+            onStart: startDevServer,
+            onStop: () => void stopDevServer(),
+            onShowOutput: showDevServerOutput,
+          }
+        : undefined,
   };
   const panelToggleControlProps = {
     terminalAvailable: activeProject !== null,
