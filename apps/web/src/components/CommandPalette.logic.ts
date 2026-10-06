@@ -1,6 +1,7 @@
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import type { CommandPaletteLinkedThreads } from "../commandPaletteBus";
 import {
+  type AgentSessionResumable,
   type EnvironmentId,
   type FilesystemBrowseEntry,
   type KeybindingCommand,
@@ -19,6 +20,36 @@ import { type Project, type SidebarThreadSummary, type Thread } from "../types";
 export const RECENT_THREAD_LIMIT = 12;
 export const ITEM_ICON_CLASS = "size-4 text-icon-muted";
 export const ADDON_ICON_CLASS = "size-4";
+
+/**
+ * Rows for the resume picker: Claude sessions from the desktop app or the
+ * terminal, newest first as the server sends them. A session already continued
+ * in T3 Code says so, and choosing it opens that thread instead of copying again.
+ */
+export function buildResumeSessionItems(input: {
+  sessions: ReadonlyArray<AgentSessionResumable>;
+  icon: ReactNode;
+  resume: (session: AgentSessionResumable) => Promise<void>;
+}): CommandPaletteActionItem[] {
+  return input.sessions.map((session) => {
+    const origin = session.origin === "desktop" ? "Claude desktop" : "Claude CLI";
+    const notes = [
+      origin,
+      ...(session.archived ? ["Archived"] : []),
+      ...(session.continuedThreadId !== null ? ["Continued in T3 Code"] : []),
+    ];
+    return {
+      kind: "action",
+      value: `action:resume-claude-session:${session.providerSessionId}`,
+      searchTerms: [session.title, origin, session.providerSessionId],
+      title: session.title,
+      description: notes.join(" · "),
+      timestamp: formatRelativeTimeLabel(session.updatedAt),
+      icon: input.icon,
+      run: () => input.resume(session),
+    };
+  });
+}
 
 /** A PR's relations include archived threads that normal palette search omits. */
 export function buildLinkedThreadActionItems(

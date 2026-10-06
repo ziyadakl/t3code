@@ -53,6 +53,7 @@ import {
   FolderGit2Icon,
   FolderIcon,
   FolderPlusIcon,
+  HistoryIcon,
   MessageSquareDashedIcon,
   LinkIcon,
   MessageSquareIcon,
@@ -103,6 +104,7 @@ import { projectEnvironment } from "../state/projects";
 import { useEnvironmentQuery } from "../state/query";
 import { serverEnvironment } from "../state/server";
 import { threadEnvironment } from "../state/threads";
+import { agentSessionListResumable, agentSessionResume } from "../state/agentSessions";
 import { sourceControlEnvironment } from "../state/sourceControl";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
@@ -164,6 +166,7 @@ import {
   buildRootGroups,
   buildThreadActionItems,
   buildLinkedThreadActionItems,
+  buildResumeSessionItems,
   buildCommandPaletteRows,
   enumerateCommandPaletteItems,
   findHighlightedCommandPaletteItem,
@@ -742,6 +745,10 @@ function OpenCommandPaletteDialog(props: {
   const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
     reportFailure: false,
   });
+  const listResumableSessions = useAtomCommand(agentSessionListResumable, {
+    reportFailure: false,
+  });
+  const resumeAgentSession = useAtomCommand(agentSessionResume, { reportFailure: false });
   const { environments } = useEnvironments();
   const desktopLocalBootstraps = useDesktopLocalBootstraps();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -1892,6 +1899,68 @@ function OpenCommandPaletteDialog(props: {
 
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
 
+  // Resume picker: Claude desktop and CLI sessions in the current project.
+  // Failures throw into executeItem's error toast.
+  async function openResumePicker(
+    projectRef: NonNullable<typeof contextualProjectRef>,
+    includeArchived: boolean,
+  ): Promise<void> {
+    const listed = await listResumableSessions({
+      environmentId: projectRef.environmentId,
+      input: { projectId: projectRef.projectId, includeArchived },
+    });
+    if (listed._tag === "Failure") throw squashAtomCommandFailure(listed);
+    const items: CommandPaletteActionItem[] = buildResumeSessionItems({
+      sessions: listed.value.sessions,
+      icon: <HistoryIcon className={ITEM_ICON_CLASS} />,
+      resume: async (session) => {
+        let threadId = session.continuedThreadId;
+        if (threadId === null) {
+          const resumed = await resumeAgentSession({
+            environmentId: projectRef.environmentId,
+            input: {
+              projectId: projectRef.projectId,
+              providerSessionId: session.providerSessionId,
+            },
+          });
+          if (resumed._tag === "Failure") throw squashAtomCommandFailure(resumed);
+          threadId = resumed.value.threadId;
+        }
+        await navigate({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(scopeThreadRef(projectRef.environmentId, threadId)),
+        });
+      },
+    });
+    if (items.length === 0) {
+      items.push({
+        kind: "action",
+        value: "action:resume-claude-session:none",
+        searchTerms: [],
+        title: "No Claude sessions to resume in this project",
+        icon: <HistoryIcon className={ITEM_ICON_CLASS} />,
+        disabled: true,
+        run: async () => {},
+      });
+    }
+    if (!includeArchived) {
+      items.push({
+        kind: "action",
+        value: "action:resume-claude-session:show-archived",
+        searchTerms: ["archived", "show archived"],
+        title: "Show archived sessions",
+        icon: <HistoryIcon className={ITEM_ICON_CLASS} />,
+        keepOpen: true,
+        secondary: true,
+        run: () => openResumePicker(projectRef, true),
+      });
+    }
+    pushPaletteView({
+      addonIcon: <HistoryIcon className={ADDON_ICON_CLASS} />,
+      groups: [{ value: "claude-sessions", label: "Claude sessions", items }],
+    });
+  }
+
   if (projects.length > 0) {
     const activeProjectTitle =
       projectPickerEntries.find((entry) => entry.isPreferred)?.group.displayName ??
@@ -1985,6 +2054,20 @@ function OpenCommandPaletteDialog(props: {
         },
       });
     }
+  }
+
+  if (contextualProjectRef !== null) {
+    const projectRef = contextualProjectRef;
+    actionItems.push({
+      kind: "action",
+      value: "action:resume-claude-session",
+      searchTerms: ["resume", "claude", "session", "import", "desktop", "cli", "continue"],
+      title: "Resume a Claude session",
+      description: "From the Claude desktop app or terminal, in this project",
+      icon: <HistoryIcon className={ITEM_ICON_CLASS} />,
+      keepOpen: true,
+      run: () => openResumePicker(projectRef, false),
+    });
   }
 
   if (activeThread !== null) {

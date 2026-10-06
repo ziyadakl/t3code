@@ -65,6 +65,12 @@ describe("RPC authorization scopes", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.agentSessionsScan)).toBe(
       AuthOrchestrationReadScope,
     );
+    expect(requiredScopeForRpcMethod(WS_METHODS.agentSessionsListResumable)).toBe(
+      AuthOrchestrationReadScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.agentSessionsResume)).toBe(
+      AuthOrchestrationOperateScope,
+    );
     expect(requiredScopeForRpcMethod(WS_METHODS.agentSessionsImport)).toBe(
       AuthOrchestrationOperateScope,
     );

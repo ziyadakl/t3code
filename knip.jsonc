@@ -30,6 +30,7 @@
         "scripts/evaluate-thread-titles.ts",
         "scripts/measure-pr-preview.ts",
         "scripts/probe-claude-fork-local-rollback-replay.ts",
+        "scripts/resume-picker-count.ts",
         "scripts/update-test-shard-weights.ts",
         "scripts/verify-background-live.ts",
         "src/provider/testFixtures/*.mjs",

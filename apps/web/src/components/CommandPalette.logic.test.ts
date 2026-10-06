@@ -9,6 +9,7 @@ import {
   buildProjectActionItems,
   buildThreadActionItems,
   buildLinkedThreadActionItems,
+  buildResumeSessionItems,
   enumerateCommandPaletteItems,
   filterPinnedBrowseEntries,
   filterCommandPaletteGroups,
@@ -17,6 +18,43 @@ import {
   type CommandPaletteActionItem,
   type CommandPaletteGroup,
 } from "./CommandPalette.logic";
+
+describe("resume picker items", () => {
+  it("labels where each session ran and which ones T3 Code already continues", async () => {
+    const resume = vi.fn(async () => {});
+    const items = buildResumeSessionItems({
+      icon: null,
+      resume,
+      sessions: [
+        {
+          providerSessionId: "11111111-1111-4111-8111-111111111111",
+          title: "Fix login",
+          updatedAt: "2026-10-01T10:00:00.000Z",
+          origin: "desktop",
+          archived: false,
+          continuedThreadId: ThreadId.make("import:claudeAgent:11111111"),
+        },
+        {
+          providerSessionId: "22222222-2222-4222-8222-222222222222",
+          title: "Old terminal chat",
+          updatedAt: "2026-09-01T10:00:00.000Z",
+          origin: "cli",
+          archived: true,
+          continuedThreadId: null,
+        },
+      ],
+    });
+
+    expect(items.map((item) => [item.title, item.description])).toEqual([
+      ["Fix login", "Claude desktop · Continued in T3 Code"],
+      ["Old terminal chat", "Claude CLI · Archived"],
+    ]);
+    await items[1]?.run();
+    expect(resume).toHaveBeenCalledWith(
+      expect.objectContaining({ providerSessionId: "22222222-2222-4222-8222-222222222222" }),
+    );
+  });
+});
 
 describe("linked pull request thread navigation", () => {
   it("keeps archived relations searchable and routes them through the PR environment", async () => {

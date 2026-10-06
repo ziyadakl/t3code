@@ -7,6 +7,7 @@ import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.t
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
 import * as AgentSessionImporter from "../project/AgentSessionImporter.ts";
+import * as AgentSessionResume from "../project/AgentSessionResume.ts";
 import * as AgentSessionScanner from "../project/AgentSessionScanner.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
@@ -235,6 +236,16 @@ const layerAgentSessionImporterProvided = AgentSessionImporter.layer.pipe(
   ),
 );
 
+const layerAgentSessionResumeProvided = AgentSessionResume.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      AgentSessionScanner.layer,
+      layerProjectService,
+      layerAgentSessionImporterProvided,
+    ),
+  ),
+);
+
 const layerThreadManagementProvided = ThreadManagementService.layerWithLegacyImporter.pipe(
   Layer.provide(Layer.merge(layerOrchestratorProvided, layerLegacyV1ThreadImporterProvided)),
 );
@@ -338,5 +349,6 @@ export const layerProduction = Layer.mergeAll(
   ),
   layerProviderContinuationWorkerProvided,
   layerAgentSessionImporterProvided,
+  layerAgentSessionResumeProvided,
   EffectOutbox.layerPruneWorker.pipe(Layer.provide(EffectOutbox.layer)),
 ).pipe(Layer.provide(Scheduler.layer), Layer.provideMerge(layerEventInfrastructure));

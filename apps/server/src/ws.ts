@@ -247,6 +247,7 @@ import {
 } from "@t3tools/shared/usageLimits";
 import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
 import * as AgentSessionImporter from "./project/AgentSessionImporter.ts";
+import * as AgentSessionResume from "./project/AgentSessionResume.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
@@ -1250,6 +1251,7 @@ const layerWsRpc = (
         yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
       const agentSessionScanner = yield* AgentSessionScanner.AgentSessionScanner;
       const agentSessionImporter = yield* AgentSessionImporter.AgentSessionImporter;
+      const agentSessionResume = yield* AgentSessionResume.AgentSessionResume;
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
       const keybindings = yield* Keybindings.Keybindings;
       const environmentTheme = yield* EnvironmentTheme.EnvironmentThemeService;
@@ -3179,6 +3181,16 @@ const layerWsRpc = (
             agentSessionImporter.importRecentAgentThreads(input),
             { "rpc.aggregate": "workspace" },
           ),
+        [WS_METHODS.agentSessionsListResumable]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.agentSessionsListResumable,
+            agentSessionResume.listResumable(input),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.agentSessionsResume]: (input) =>
+          observeRpcEffect(WS_METHODS.agentSessionsResume, agentSessionResume.resume(input), {
+            "rpc.aggregate": "workspace",
+          }),
         [WS_METHODS.assetsCreateUrl]: (input) =>
           observeRpcEffect(
             WS_METHODS.assetsCreateUrl,

@@ -71,6 +71,11 @@ import {
   AgentSessionImportProjectChangedError,
   AgentSessionImportProjectNotFoundError,
   AgentSessionImportResult,
+  AgentSessionListResumableInput,
+  AgentSessionListResumableResult,
+  AgentSessionResumeError,
+  AgentSessionResumeInput,
+  AgentSessionResumeResult,
   AgentSessionScanInput,
   AgentSessionScanResult,
   AgentSessionScanError,
@@ -360,6 +365,8 @@ export const WS_METHODS = {
   filesystemBrowse: "filesystem.browse",
   agentSessionsScan: "agentSessions.scan",
   agentSessionsImport: "agentSessions.import",
+  agentSessionsListResumable: "agentSessions.listResumable",
+  agentSessionsResume: "agentSessions.resume",
   assetsCreateUrl: "assets.createUrl",
   assetsPersistChatAttachments: "assets.persistChatAttachments",
   attachmentsCreateUploadUrl: "attachments.createUploadUrl",
@@ -1206,6 +1213,27 @@ const WsAgentSessionsImportRpc = Rpc.make(WS_METHODS.agentSessionsImport, {
   ]),
 });
 
+const WsAgentSessionsListResumableRpc = Rpc.make(WS_METHODS.agentSessionsListResumable, {
+  payload: AgentSessionListResumableInput,
+  success: AgentSessionListResumableResult,
+  error: Schema.Union([
+    AgentSessionImportProjectNotFoundError,
+    AgentSessionScanError,
+    EnvironmentAuthorizationError,
+  ]),
+});
+
+const WsAgentSessionsResumeRpc = Rpc.make(WS_METHODS.agentSessionsResume, {
+  payload: AgentSessionResumeInput,
+  success: AgentSessionResumeResult,
+  error: Schema.Union([
+    AgentSessionImportProjectNotFoundError,
+    AgentSessionScanError,
+    AgentSessionResumeError,
+    EnvironmentAuthorizationError,
+  ]),
+});
+
 const WsAssetsCreateUrlRpc = Rpc.make(WS_METHODS.assetsCreateUrl, {
   payload: AssetCreateUrlInput,
   success: AssetCreateUrlResult,
@@ -1842,6 +1870,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsFilesystemBrowseRpc,
   WsAgentSessionsScanRpc,
   WsAgentSessionsImportRpc,
+  WsAgentSessionsListResumableRpc,
+  WsAgentSessionsResumeRpc,
   WsAssetsCreateUrlRpc,
   WsAssetsPersistChatAttachmentsRpc,
   WsAttachmentsCreateUploadUrlRpc,

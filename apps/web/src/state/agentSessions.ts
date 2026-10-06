@@ -23,3 +23,14 @@ export const agentSessionImport = createEnvironmentRpcCommand(connectionAtomRunt
   label: "environment-data:agent-sessions:import",
   tag: WS_METHODS.agentSessionsImport,
 });
+
+/** Claude desktop and CLI sessions in one project that the resume picker can continue. */
+export const agentSessionListResumable = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:agent-sessions:list-resumable",
+  tag: WS_METHODS.agentSessionsListResumable,
+});
+
+export const agentSessionResume = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:agent-sessions:resume",
+  tag: WS_METHODS.agentSessionsResume,
+});

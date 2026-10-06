@@ -1,5 +1,11 @@
 import * as Schema from "effect/Schema";
-import { IsoDateTime, NonNegativeInt, ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  IsoDateTime,
+  NonNegativeInt,
+  ProjectId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
 /** Coding agent home directories the scanner knows how to read. */
@@ -73,6 +79,58 @@ export const AgentSessionImportInput = Schema.Struct({
   expectedWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
 });
 export type AgentSessionImportInput = typeof AgentSessionImportInput.Type;
+
+export const AgentSessionListResumableInput = Schema.Struct({
+  projectId: ProjectId,
+  /** Include sessions archived in the Claude desktop app. Off by default. */
+  includeArchived: Schema.optional(Schema.Boolean),
+});
+export type AgentSessionListResumableInput = typeof AgentSessionListResumableInput.Type;
+
+/**
+ * A Claude Code session that ran in a project's folder outside T3 Code: in the
+ * Claude desktop app (`desktop`) or the terminal CLI (`cli`).
+ */
+export const AgentSessionResumable = Schema.Struct({
+  providerSessionId: TrimmedNonEmptyString,
+  title: Schema.String,
+  updatedAt: IsoDateTime,
+  origin: Schema.Literals(["desktop", "cli"]),
+  archived: Schema.Boolean,
+  /** The T3 Code thread already continuing this session, if one exists. */
+  continuedThreadId: Schema.NullOr(ThreadId),
+});
+export type AgentSessionResumable = typeof AgentSessionResumable.Type;
+
+export const AgentSessionListResumableResult = Schema.Struct({
+  sessions: Schema.Array(AgentSessionResumable),
+});
+export type AgentSessionListResumableResult = typeof AgentSessionListResumableResult.Type;
+
+export const AgentSessionResumeInput = Schema.Struct({
+  projectId: ProjectId,
+  providerSessionId: TrimmedNonEmptyString,
+});
+export type AgentSessionResumeInput = typeof AgentSessionResumeInput.Type;
+
+export const AgentSessionResumeResult = Schema.Struct({
+  threadId: ThreadId,
+  /** False when an existing T3 Code thread already continued the session. */
+  created: Schema.Boolean,
+});
+export type AgentSessionResumeResult = typeof AgentSessionResumeResult.Type;
+
+export class AgentSessionResumeError extends Schema.TaggedError<AgentSessionResumeError>()(
+  "AgentSessionResumeError",
+  {
+    reason: Schema.Literals(["not-found", "no-provider", "copy-failed", "import-failed"]),
+    detail: Schema.String,
+  },
+) {
+  override get message(): string {
+    return this.detail;
+  }
+}
 
 export class AgentSessionImportProjectNotFoundError extends Schema.TaggedError<AgentSessionImportProjectNotFoundError>()(
   "AgentSessionImportProjectNotFoundError",
