@@ -434,6 +434,18 @@ export class EnvironmentAuth extends Context.Service<
       },
       ServerAuthInvalidCredentialError | ServerAuthInternalError
     >;
+    /**
+     * Issues a browser session for a caller TrustedDevices identified as an
+     * allow-listed device, without consuming a pairing credential. Standard
+     * client scopes only: a network-identity grant never manages access.
+     */
+    readonly issueTrustedDeviceBrowserSession: (
+      deviceName: string,
+      requestMetadata: AuthClientMetadata,
+    ) => Effect.Effect<
+      { readonly response: AuthBrowserSessionResult; readonly sessionToken: string },
+      ServerAuthInternalError
+    >;
     readonly exchangeBootstrapCredentialForAccessToken: (
       credential: string,
       requestedScopes: ReadonlyArray<AuthEnvironmentScope> | undefined,
@@ -770,6 +782,29 @@ export const make = Effect.gen(function* () {
     );
   };
 
+  const issueTrustedDeviceBrowserSession: EnvironmentAuth["Service"]["issueTrustedDeviceBrowserSession"] =
+    (deviceName, requestMetadata) =>
+      sessions
+        .issue({
+          method: "browser-session-cookie",
+          subject: `trusted-device:${deviceName}`,
+          scopes: AuthStandardClientScopes,
+          client: { ...requestMetadata, label: `Trusted device: ${deviceName}` },
+        })
+        .pipe(
+          Effect.mapError((cause) => new ServerAuthAuthenticatedSessionIssueError({ cause })),
+          Effect.map((session) => ({
+            response: {
+              authenticated: true,
+              scopes: session.scopes,
+              sessionMethod: session.method,
+              expiresAt: DateTime.toUtc(session.expiresAt),
+            } satisfies AuthBrowserSessionResult,
+            sessionToken: session.token,
+          })),
+          Effect.withSpan("EnvironmentAuth.issueTrustedDeviceBrowserSession"),
+        );
+
   type ResolvedBootstrapGrant = Pick<
     PairingGrantStore.BootstrapGrant,
     "scopes" | "subject" | "label"
@@ -1099,6 +1134,7 @@ export const make = Effect.gen(function* () {
       Effect.succeed(descriptor).pipe(Effect.withSpan("EnvironmentAuth.getDescriptor")),
     getSessionState,
     createBrowserSession,
+    issueTrustedDeviceBrowserSession,
     exchangeBootstrapCredentialForAccessToken,
     createPairingLink,
     issuePairingCredential,
