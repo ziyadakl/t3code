@@ -1,0 +1,151 @@
+name: Custom Mac CLI Build
+
+# Builds the darwin-arm64 T3 Code runtime archive for this fork's custom-v2
+# branch on a GitHub-hosted Apple Silicon runner, so no personal Mac ever has to
+# build it. Manual only.
+#
+# This is a trimmed copy of the CLI-archive half of release-desktop.yml: the same
+# setup-vp action, the same Rust toolchain action, the same build-exe and
+# build-cli-archive invocations. Everything Electron, every signing secret and
+# every cross-job artifact handoff is dropped, so the job is self-contained and
+# needs no repository secrets at all. With no Developer ID certificate available,
+# build-cli-archive.ts signs `t3` ad hoc, which is what a personal install needs.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version string baked into the archive
+        required: false
+        default: 0.0.45-custom.890e93b8
+
+permissions:
+  contents: read
+
+concurrency:
+  group: custom-mac-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Keep in step with SEA_NODE_VERSION in apps/server/vite.config.ts; the
+  # single-executable build needs a Node 25.7+ host, unlike the repo's own Node.
+  VP_NODE_VERSION: "26.8.2"
+  RUST_TARGET: aarch64-apple-darwin
+  RESOURCE_KEY: darwin-arm64
+
+jobs:
+  build:
+    name: Build macOS arm64 CLI archive
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      # This repository is public, so Git needs no credentials. checkout's
+      # credential cleanup runs submodule foreach even with submodules disabled,
+      # which fails on the orphaned gitlinks in our vendored .repos tree.
+      - name: Checkout
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --depth=1 origin "$CHECKOUT_REF"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git -c checkout.workers=0 checkout --detach FETCH_HEAD
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: false
+
+      - name: Install CLI dependencies
+        run: vp install --filter=t3... --filter=@t3tools/web... --filter=@t3tools/scripts...
+
+      - name: Set version and public configuration
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          node scripts/update-release-package-versions.ts "$VERSION"
+          # Public T3 Connect identifiers (Clerk publishable key, Clerk JWT
+          # template, CLI OAuth client id, relay URL). No secrets here, and
+          # deliberately no client telemetry ingest token.
+          cp .env.example .env
+
+      - name: Cache resource monitor
+        id: resource_monitor_cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: native/resource-monitor/target/${{ env.RUST_TARGET }}/release/t3-resource-monitor
+          key: resource-monitor-${{ env.RUST_TARGET }}-${{ hashFiles('native/resource-monitor/Cargo.lock', 'native/resource-monitor/Cargo.toml', 'native/resource-monitor/src/**') }}
+
+      - name: Setup Rust
+        if: steps.resource_monitor_cache.outputs.cache-hit != 'true'
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+          targets: ${{ env.RUST_TARGET }}
+
+      # release-desktop.yml gets this for free inside the Electron artifact
+      # build, which this workflow does not run, so compile it explicitly.
+      - name: Build resource monitor
+        if: steps.resource_monitor_cache.outputs.cache-hit != 'true'
+        run: cargo build --locked --release --target "$RUST_TARGET" --manifest-path native/resource-monitor/Cargo.toml
+
+      - name: Build web client and server bundle
+        run: vp run --filter t3 build
+
+      - name: Build CLI single-executable
+        run: node apps/server/scripts/cli.ts build-exe --verbose
+
+      - name: Stage resource monitor for the CLI archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          target_dir="$RUNNER_TEMP/cli-resource-monitor/$RESOURCE_KEY"
+          mkdir -p "$target_dir"
+          cp "native/resource-monitor/target/$RUST_TARGET/release/t3-resource-monitor" "$target_dir/t3-resource-monitor"
+
+      - name: Build CLI archive
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          node scripts/build-cli-archive.ts \
+            --platform mac \
+            --arch arm64 \
+            --version "$VERSION" \
+            --resource-monitor-dir "$RUNNER_TEMP/cli-resource-monitor" \
+            --output-dir release-cli
+
+      - name: Smoke-test CLI archive
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: node scripts/smoke-cli-archive.ts --archive release-cli/* --expect-version "$VERSION"
+
+      # codesign only exists on macOS, so record its verdict here for anyone
+      # inspecting the artifact from a Linux box later.
+      - name: Report signing state
+        shell: bash
+        run: |
+          set -euo pipefail
+          inspect="$RUNNER_TEMP/archive-inspect"
+          mkdir -p "$inspect"
+          tar -xzf release-cli/*.tar.gz -C "$inspect" --strip-components=1
+          file "$inspect/t3"
+          codesign -dvv "$inspect/t3" 2>&1 || true
+          codesign --verify --verbose "$inspect/t3" 2>&1 || true
+
+      - name: Upload CLI archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-mac-arm64
+          path: release-cli/*
+          if-no-files-found: error
