@@ -23,6 +23,7 @@ import ProjectScriptsControl, {
 } from "../ProjectScriptsControl";
 import { Button } from "../ui/button";
 import type { ComponentProps } from "react";
+import { DevServerControl } from "./DevServerControl";
 import { ThreadDetailsCard } from "./ThreadDetailsCard";
 import { OpenInPicker } from "./OpenInPicker";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
@@ -75,6 +76,8 @@ export interface ThreadDetailsPanelProps extends Pick<
     input: NewProjectScriptInput,
   ) => Promise<ProjectScriptActionResult>;
   onDeleteProjectScript: (scriptId: string) => Promise<ProjectScriptActionResult>;
+  /** Present when the project has a dev server action and the thread can run it. */
+  devServer?: ComponentProps<typeof DevServerControl> | undefined;
 }
 
 export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
@@ -191,6 +194,8 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                   onDeleteScript={props.onDeleteProjectScript}
                 />
               ) : null}
+
+              {props.devServer ? <DevServerControl {...props.devServer} /> : null}
             </div>
           </ThreadDetailsSection>
 
