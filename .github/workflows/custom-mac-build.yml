@@ -2,7 +2,7 @@ name: Custom Mac CLI Build
 
 # Builds the darwin-arm64 T3 Code runtime archive for this fork's custom-v2
 # branch on a GitHub-hosted Apple Silicon runner, so no personal Mac ever has to
-# build it. Manual only.
+# build it. Never runs on its own; see the trigger note below.
 #
 # This is a trimmed copy of the CLI-archive half of release-desktop.yml: the same
 # setup-vp action, the same Rust toolchain action, the same build-exe and
@@ -11,6 +11,11 @@ name: Custom Mac CLI Build
 # needs no repository secrets at all. With no Developer ID certificate available,
 # build-cli-archive.ts signs `t3` ad hoc, which is what a personal install needs.
 
+# GitHub only offers the manual "Run workflow" button for files that exist on the
+# repository's default branch, which here is the upstream mirror `main`. This
+# branch must not be merged there, so the push trigger below is the way to start
+# a build: touch this file on custom-v2 and the build runs. The dispatch trigger
+# stays for the day custom-v2 becomes the default branch.
 on:
   workflow_dispatch:
     inputs:
@@ -18,6 +23,9 @@ on:
         description: Version string baked into the archive
         required: false
         default: 0.0.45-custom.890e93b8
+  push:
+    branches: [custom-v2]
+    paths: [.github/workflows/custom-mac-build.yml]
 
 permissions:
   contents: read
@@ -32,6 +40,8 @@ env:
   VP_NODE_VERSION: "26.8.2"
   RUST_TARGET: aarch64-apple-darwin
   RESOURCE_KEY: darwin-arm64
+  # The dispatch input is empty on a push event, so the default lives here too.
+  VERSION: ${{ inputs.version || '0.0.45-custom.890e93b8' }}
 
 jobs:
   build:
@@ -67,8 +77,6 @@ jobs:
 
       - name: Set version and public configuration
         shell: bash
-        env:
-          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           node scripts/update-release-package-versions.ts "$VERSION"
@@ -113,8 +121,6 @@ jobs:
 
       - name: Build CLI archive
         shell: bash
-        env:
-          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           node scripts/build-cli-archive.ts \
@@ -126,8 +132,6 @@ jobs:
 
       - name: Smoke-test CLI archive
         shell: bash
-        env:
-          VERSION: ${{ inputs.version }}
         run: node scripts/smoke-cli-archive.ts --archive release-cli/* --expect-version "$VERSION"
 
       # codesign only exists on macOS, so record its verdict here for anyone
