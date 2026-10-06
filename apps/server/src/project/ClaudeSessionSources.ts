@@ -9,6 +9,7 @@
  * copies a transcript into another Claude home and never touches the source.
  */
 import { ProviderInstanceId } from "@t3tools/contracts";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -23,6 +24,13 @@ const CLAUDE_SESSION_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 /** Enough of a transcript to find its cwd and a title without reading it whole. */
 const TITLE_PREFIX_BYTES = 256 * 1024;
+/**
+ * Cap on re-reading a transcript whole after its prefix yielded nothing. A
+ * first user message can be far larger than the prefix — one holding an image
+ * runs to hundreds of kilobytes — so the prefix is cut mid-record and holds no
+ * user message at all, which would drop a real session from the picker.
+ */
+const MAX_FULL_TRANSCRIPT_BYTES = 32 * 1024 * 1024;
 /** The desktop app nests cards at most one folder below an organization folder. */
 const MAX_CARD_FOLDER_DEPTH = 4;
 const WORKTREE_SEGMENT = "/.claude/worktrees/";
@@ -129,19 +137,39 @@ export function mergeDesktopCards(files: ReadonlyArray<DesktopCardFile>): Deskto
   return sessions;
 }
 
+/**
+ * macOS file systems are case-insensitive by default, so the same directory
+ * reaches us in more than one spelling: a project added as
+ * `~/Dev/Affinity/Affinity-OS` holds sessions whose recorded cwd (and whose
+ * transcript folder name) says `affinity-os`. Comparing those exactly shows an
+ * empty picker. The shared comparison helper already case folds Windows paths,
+ * so only macOS needs folding here; other platforms keep exact matching.
+ */
+function foldPathCase(value: string, caseInsensitive: boolean): string {
+  const normalized = normalizeProjectPathForComparison(value);
+  return caseInsensitive ? normalized.toLowerCase() : normalized;
+}
+
 /** Whether `cwd` is the project root or a Claude worktree inside it. */
-function isProjectCwd(cwd: string, workspaceRoot: string): boolean {
+function isProjectCwd(cwd: string, workspaceRoot: string, caseInsensitive: boolean): boolean {
   if (cwd.trim().length === 0) return false;
-  const normalizedCwd = normalizeProjectPathForComparison(cwd);
-  const normalizedRoot = normalizeProjectPathForComparison(workspaceRoot);
+  const normalizedCwd = foldPathCase(cwd, caseInsensitive);
+  const normalizedRoot = foldPathCase(workspaceRoot, caseInsensitive);
   return (
     normalizedCwd === normalizedRoot ||
     normalizedCwd.startsWith(normalizedRoot.replace(/\/+$/, "") + WORKTREE_SEGMENT)
   );
 }
 
-function desktopSessionInProject(session: DesktopSession, workspaceRoot: string): boolean {
-  return isProjectCwd(session.originCwd, workspaceRoot) || isProjectCwd(session.cwd, workspaceRoot);
+function desktopSessionInProject(
+  session: DesktopSession,
+  workspaceRoot: string,
+  caseInsensitive: boolean,
+): boolean {
+  return (
+    isProjectCwd(session.originCwd, workspaceRoot, caseInsensitive) ||
+    isProjectCwd(session.cwd, workspaceRoot, caseInsensitive)
+  );
 }
 
 /** Every `local_*.json` card under the desktop store, across all account and org folders. */
@@ -208,6 +236,26 @@ const readTranscriptPrefix = Effect.fn("ClaudeSessionSources.readTranscriptPrefi
   ).pipe(Effect.orElseSucceed(() => ""));
 });
 
+/**
+ * A whole transcript, but only when its prefix was cut short — a file no bigger
+ * than the prefix was already read entirely, so a session with no user message
+ * in it has none at all and stays out of the picker. `null` when there is
+ * nothing more to read, or the file is too big to hold in memory.
+ */
+const readTranscriptRest = Effect.fn("ClaudeSessionSources.readTranscriptRest")(function* (
+  filePath: string,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const size = yield* fileSystem.stat(filePath).pipe(
+    Effect.map((stats) => Number(stats.size)),
+    Effect.orElseSucceed(() => 0),
+  );
+  if (size <= TITLE_PREFIX_BYTES || size > MAX_FULL_TRANSCRIPT_BYTES) return null;
+  return yield* fileSystem
+    .readFileString(filePath)
+    .pipe(Effect.orElseSucceed((): string | null => null));
+});
+
 function firstCwd(contents: string): string | null {
   for (const line of contents.split("\n")) {
     if (!line.includes('"cwd"')) continue;
@@ -235,6 +283,7 @@ export const listClaudeSessions = Effect.fn("ClaudeSessionSources.listClaudeSess
   }) {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
+    const caseInsensitive = (yield* HostProcessPlatform) === "darwin";
     const projectsDir = path.join(input.claudeHome, "projects");
     const exists = (target: string) =>
       fileSystem.exists(target).pipe(Effect.orElseSucceed(() => false));
@@ -256,7 +305,7 @@ export const listClaudeSessions = Effect.fn("ClaudeSessionSources.listClaudeSess
 
     const rows: ResumableClaudeSession[] = [];
     for (const session of desktopSessions) {
-      if (!desktopSessionInProject(session, input.workspaceRoot)) continue;
+      if (!desktopSessionInProject(session, input.workspaceRoot, caseInsensitive)) continue;
       if (session.archived && !input.includeArchived) continue;
       if (!CLAUDE_SESSION_ID_PATTERN.test(session.cliSessionId)) continue;
       let transcriptPath: string | null = null;
@@ -283,12 +332,14 @@ export const listClaudeSessions = Effect.fn("ClaudeSessionSources.listClaudeSess
       });
     }
 
-    const rootDir = encodeClaudeProjectDir(input.workspaceRoot);
+    const foldDirCase = (value: string) => (caseInsensitive ? value.toLowerCase() : value);
+    const rootDir = foldDirCase(encodeClaudeProjectDir(input.workspaceRoot));
     const projectDirs = (yield* fileSystem
       .readDirectory(projectsDir)
-      .pipe(Effect.orElseSucceed((): string[] => []))).filter(
-      (entry) => entry === rootDir || entry.startsWith(`${rootDir}--claude-worktrees-`),
-    );
+      .pipe(Effect.orElseSucceed((): string[] => []))).filter((entry) => {
+      const folded = foldDirCase(entry);
+      return folded === rootDir || folded.startsWith(`${rootDir}--claude-worktrees-`);
+    });
     for (const projectDir of projectDirs.toSorted()) {
       const directory = path.join(projectsDir, projectDir);
       const entries = yield* fileSystem
@@ -301,18 +352,25 @@ export const listClaudeSessions = Effect.fn("ClaudeSessionSources.listClaudeSess
           continue;
         }
         const transcriptPath = path.join(directory, entry);
-        const prefix = yield* readTranscriptPrefix(transcriptPath);
-        // Folder names are lossy encodings; the transcript's own cwd decides.
-        const cwd = firstCwd(prefix);
-        if (cwd === null || !isProjectCwd(cwd, input.workspaceRoot)) continue;
         const updatedAtMs = yield* mtimeMs(transcriptPath);
-        const thread = parseAgentSessionTranscript({
-          source: "claudeAgent",
-          providerInstanceId: ProviderInstanceId.make("claudeAgent"),
-          fallbackSessionId: sessionId,
-          lastActiveAtMs: updatedAtMs,
-          contents: prefix,
+        const read = (contents: string) => ({
+          // Folder names are lossy encodings; the transcript's own cwd decides.
+          cwd: firstCwd(contents),
+          thread: parseAgentSessionTranscript({
+            source: "claudeAgent",
+            providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+            fallbackSessionId: sessionId,
+            lastActiveAtMs: updatedAtMs,
+            contents,
+          }),
         });
+        let parsed = read(yield* readTranscriptPrefix(transcriptPath));
+        if (parsed.cwd === null || parsed.thread === null) {
+          const whole = yield* readTranscriptRest(transcriptPath);
+          if (whole !== null) parsed = read(whole);
+        }
+        const { cwd, thread } = parsed;
+        if (cwd === null || !isProjectCwd(cwd, input.workspaceRoot, caseInsensitive)) continue;
         if (thread === null) continue;
         rows.push({
           providerSessionId: sessionId,

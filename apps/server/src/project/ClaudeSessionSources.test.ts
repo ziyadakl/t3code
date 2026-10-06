@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -21,7 +22,11 @@ const ids = {
   desktopWorktree: "44444444-4444-4444-8444-444444444444",
   cliOnly: "55555555-5555-4555-8555-555555555555",
   otherProject: "66666666-6666-4666-8666-666666666666",
+  cliHugeFirstMessage: "77777777-7777-4777-8777-777777777777",
 };
+
+/** Mirrors the reader's prefix cap: the first user record has to run past it. */
+const HUGE_MESSAGE_TEXT = `Look at this screenshot\n${"a".repeat(400 * 1024)}`;
 
 function transcript(sessionId: string, cwd: string, text: string): string {
   return (
@@ -154,6 +159,13 @@ const writeFixtures = Effect.fn("writeFixtures")(function* (root: string) {
     transcript(ids.cliOnly, PROJECT, "Terminal work\nmore"),
     1,
   );
+  // One user record far bigger than the prefix cap, so the prefix holds no
+  // complete line at all.
+  yield* write(
+    path.join(projectDir, `${ids.cliHugeFirstMessage}.jsonl`),
+    transcript(ids.cliHugeFirstMessage, PROJECT, HUGE_MESSAGE_TEXT),
+    6,
+  );
   yield* write(
     path.join(home, "projects", encodeClaudeProjectDir("/work/other"), `${ids.otherProject}.jsonl`),
     transcript(ids.otherProject, "/work/other", "other"),
@@ -196,6 +208,13 @@ it.layer(NodeServices.layer)("Claude session sources", (it) => {
         })),
       ).toEqual([
         {
+          providerSessionId: ids.cliHugeFirstMessage,
+          origin: "cli",
+          title: "Look at this screenshot",
+          archived: false,
+          cwd: PROJECT,
+        },
+        {
           providerSessionId: ids.desktopWorktree,
           origin: "desktop",
           title: "Desktop worktree",
@@ -227,6 +246,62 @@ it.layer(NodeServices.layer)("Claude session sources", (it) => {
       expect(
         withArchived.filter((row) => row.archived).map((row) => row.providerSessionId),
       ).toEqual([ids.desktopArchived]);
+    }),
+  );
+
+  it.effect("lists a session whose first user message is larger than the read prefix", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-claude-huge-" });
+      const { home, store } = yield* writeFixtures(root);
+      const transcriptPath = path.join(
+        home,
+        "projects",
+        encodeClaudeProjectDir(PROJECT),
+        `${ids.cliHugeFirstMessage}.jsonl`,
+      );
+      // The fixture only tests the fix while it really exceeds the cap.
+      expect(Number((yield* fs.stat(transcriptPath)).size)).toBeGreaterThan(256 * 1024);
+
+      const listed = yield* listClaudeSessions({
+        claudeHome: home,
+        desktopStoreDir: store,
+        workspaceRoot: PROJECT,
+        includeArchived: false,
+      });
+      expect(listed.find((row) => row.providerSessionId === ids.cliHugeFirstMessage)).toMatchObject(
+        {
+          origin: "cli",
+          title: "Look at this screenshot",
+          cwd: PROJECT,
+        },
+      );
+    }),
+  );
+
+  it.effect("matches a differently cased project path on macOS only", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-claude-case-" });
+      const { home, store } = yield* writeFixtures(root);
+      const listCased = (platform: NodeJS.Platform) =>
+        listClaudeSessions({
+          claudeHome: home,
+          desktopStoreDir: store,
+          workspaceRoot: "/Work/App",
+          includeArchived: false,
+        }).pipe(Effect.provideService(HostProcessPlatform, platform));
+
+      // macOS file systems are case-insensitive, so these are one project.
+      expect((yield* listCased("darwin")).map((row) => row.providerSessionId)).toEqual([
+        ids.cliHugeFirstMessage,
+        ids.desktopWorktree,
+        ids.desktopLive,
+        ids.cliOnly,
+      ]);
+      // Linux file systems are case-sensitive, so these are different paths.
+      expect(yield* listCased("linux")).toEqual([]);
     }),
   );
 
