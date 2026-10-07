@@ -446,6 +446,22 @@ export class EnvironmentAuth extends Context.Service<
       { readonly response: AuthBrowserSessionResult; readonly sessionToken: string },
       ServerAuthInternalError
     >;
+    /**
+     * The access-token counterpart of issueTrustedDeviceBrowserSession, for a
+     * native app pairing from an allow-listed device: no pairing credential is
+     * read or consumed.
+     */
+    readonly issueTrustedDeviceAccessToken: (
+      deviceName: string,
+      requestedScopes: ReadonlyArray<AuthEnvironmentScope> | undefined,
+      requestMetadata: AuthClientMetadata,
+      input?: {
+        readonly proofKeyThumbprint?: string;
+      },
+    ) => Effect.Effect<
+      AuthAccessTokenResult,
+      ServerAuthInvalidRequestError | ServerAuthInternalError
+    >;
     readonly exchangeBootstrapCredentialForAccessToken: (
       credential: string,
       requestedScopes: ReadonlyArray<AuthEnvironmentScope> | undefined,
@@ -805,6 +821,51 @@ export const make = Effect.gen(function* () {
           Effect.withSpan("EnvironmentAuth.issueTrustedDeviceBrowserSession"),
         );
 
+  const toAccessTokenResult = (
+    session: SessionStore.IssuedSession,
+    input: { readonly proofKeyThumbprint?: string } | undefined,
+  ) =>
+    DateTime.now.pipe(
+      Effect.map(
+        (now) =>
+          ({
+            access_token: session.token,
+            issued_token_type: AuthAccessTokenType,
+            token_type: input?.proofKeyThumbprint ? "DPoP" : "Bearer",
+            expires_in: Math.max(
+              0,
+              Math.floor((session.expiresAt.epochMilliseconds - now.epochMilliseconds) / 1000),
+            ),
+            scope: encodeOAuthScope(session.scopes),
+          }) satisfies AuthAccessTokenResult,
+      ),
+    );
+
+  const trustedDeviceScopes: ReadonlySet<AuthEnvironmentScope> = new Set(AuthStandardClientScopes);
+  const issueTrustedDeviceAccessToken: EnvironmentAuth["Service"]["issueTrustedDeviceAccessToken"] =
+    Effect.fn("EnvironmentAuth.issueTrustedDeviceAccessToken")(
+      function* (deviceName, requestedScopes, requestMetadata, input) {
+        const grantedScopes = requestedScopes ?? AuthStandardClientScopes;
+        if (!grantedScopes.every((scope) => trustedDeviceScopes.has(scope))) {
+          return yield* new ServerAuthScopeNotGrantedError({});
+        }
+        const session = yield* sessions
+          .issue({
+            method: input?.proofKeyThumbprint ? "dpop-access-token" : "bearer-access-token",
+            subject: `trusted-device:${deviceName}`,
+            scopes: grantedScopes,
+            ...(input?.proofKeyThumbprint
+              ? { proofKeyThumbprint: input.proofKeyThumbprint, ttl: Duration.hours(1) }
+              : {}),
+            client: { ...requestMetadata, label: `Trusted device: ${deviceName}` },
+          })
+          .pipe(
+            Effect.mapError((cause) => new ServerAuthAuthenticatedAccessTokenIssueError({ cause })),
+          );
+        return yield* toAccessTokenResult(session, input);
+      },
+    );
+
   type ResolvedBootstrapGrant = Pick<
     PairingGrantStore.BootstrapGrant,
     "scopes" | "subject" | "label"
@@ -871,25 +932,7 @@ export const make = Effect.gen(function* () {
               );
           }),
         ),
-        Effect.flatMap((session) =>
-          DateTime.now.pipe(
-            Effect.map(
-              (now) =>
-                ({
-                  access_token: session.token,
-                  issued_token_type: AuthAccessTokenType,
-                  token_type: input?.proofKeyThumbprint ? "DPoP" : "Bearer",
-                  expires_in: Math.max(
-                    0,
-                    Math.floor(
-                      (session.expiresAt.epochMilliseconds - now.epochMilliseconds) / 1000,
-                    ),
-                  ),
-                  scope: encodeOAuthScope(session.scopes),
-                }) satisfies AuthAccessTokenResult,
-            ),
-          ),
-        ),
+        Effect.flatMap((session) => toAccessTokenResult(session, input)),
         Effect.withSpan("EnvironmentAuth.exchangeBootstrapCredentialForAccessToken"),
       );
 
@@ -1135,6 +1178,7 @@ export const make = Effect.gen(function* () {
     getSessionState,
     createBrowserSession,
     issueTrustedDeviceBrowserSession,
+    issueTrustedDeviceAccessToken,
     exchangeBootstrapCredentialForAccessToken,
     createPairingLink,
     issuePairingCredential,

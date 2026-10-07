@@ -417,20 +417,38 @@ export const layer = HttpApiBuilder.group(
                 )
               : undefined;
             yield* appendCredentialResponseHeaders;
+            const requestMetadata = deriveAuthClientMetadata({
+              request,
+              presented: {
+                ...(args.payload.client_label ? { label: args.payload.client_label } : {}),
+                ...(args.payload.client_device_type
+                  ? { deviceType: args.payload.client_device_type }
+                  : {}),
+                ...(args.payload.client_os ? { os: args.payload.client_os } : {}),
+              },
+            });
+            const binding = proofKeyThumbprint ? { proofKeyThumbprint } : undefined;
+            // An allow-listed Tailscale device pairs the app with any code, the
+            // way the browser skips the pairing screen. The code is not read.
+            const trustedDevice = yield* trustedDevices.resolve(request);
+            if (Option.isSome(trustedDevice)) {
+              yield* Effect.annotateCurrentSpan({ "environment.auth.trusted_device": true });
+              const issued = yield* serverAuth.issueTrustedDeviceAccessToken(
+                trustedDevice.value,
+                requestedScopes,
+                requestMetadata,
+                binding,
+              );
+              yield* Effect.logInfo("Issued a trusted-device access token", {
+                device: trustedDevice.value,
+              });
+              return issued;
+            }
             return yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
               args.payload.subject_token,
               requestedScopes,
-              deriveAuthClientMetadata({
-                request,
-                presented: {
-                  ...(args.payload.client_label ? { label: args.payload.client_label } : {}),
-                  ...(args.payload.client_device_type
-                    ? { deviceType: args.payload.client_device_type }
-                    : {}),
-                  ...(args.payload.client_os ? { os: args.payload.client_os } : {}),
-                },
-              }),
-              proofKeyThumbprint ? { proofKeyThumbprint } : undefined,
+              requestMetadata,
+              binding,
             );
           },
           traceRelayRequest,
