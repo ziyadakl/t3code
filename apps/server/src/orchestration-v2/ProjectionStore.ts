@@ -1,3 +1,4 @@
+import { isCompactCommand } from "@t3tools/shared/compactCommand";
 import {
   latestRootProviderFailure,
   latestUnheldRun,
@@ -3752,6 +3753,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     // SQLite trim defaults to ASCII spaces; compact recognition uses JavaScript trim.
     const javascriptTrimWhitespace =
       " \t\n\r\v\f\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff";
+    // `/compact` followed by whitespace and instructions; see parseCompactCommand.
+    const compactWithInstructionsGlob = `/compact[${javascriptTrimWhitespace}]*`;
 
     // Startup needs execution metadata, not the transcript or inherited fork history.
     const getTurnStartContext: ProjectionStoreV2Shape["getTurnStartContext"] = (threadId, runId) =>
@@ -3812,14 +3815,20 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               WHERE thread_id = ${threadId} AND (
                 message_id IN (SELECT json_extract(payload_json, '$.userMessageId') FROM orchestration_v2_projection_runs
                   WHERE thread_id = ${threadId} AND run_id = ${runId})
-                OR (role = 'user' AND lower(trim(json_extract(payload_json, '$.text'), ${javascriptTrimWhitespace})) = '/compact')
+                OR (role = 'user' AND (
+                  lower(trim(json_extract(payload_json, '$.text'), ${javascriptTrimWhitespace})) = '/compact'
+                  OR lower(trim(json_extract(payload_json, '$.text'), ${javascriptTrimWhitespace})) GLOB ${compactWithInstructionsGlob}
+                ))
               ) ORDER BY created_at ASC, message_id ASC
             `.pipe(Effect.flatMap(decodeRows(decodeMessagePayload, threadId)));
             const conversation = yield* sql<{ present: number }>`
               SELECT EXISTS(
                 SELECT 1 FROM orchestration_v2_projection_messages
                 WHERE thread_id = ${threadId} AND role = 'user'
-                    AND (lower(trim(json_extract(payload_json, '$.text'), ${javascriptTrimWhitespace})) <> '/compact'
+                    AND (NOT (
+                        lower(trim(json_extract(payload_json, '$.text'), ${javascriptTrimWhitespace})) = '/compact'
+                        OR lower(trim(json_extract(payload_json, '$.text'), ${javascriptTrimWhitespace})) GLOB ${compactWithInstructionsGlob}
+                      )
                       OR json_array_length(payload_json, '$.attachments') > 0)
               ) AS present
             `;
@@ -6218,8 +6227,7 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
             hasConversation: projection.messages.some(
               (message) =>
                 message.role === "user" &&
-                (message.text.trim().toLowerCase() !== "/compact" ||
-                  message.attachments.length > 0),
+                (!isCompactCommand(message.text) || message.attachments.length > 0),
             ),
             turnItems: projection.turnItems.filter((item) => item.runId === runId),
           })),

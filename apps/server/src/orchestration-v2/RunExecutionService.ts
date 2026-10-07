@@ -1,3 +1,4 @@
+import { isCompactCommand } from "@t3tools/shared/compactCommand";
 import { makeAssistantStreamingFilter } from "./assistantStreaming.ts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import {
@@ -1374,8 +1375,7 @@ export const layer: Layer.Layer<
             runtimePolicy: input.runtimePolicy,
           };
           const compact =
-            input.message.attachments.length === 0 &&
-            input.message.text.trim().toLowerCase() === "/compact";
+            input.message.attachments.length === 0 && isCompactCommand(input.message.text);
           const startTurn = compact
             ? (input.session.compactThread?.(turnInput) ??
               Effect.fail(

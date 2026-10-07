@@ -2544,7 +2544,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     composerTrigger?.kind === "slash-command" &&
     prompt.slice(0, composerTrigger.rangeStart).trim() === "" &&
     !compactThreadUnavailable &&
-    prompt.slice(composerTrigger.rangeEnd).trim() === "" &&
     composerImages.length + composerFiles.length === 0 &&
     composerDraft.persistedAttachments.length === 0 &&
     composerTerminalContexts.length === 0 &&

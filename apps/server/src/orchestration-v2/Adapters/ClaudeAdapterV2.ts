@@ -1,4 +1,5 @@
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
+import { formatCompactCommand, parseCompactCommand } from "@t3tools/shared/compactCommand";
 import {
   dynamicToolTitle,
   formatReadToolLabel,
@@ -7847,10 +7848,15 @@ export function makeClaudeAdapterV2(
               ),
           ),
           startTurn,
+          // Claude Code reads `/compact <instructions>` itself, so the
+          // instructions ride along as the focus of its summary.
           compactThread: (turnInput) =>
             startTurn({
               ...turnInput,
-              message: { ...turnInput.message, text: "/compact" },
+              message: {
+                ...turnInput.message,
+                text: formatCompactCommand(parseCompactCommand(turnInput.message.text) ?? ""),
+              },
             }),
           steerTurn,
           interruptTurn,

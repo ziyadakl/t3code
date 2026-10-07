@@ -713,7 +713,9 @@ it.effect(
       });
       const cases = [
         { text: " /compact ", attachments: [], expected: "compact" },
+        { text: "/Compact keep the auth rewrite", attachments: [], expected: "compact" },
         { text: "/compact", attachments: [attachment], expected: "prompt" },
+        { text: "/compacting the notes", attachments: [], expected: "prompt" },
         { text: "Continue the work", attachments: [], expected: "prompt" },
       ];
       for (const [index, testCase] of cases.entries()) {

@@ -1,3 +1,4 @@
+import { isCompactCommand } from "@t3tools/shared/compactCommand";
 import {
   latestExecutedRun,
   latestRootProviderFailure,
@@ -373,7 +374,7 @@ export function isNativeMaintenanceCommand(message: {
 }): boolean {
   return (
     message.attachments.length === 0 &&
-    ["/compact", "/logout"].includes(message.text.trim().toLowerCase())
+    (isCompactCommand(message.text) || message.text.trim().toLowerCase() === "/logout")
   );
 }
 
@@ -3730,10 +3731,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         return yield* new OrchestratorDispatchError({
           commandId: input.command.commandId,
           commandType: input.command.type,
-          cause:
-            input.text.trim().toLowerCase() === "/compact"
-              ? "Context compaction must run as a separate turn. Queue it or wait for the active turn to finish."
-              : "Signing out must run as a separate turn. Queue it or wait for the active turn to finish.",
+          cause: isCompactCommand(input.text)
+            ? "Context compaction must run as a separate turn. Queue it or wait for the active turn to finish."
+            : "Signing out must run as a separate turn. Queue it or wait for the active turn to finish.",
         });
       }
       if (isGoalCommand(input)) {
@@ -3751,10 +3751,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         return yield* new OrchestratorDispatchError({
           commandId: input.command.commandId,
           commandType: input.command.type,
-          cause:
-            targetMessage.text.trim().toLowerCase() === "/compact"
-              ? "Wait for context compaction to finish before steering the thread."
-              : "Wait for sign-out to finish before steering the thread.",
+          cause: isCompactCommand(targetMessage.text)
+            ? "Wait for context compaction to finish before steering the thread."
+            : "Wait for sign-out to finish before steering the thread.",
         });
       }
       const rootNodeId = targetRun.rootNodeId;
