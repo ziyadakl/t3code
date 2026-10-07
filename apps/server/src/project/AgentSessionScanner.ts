@@ -113,6 +113,7 @@ const CodexTurnMetadata = Schema.Struct({
 
 const TranscriptRecord = Schema.Struct({
   type: Schema.optional(Schema.String),
+  uuid: Schema.optional(Schema.String),
   timestamp: Schema.optional(Schema.String),
   cwd: Schema.optional(Schema.String),
   sessionId: Schema.optional(Schema.String),
@@ -156,6 +157,51 @@ export interface AgentSessionThreadMessage {
   readonly role: "user" | "assistant";
   readonly text: string;
   readonly createdAt: string;
+  /** Claude prompts only: the transcript uuid of the prompt, its file restore target. */
+  readonly nativeUserMessageId?: string;
+  /**
+   * Claude prompts only: the uuid the prompt's turn ended at, where a session
+   * resumed to just after this turn continues. That is its last reply, or the
+   * prompt itself when nothing answered it.
+   */
+  readonly nativeTurnId?: string;
+}
+
+/** Where a Claude record sits in its transcript, for working out turn ends. */
+interface ClaudeRecordPosition {
+  readonly uuid: string | undefined;
+  readonly recordIndex: number;
+  /** The last main-chain reply written before this record. */
+  readonly replyBefore: { readonly uuid: string; readonly recordIndex: number } | undefined;
+}
+
+type ParsedMessage = AgentSessionThreadMessage & {
+  readonly codexResponseUser: boolean;
+  readonly claude?: ClaudeRecordPosition;
+};
+
+/**
+ * Gives each retained Claude prompt its uuid and the uuid its turn ended at.
+ * A turn runs until the next retained prompt, so a prompt before messages the
+ * import cap dropped ends where the dropped span ends.
+ */
+function withClaudeTurnIds(
+  messages: ReadonlyArray<ParsedMessage>,
+  lastReply: ClaudeRecordPosition["replyBefore"],
+): ReadonlyArray<AgentSessionThreadMessage> {
+  return messages.map(({ codexResponseUser: _codexResponseUser, claude, ...message }, index) => {
+    if (message.role !== "user" || claude?.uuid === undefined) return message;
+    const nextPrompt = messages.slice(index + 1).find((candidate) => candidate.role === "user");
+    const turnEnd = nextPrompt === undefined ? lastReply : nextPrompt.claude?.replyBefore;
+    return {
+      ...message,
+      nativeUserMessageId: claude.uuid,
+      nativeTurnId:
+        turnEnd !== undefined && turnEnd.recordIndex > claude.recordIndex
+          ? turnEnd.uuid
+          : claude.uuid,
+    };
+  });
 }
 
 export interface AgentSessionThread {
@@ -325,10 +371,9 @@ function parseAgentSessionRecords(
   let title: string | null = null;
   let model: string | null = null;
   let hasCodexSessionId = false;
-  const messages: Array<AgentSessionThreadMessage & { readonly codexResponseUser: boolean }> = [];
-  let firstUserMessage:
-    | (AgentSessionThreadMessage & { readonly codexResponseUser: boolean })
-    | undefined;
+  const messages: Array<ParsedMessage> = [];
+  let firstUserMessage: ParsedMessage | undefined;
+  let lastClaudeReply: ClaudeRecordPosition["replyBefore"];
   // A Codex response item can include generated setup text beside the real
   // prompt. Suppress response-user records only when the shared turn ID and a
   // verbatim event copy prove which prompt the user submitted.
@@ -385,9 +430,7 @@ function parseAgentSessionRecords(
     finishCodexTurn();
   }
 
-  const retainMessage = (
-    message: AgentSessionThreadMessage & { readonly codexResponseUser: boolean },
-  ) => {
+  const retainMessage = (message: ParsedMessage) => {
     if (firstUserMessage === undefined && message.role === "user") {
       firstUserMessage = message;
     }
@@ -432,6 +475,12 @@ function parseAgentSessionRecords(
         continue;
       }
 
+      const uuid = record.uuid?.trim() || undefined;
+      const position = { uuid, recordIndex, replyBefore: lastClaudeReply };
+      // Replies without text, such as tool calls, still end a turn.
+      if (record.type === "assistant" && uuid !== undefined) {
+        lastClaudeReply = { uuid, recordIndex };
+      }
       const text = extractText(record.message?.content);
       if (text.length === 0) continue;
       retainMessage({
@@ -439,6 +488,7 @@ function parseAgentSessionRecords(
         text,
         createdAt: normalizeTimestamp(record.timestamp, fallbackTimestamp),
         codexResponseUser: false,
+        claude: position,
       });
       continue;
     }
@@ -502,16 +552,15 @@ function parseAgentSessionRecords(
     });
   }
 
-  const visibleMessages = messages.map(
-    ({ codexResponseUser: _codexResponseUser, ...message }) => message,
-  );
   if (providerSessionId.trim().length === 0 || firstUserMessage === undefined) return null;
   const firstUserMessageRetained = messages.includes(firstUserMessage);
-  const { codexResponseUser: _codexResponseUser, ...visibleFirstUserMessage } = firstUserMessage;
-  const retainedMessages = firstUserMessageRetained
-    ? visibleMessages
-    : [visibleFirstUserMessage, ...visibleMessages.slice(-(MAX_IMPORTED_MESSAGES - 1))];
-  const derivedTitle = visibleFirstUserMessage.text.trim().split("\n")[0]?.slice(0, 100).trim();
+  const retainedMessages = withClaudeTurnIds(
+    firstUserMessageRetained
+      ? messages
+      : [firstUserMessage, ...messages.slice(-(MAX_IMPORTED_MESSAGES - 1))],
+    lastClaudeReply,
+  );
+  const derivedTitle = firstUserMessage.text.trim().split("\n")[0]?.slice(0, 100).trim();
 
   return {
     source: input.source,
