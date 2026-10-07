@@ -396,6 +396,7 @@ import { useEnvironmentDisconnectDelay } from "../hooks/useEnvironmentDisconnect
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { useKnownTerminalSessions, useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { useEnvironmentQuery } from "../state/query";
+import { useThreadRewindPreview } from "../state/queries";
 import {
   environmentServerConfigsAtom,
   primaryServerAvailableEditorsAtom,
@@ -528,6 +529,7 @@ import {
   resolveFileAttachmentUrl,
   prepareRevertedMessageAttachments,
   waitForRevertedMessage,
+  deriveMessageRewindMenu,
   reconcileMountedTerminalThreadIds,
   resolveComposerInteractionMode,
   resolveComposerProviderSelection,
@@ -1530,9 +1532,6 @@ function releaseChatTimelineAnchor<T extends { readonly messageId: MessageId | n
 const retryingWorkspacePreparationRunIds = new Set<RunId>();
 
 const CLAUDE_DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
-
-/** The rewind choices built so far; later slices add the rest. */
-const MESSAGE_REWIND_CHOICES: ReadonlyArray<ThreadRewindChoice> = ["conversation"];
 
 /** A git checkpoint rollback, or a Claude Code style rewind choice. */
 type RevertAction =
@@ -8199,6 +8198,17 @@ export default function ChatView(props: ChatViewProps) {
   if (pendingRevert && pendingRevert.routeThreadKey !== routeThreadKey) {
     setPendingRevert(null);
   }
+  // While a Claude message's rewind menu is open, Claude dry-runs a code
+  // restore; the code choices show only when it would change files.
+  const rewindPreview = useThreadRewindPreview(
+    supportsMessageRewind && pendingRevert !== null && activeThread
+      ? { environmentId, threadId: activeThread.id, messageId: pendingRevert.messageId }
+      : null,
+  );
+  const messageRewindMenu = deriveMessageRewindMenu({
+    preview: rewindPreview.data,
+    error: rewindPreview.error,
+  });
 
   const onRevertToTurnCount = useCallback(
     async (turnCount: number, messageId: MessageId, action?: RevertAction) => {
@@ -8274,32 +8284,41 @@ export default function ChatView(props: ChatViewProps) {
           );
         }
         const commandId = CommandId.make(randomUUID());
-        await waitForRevertedMessage(routeThreadRef, messageId, turnCount, commandId, async () => {
-          const result =
-            action.type === "checkpoint"
-              ? await revertThreadCheckpoint({
-                  environmentId,
-                  input: {
-                    commandId,
-                    threadId: activeThread.id,
-                    turnCount,
-                    restoreFiles: action.restoreFiles,
-                  },
-                })
-              : await rewindThread({
-                  environmentId,
-                  input: {
-                    commandId,
-                    threadId: activeThread.id,
-                    messageId,
-                    choice: action.choice,
-                    ...(action.instructions === undefined
-                      ? {}
-                      : { instructions: action.instructions }),
-                  },
-                });
-          if (result._tag === "Failure") throw squashAtomCommandFailure(result);
-        });
+        const notice = await waitForRevertedMessage(
+          routeThreadRef,
+          messageId,
+          turnCount,
+          commandId,
+          async () => {
+            const result =
+              action.type === "checkpoint"
+                ? await revertThreadCheckpoint({
+                    environmentId,
+                    input: {
+                      commandId,
+                      threadId: activeThread.id,
+                      turnCount,
+                      restoreFiles: action.restoreFiles,
+                    },
+                  })
+                : await rewindThread({
+                    environmentId,
+                    input: {
+                      commandId,
+                      threadId: activeThread.id,
+                      messageId,
+                      choice: action.choice,
+                      ...(action.instructions === undefined
+                        ? {}
+                        : { instructions: action.instructions }),
+                    },
+                  });
+            if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+          },
+        );
+        if (notice !== null) {
+          toastManager.add({ type: "warning", title: "Rewind finished", description: notice });
+        }
         if (!restoresPrompt) return;
         const currentPrompt = store.getComposerDraft(composerDraftTarget)?.prompt ?? "";
         const restoredPrompt = recallableComposerPrompt(message.text);
@@ -11803,7 +11822,8 @@ export default function ChatView(props: ChatViewProps) {
           pendingRevert !== null &&
           pendingRevert.routeThreadKey === routeThreadKey
         }
-        choices={MESSAGE_REWIND_CHOICES}
+        choices={messageRewindMenu.choices}
+        note={messageRewindMenu.note}
         onCancel={() => setPendingRevert(null)}
         onChoose={(choice, instructions) => {
           if (!pendingRevert || pendingRevert.routeThreadKey !== routeThreadKey) return;

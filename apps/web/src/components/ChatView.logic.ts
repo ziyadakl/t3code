@@ -12,6 +12,7 @@ import {
   type MessageId,
   type ModelSelection,
   type OrchestrationV2ProjectedTurnItem,
+  type OrchestrationV2ThreadRewindPreview,
   type PreviewAnnotationPayload,
   type ProviderInteractionMode,
   ProviderDriverKind,
@@ -23,6 +24,9 @@ import {
   type ThreadId,
   type ThreadLinkedPullRequest,
   type RunId,
+  THREAD_REWIND_CHOICES,
+  type ThreadRewindChoice,
+  threadRewindPreviewOffersCode,
   type WorktreeSetupSnapshot,
 } from "@t3tools/contracts";
 import { worktreeSetupAgentStarted } from "@t3tools/client-runtime/worktree-setup";
@@ -1102,8 +1106,43 @@ export async function waitForStartedServerThread(
 }
 
 /**
+ * The rewind menu for one message in a Claude thread: the code choices show
+ * only when Claude's dry run says restoring would change a file. `note` tells
+ * the user what a code restore would do, or why there is none.
+ */
+export function deriveMessageRewindMenu(input: {
+  /** Null while the dry run is in flight, or when it failed. */
+  readonly preview: OrchestrationV2ThreadRewindPreview | null;
+  readonly error: string | null;
+}): { readonly choices: ReadonlyArray<ThreadRewindChoice>; readonly note: string | null } {
+  const conversationOnly: ReadonlyArray<ThreadRewindChoice> = ["conversation"];
+  if (input.preview === null) {
+    return {
+      choices: conversationOnly,
+      note:
+        input.error === null
+          ? "Checking for code changes..."
+          : `Could not check for code changes: ${input.error}`,
+    };
+  }
+  if (!threadRewindPreviewOffersCode(input.preview)) {
+    return { choices: conversationOnly, note: input.preview.unavailableReason ?? null };
+  }
+  const files = input.preview.filesChanged.length;
+  return {
+    choices: THREAD_REWIND_CHOICES.filter(
+      (choice) =>
+        choice === "code-and-conversation" || choice === "conversation" || choice === "code",
+    ),
+    note: `Restoring code changes ${files === 1 ? "1 file" : `${files} files`} (+${input.preview.insertions} -${input.preview.deletions}).`,
+  };
+}
+
+/**
  * Runs `revert` (the rollback command `requestId`) and resolves once the
- * message's run is rolled back. Rejects with the server's reason as soon as
+ * message's run is rolled back, or the thread records that this rewind
+ * finished (a code restore rolls back no run). Resolves with the server's
+ * notice about the rewind, if any. Rejects with the server's reason as soon as
  * the thread records that this rollback failed.
  */
 export async function waitForRevertedMessage(
@@ -1113,7 +1152,7 @@ export async function waitForRevertedMessage(
   requestId: CommandId,
   revert: () => Promise<void>,
   timeoutMs = 120_000,
-): Promise<void> {
+): Promise<string | null> {
   const threadAtom = environmentThreadDetails.stateAtom(threadRef);
   const readProjection = () => Option.getOrNull(appAtomRegistry.get(threadAtom).data);
   const initial = readProjection();
@@ -1121,18 +1160,18 @@ export async function waitForRevertedMessage(
     throw new Error("The message to rewind is no longer available.");
   }
   const messageRunId = initial.messages.find((message) => message.id === messageId)?.runId;
-  return new Promise<void>((resolve, reject) => {
+  return new Promise<string | null>((resolve, reject) => {
     let settled = false;
     let accepted = false;
     let unsubscribe = () => {};
     let timeout: ReturnType<typeof globalThis.setTimeout> | undefined;
-    const finish = (error?: unknown) => {
+    const finish = (error?: unknown, notice: string | null = null) => {
       if (settled) return;
       settled = true;
       if (timeout !== undefined) globalThis.clearTimeout(timeout);
       unsubscribe();
       if (error !== undefined) reject(error);
-      else resolve();
+      else resolve(notice);
     };
     const inspect = () => {
       const thread = readProjection();
@@ -1140,6 +1179,11 @@ export async function waitForRevertedMessage(
       const failure = thread.thread.rollbackFailure;
       if (failure?.requestId === requestId) {
         finish(new Error(failure.message));
+        return;
+      }
+      const completion = thread.thread.rollbackCompletion;
+      if (completion?.requestId === requestId) {
+        finish(undefined, completion.notice ?? null);
         return;
       }
       if (

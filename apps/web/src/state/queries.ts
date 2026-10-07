@@ -11,6 +11,7 @@ import {
 import { type VcsRefTarget } from "@t3tools/client-runtime/state/vcs";
 import type {
   EnvironmentId,
+  MessageId,
   ProjectContentMatch,
   ProjectEntry,
   ProjectEntryKind,
@@ -354,6 +355,24 @@ export function useCheckpointDiff(
     turnTarget === null ? null : orchestrationEnvironment.turnDiff(turnTarget),
   );
   return fullThreadTarget === null ? turn : fullThread;
+}
+
+/** What restoring code to before a sent message would change, while its rewind menu is open. */
+export function useThreadRewindPreview(
+  target: {
+    readonly environmentId: EnvironmentId;
+    readonly threadId: ThreadId;
+    readonly messageId: MessageId;
+  } | null,
+) {
+  return useEnvironmentQuery(
+    target === null
+      ? null
+      : orchestrationEnvironment.threadRewindPreview({
+          environmentId: target.environmentId,
+          input: { threadId: target.threadId, messageId: target.messageId },
+        }),
+  );
 }
 
 /** Full input and output of one timeline item, fetched only while its row is open. */
