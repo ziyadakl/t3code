@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { formatCompactCommand, isCompactCommand, parseCompactCommand } from "./compactCommand.ts";
+import {
+  isCompactCommand,
+  normalizeCompactCommand,
+  parseCompactCommand,
+} from "./compactCommand.ts";
 
 describe("parseCompactCommand", () => {
   it("reads a bare /compact in any case and spacing", () => {
@@ -23,10 +27,10 @@ describe("parseCompactCommand", () => {
   });
 });
 
-describe("formatCompactCommand", () => {
-  it("round-trips through the parser", () => {
-    expect(formatCompactCommand("")).toBe("/compact");
-    expect(formatCompactCommand("  keep tests ")).toBe("/compact keep tests");
-    expect(parseCompactCommand(formatCompactCommand("keep tests"))).toBe("keep tests");
+describe("normalizeCompactCommand", () => {
+  it("rebuilds the command with trimmed instructions", () => {
+    expect(normalizeCompactCommand(" /COMPACT ")).toBe("/compact");
+    expect(normalizeCompactCommand("/Compact\n\n  keep tests ")).toBe("/compact keep tests");
+    expect(parseCompactCommand(normalizeCompactCommand("/compact keep tests"))).toBe("keep tests");
   });
 });

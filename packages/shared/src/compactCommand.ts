@@ -17,8 +17,12 @@ export function isCompactCommand(text: string): boolean {
   return parseCompactCommand(text) !== null;
 }
 
-/** The text a provider receives for a compact turn: `/compact` plus any instructions. */
-export function formatCompactCommand(instructions: string): string {
-  const trimmed = instructions.trim();
-  return trimmed === "" ? "/compact" : `/compact ${trimmed}`;
+/**
+ * The text a provider receives for a compact turn: `/compact` plus any
+ * instructions, with the command word normalised. Text that is not a compact
+ * command yields a bare `/compact`.
+ */
+export function normalizeCompactCommand(text: string): string {
+  const instructions = parseCompactCommand(text) ?? "";
+  return instructions === "" ? "/compact" : `/compact ${instructions}`;
 }

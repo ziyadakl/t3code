@@ -1,5 +1,5 @@
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
-import { formatCompactCommand, parseCompactCommand } from "@t3tools/shared/compactCommand";
+import { normalizeCompactCommand } from "@t3tools/shared/compactCommand";
 import {
   dynamicToolTitle,
   formatReadToolLabel,
@@ -7855,7 +7855,7 @@ export function makeClaudeAdapterV2(
               ...turnInput,
               message: {
                 ...turnInput.message,
-                text: formatCompactCommand(parseCompactCommand(turnInput.message.text) ?? ""),
+                text: normalizeCompactCommand(turnInput.message.text),
               },
             }),
           steerTurn,

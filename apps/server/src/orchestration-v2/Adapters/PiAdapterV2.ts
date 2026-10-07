@@ -25,7 +25,7 @@
  */
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
-import { formatCompactCommand, parseCompactCommand } from "@t3tools/shared/compactCommand";
+import { normalizeCompactCommand } from "@t3tools/shared/compactCommand";
 import {
   defaultInstanceIdForDriver,
   PiSettings,
@@ -2267,7 +2267,7 @@ export function makePiAdapterV2(
             ...turnInput,
             message: {
               ...turnInput.message,
-              text: formatCompactCommand(parseCompactCommand(turnInput.message.text) ?? ""),
+              text: normalizeCompactCommand(turnInput.message.text),
             },
           }),
         startTurn: (turnInput) =>

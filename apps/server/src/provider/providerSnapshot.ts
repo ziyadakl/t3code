@@ -30,7 +30,7 @@ export const COMPACT_SLASH_COMMAND = {
   description: "Summarize the conversation and reduce context usage",
 } satisfies ServerProviderSlashCommand;
 
-/** Claude Code (and Pi) take focus instructions after `/compact`; other providers drop them. */
+/** Claude Code takes focus instructions after `/compact`. Pi advertises its own (PiCommands.ts); other providers drop them. */
 export const COMPACT_WITH_INSTRUCTIONS_SLASH_COMMAND = {
   ...COMPACT_SLASH_COMMAND,
   input: { hint: "Optional instructions" },
