@@ -194,6 +194,7 @@ import {
   findLatestProposedPlan,
   hasActionableProposedPlan,
   isLatestRunSettled,
+  revertTouchesFiles,
 } from "../session-logic";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
@@ -8210,7 +8211,7 @@ export default function ChatView(props: ChatViewProps) {
   });
 
   const onRevertToTurnCount = useCallback(
-    async (turnCount: number, messageId: MessageId, action?: RevertAction) => {
+    async (turnCount: number, messageId: MessageId, chosenAction?: RevertAction) => {
       const localApi = readLocalApi();
       if (!localApi || !activeThread || isRevertingCheckpoint) return;
       const sourceMessage = serverProjection?.messages.find((message) => message.id === messageId);
@@ -8254,6 +8255,13 @@ export default function ChatView(props: ChatViewProps) {
         setThreadError(activeThread.id, rewindBlockedReason);
         return;
       }
+      // With no file changes since the revert point there is nothing to ask:
+      // rewind the conversation and keep the workspace as it is.
+      const action: RevertAction | undefined =
+        chosenAction ??
+        (supportsMessageRewind || revertTouchesFiles(turnDiffSummaries, turnCount)
+          ? undefined
+          : { type: "checkpoint", restoreFiles: false });
       if (action === undefined) {
         setPendingRevert({ turnCount, messageId, routeThreadKey });
         return;
@@ -8394,6 +8402,7 @@ export default function ChatView(props: ChatViewProps) {
       supportsConversationRollback,
       supportsMessageRewind,
       serverProjection,
+      turnDiffSummaries,
     ],
   );
 
