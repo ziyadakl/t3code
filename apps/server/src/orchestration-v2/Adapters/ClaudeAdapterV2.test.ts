@@ -2221,6 +2221,61 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     });
   const makeWakeHarness = makeWakeHarnessWithOptions();
 
+  it.effect("checkpoints files and records the prompt's SDK uuid on its provider turn", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeWakeHarness;
+      const attemptId = RunAttemptId.make("attempt-claude-file-checkpoint");
+      const promptUuid = yield* ClaudeAdapterV2.claudePromptUuid(attemptId);
+      yield* harness.runtime.startTurn(
+        makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId,
+          text: "Create notes.txt",
+          attachments: [],
+        }),
+      );
+      const options = harness.getOpenedOptions();
+      assert.isTrue(options?.enableFileCheckpointing);
+      assert.isTrue(Object.hasOwn(options?.extraArgs ?? {}, "replay-user-messages"));
+      assert.isNull(options?.extraArgs?.["replay-user-messages"]);
+
+      // With replay-user-messages, the CLI echoes each prompt with the uuid
+      // its file checkpoint is keyed by.
+      yield* harness.offerAndWait(
+        claudeSdkFrame({
+          type: "user",
+          isReplay: true,
+          uuid: promptUuid,
+          session_id: WAKE_NATIVE_SESSION,
+          parent_tool_use_id: null,
+          message: { role: "user", content: "Create notes.txt" },
+        }),
+      );
+      yield* Queue.offer(
+        harness.sdkMessages,
+        claudeSdkFrame({
+          ...makeResultFrame({ uuid: "file-checkpoint-result", result: "Created" }),
+          user_message_uuid: promptUuid,
+        }),
+      );
+      yield* Queue.take(harness.terminalReceipts);
+
+      const turns = harness.events.flatMap((event) =>
+        event.type === "provider_turn.updated" ? [event.providerTurn] : [],
+      );
+      assert.equal(turns.at(-1)?.status, "completed");
+      assert.equal(turns.at(-1)?.nativeUserMessageId, promptUuid);
+      // The echo is bookkeeping, not conversation: it adds no user message.
+      assert.isFalse(
+        harness.events.some(
+          (event) => event.type === "turn_item.updated" && event.turnItem.type === "user_message",
+        ),
+      );
+    }).pipe(Effect.scoped, Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+  );
+
   it.effect.each([
     { isError: false, title: "Check weather" },
     { isError: true, title: "Check weather" },
