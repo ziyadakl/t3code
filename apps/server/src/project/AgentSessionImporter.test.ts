@@ -10,8 +10,10 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 
 import { previousConversationRun } from "../orchestration-v2/ThreadRewindTargets.ts";
@@ -23,8 +25,11 @@ import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecuto
 import { claudeTurnRunInT3Code } from "../orchestration-v2/testkit/ImportedThreadFixtures.ts";
 import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 import * as AgentSessionImporter from "./AgentSessionImporter.ts";
+import * as AgentSessionResume from "./AgentSessionResume.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
+import * as ClaudeSessionSources from "./ClaudeSessionSources.ts";
 import * as ImportedRewindHeal from "./ImportedRewindHeal.ts";
 import * as ProjectService from "./ProjectService.ts";
 
@@ -860,6 +865,121 @@ it.live("a first turn sent while the heal reads the transcript keeps its own run
       Effect.provide(Layer.mergeAll(importerLayer, ThreadCommandExecutor.layer, IdAllocator.layer)),
     );
   });
+});
+
+it.live("a first turn sent while the mirror appends desktop messages keeps its own run", () => {
+  const imported = parseClaudeTranscript(
+    claudeTranscript([{ prompt: "Create notes.md", reply: "Created notes.md." }]),
+  );
+  // The desktop app went on in the same session after the import.
+  const grown = parseClaudeTranscript(
+    claudeTranscript([
+      { prompt: "Create notes.md", reply: "Created notes.md." },
+      { prompt: "Add a title", reply: "Added the title." },
+    ]),
+  );
+  const claudeHome = "/claude-home";
+  const workspaceRoot = "/workspace/project";
+  // Already in T3 Code's Claude home, so the hand-off copies nothing.
+  const transcriptPath = `${claudeHome}/projects/${ClaudeSessionSources.encodeClaudeProjectDir(workspaceRoot)}/${rewindSessionId}.jsonl`;
+  const scanner = {
+    providerHomes: () =>
+      Effect.succeed([{ providerInstanceId: claudeInstanceId, homePath: claudeHome }] as never),
+    readThread: () => Effect.succeed(Option.some({ thread: grown, source: rewindSource })),
+  };
+  const importerLayer = storeBackedImporter({ scanner });
+  const resumeLayer = AgentSessionResume.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        importerLayer,
+        Layer.mock(AgentSessionScanner.AgentSessionScanner)(scanner),
+        Layer.mock(ProjectService.ProjectService)({}),
+        Layer.mock(ServerSettingsService)({}),
+        FileSystem.layerNoop({}),
+        Path.layer,
+      ),
+    ),
+  );
+  return Effect.gen(function* () {
+    const importer = yield* AgentSessionImporter.AgentSessionImporter;
+    const resume = yield* AgentSessionResume.AgentSessionResume;
+    const threadLocks = yield* ThreadCommandExecutor.ThreadCommandExecutor;
+    const store = yield* ProjectionStore.ProjectionStoreV2;
+    const ids = yield* IdAllocator.IdAllocatorV2;
+    yield* importer.importThread({
+      projectId,
+      workspaceRoot,
+      threadId: rewindThreadId,
+      thread: imported,
+      source: rewindSource,
+    });
+
+    const planned = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    // What starting a turn does under the thread's dispatch lock: read the
+    // next ordinal, do the work of starting the turn, then write its run.
+    const firstTurn = yield* Effect.forkChild(
+      threadLocks.withLock(
+        rewindThreadId,
+        Effect.gen(function* () {
+          const records = yield* store.getThreadRecords(rewindThreadId, [
+            "runs",
+            "providerThreads",
+          ]);
+          const ordinal = records.runs.length + 1;
+          yield* Deferred.succeed(planned, undefined);
+          yield* Deferred.await(release);
+          const events = claudeTurnRunInT3Code({
+            providerThread: records.providerThreads[0]!,
+            ordinal,
+            providerTurnOrdinal: ordinal,
+            prompt: "Sent from T3 Code",
+            reply: "Done in T3 Code.",
+            nativeReplyId: "reply-live",
+            at: "2026-09-02T09:00:00.000Z",
+            runId: ids.derive.run({ threadId: rewindThreadId, ordinal }),
+          });
+          yield* Effect.forEach(events, (event) => store.apply(event));
+        }),
+      ),
+    );
+    yield* Deferred.await(planned);
+    const mirroring = yield* Effect.forkChild(
+      resume.refreshSession({
+        project: { id: projectId, workspaceRoot },
+        session: {
+          providerSessionId: rewindSessionId,
+          title: "Rewind session",
+          updatedAtMs: 2,
+          origin: "desktop",
+          archived: false,
+          transcriptPath,
+          cwd: workspaceRoot,
+        },
+        threadId: rewindThreadId,
+      }),
+    );
+    // Give the mirror every chance to append while the turn is being started.
+    yield* Fiber.await(mirroring).pipe(Effect.timeoutOption("200 millis"));
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(firstTurn);
+    yield* Fiber.join(mirroring);
+
+    const records = yield* store.getThreadRecords(rewindThreadId, ["messages", "runs"]);
+    const prompts = records.messages
+      .filter((message) => message.role === "user")
+      .map((message) => ({
+        prompt: message.text,
+        ownRun: records.runs.find((run) => run.id === message.runId)?.userMessageId === message.id,
+      }));
+    expect(prompts).toContainEqual({ prompt: "Sent from T3 Code", ownRun: true });
+    expect(prompts.every((prompt) => prompt.ownRun)).toBe(true);
+    expect(new Set(records.runs.map((run) => run.ordinal)).size).toBe(records.runs.length);
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(resumeLayer, importerLayer, ThreadCommandExecutor.layer, IdAllocator.layer),
+    ),
+  );
 });
 
 /** `count` Claude turns, "Prompt n" answered by "Reply n", as the desktop app writes them. */
