@@ -111,7 +111,41 @@ into a normal draft.
 ## Edit an earlier prompt
 
 On web and desktop, choose **Edit from here** beneath a sent message to rewind
-the conversation to before that message. Choose **Revert and keep changes** to
+to before that message.
+
+### Claude threads
+
+In a Claude thread, **Edit from here** opens the same menu as Claude Code's
+`/rewind`, in any folder, git repository or not, including threads imported
+from Claude:
+
+- **Restore code and conversation** puts your files and the chat back to before
+  the message.
+- **Restore conversation** rewinds the chat and leaves your files as they are.
+- **Restore code** puts your files back and keeps the chat.
+- **Never mind** closes the menu with no change.
+
+The two code choices use Claude's own file snapshots, not git. While T3 Code
+asks Claude what a code restore would change, they stay disabled. They become
+available only when Claude changed files after that message; the menu then
+shows how many files and lines would change, or why there is nothing to
+restore. Like Claude Code, a code restore does not undo changes made by Bash
+commands or by subagents. When Claude leaves a file alone because a link made
+it unsafe to write, a notice says how many files were skipped.
+
+After **Restore code and conversation** or **Restore conversation**, the
+selected prompt and its attachments return to the composer for editing and
+resending. Any unsent draft stays above the restored prompt. Your next message
+continues Claude's own session from that point, so Claude forgets the later
+turns. If the code is restored but the conversation rewind fails, a notice says
+so; choose **Restore conversation** to try again.
+
+A rewind is refused while Claude is still working on a turn, or while a message
+waits in the queue. Claude Code's two summarize choices are not offered yet.
+
+### Other providers
+
+For other providers, choose **Revert and keep changes** to
 leave workspace files as they are, or **Revert files too** to restore them as well.
 File restore is only offered for threads running in a worktree, and it is
 refused when another thread or agent session also uses that directory, a folder

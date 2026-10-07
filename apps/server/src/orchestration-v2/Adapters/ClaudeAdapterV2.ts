@@ -7536,17 +7536,14 @@ export function makeClaudeAdapterV2(
                     queryRunner.open({
                       threadId: input.threadId,
                       providerSessionId: input.providerSessionId,
-                      options: {
-                        ...makeClaudeQueryOptions({
-                          modelSelection: rewindInput.modelSelection,
-                          nativeThreadId,
-                          resume: true,
-                          cwd: rewindInput.runtimePolicy.cwd,
-                          settings: adapterOptions.settings,
-                          environment: adapterOptions.environment,
-                        }),
-                        enableFileCheckpointing: true,
-                      },
+                      options: makeClaudeQueryOptions({
+                        modelSelection: rewindInput.modelSelection,
+                        nativeThreadId,
+                        resume: true,
+                        cwd: rewindInput.runtimePolicy.cwd,
+                        settings: adapterOptions.settings,
+                        environment: adapterOptions.environment,
+                      }),
                     }),
                     rewind,
                     (session) => session.close.pipe(Effect.ignore),
