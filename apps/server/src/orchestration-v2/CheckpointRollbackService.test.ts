@@ -642,7 +642,7 @@ it.effect("a Codex rollback marks stale only the ready later checkpoints of its 
 /** A Claude thread whose second message is rewound; `secondRun` is its run's status. */
 const rewindLayer = (input: {
   readonly secondRun: "completed" | "rolled_back";
-  readonly rollbackThread: () => Effect.Effect<unknown, unknown>;
+  readonly rollbackThread: () => Effect.Effect<unknown, string>;
   readonly calls: Array<string>;
 }) => {
   const threadId = ThreadId.make("rewind-thread");
