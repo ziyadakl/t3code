@@ -9273,6 +9273,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (run.status === "rolled_back") {
         return yield* refuse("This message was already rewound.");
       }
+      if (
+        run.status !== "completed" &&
+        run.status !== "interrupted" &&
+        run.status !== "failed" &&
+        run.status !== "cancelled"
+      ) {
+        return yield* refuse("This message's turn has not finished yet.");
+      }
       const previousRun = previousConversationRun(projection.runs, run.ordinal);
       const previousTurn =
         previousRun === undefined ? undefined : providerTurnForRun(projection, previousRun);

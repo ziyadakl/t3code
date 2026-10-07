@@ -28,6 +28,7 @@ import {
   deriveTimelineEntriesFromVisibleTurnItems,
   deriveTimelineEntriesFromVisibleTurnItemsWithState,
   deriveRevertTurnCountByUserMessageId,
+  deriveRewindTurnCountByUserMessageId,
   derivePhase,
   findLatestProposedPlan,
   isLatestRunSettled,
@@ -237,6 +238,48 @@ describe("V2 session presentation", () => {
       runId,
     );
     expect(plan?.planMarkdown).toBe("Plan");
+  });
+
+  it("offers a Claude rewind on every sent turn message, with no checkpoint at all", () => {
+    const message = (
+      id: string,
+      role: ChatMessage["role"],
+      runId: RunId | null,
+      inputIntent?: ChatMessage["inputIntent"],
+    ): TimelineEntry => {
+      const chatMessage: ChatMessage = {
+        id: MessageId.make(id),
+        role,
+        text: id,
+        runId,
+        ...(inputIntent === undefined ? {} : { inputIntent }),
+        streaming: false,
+        createdAt: "2026-06-20T00:00:00.000Z",
+        updatedAt: "2026-06-20T00:00:00.000Z",
+      };
+      return {
+        id: chatMessage.id,
+        kind: "message",
+        createdAt: chatMessage.createdAt,
+        message: chatMessage,
+      };
+    };
+    const [run1, run2, run3] = [RunId.make("run-1"), RunId.make("run-2"), RunId.make("run-3")];
+
+    const targets = deriveRewindTurnCountByUserMessageId([
+      message("first", "user", run1, "turn_start"),
+      message("first-reply", "assistant", run1),
+      message("steer", "user", run1, "steer"),
+      message("second", "user", run2, "queued_turn"),
+      message("third", "user", run3, "turn_start"),
+      message("unsent", "user", null, "turn_start"),
+    ]);
+
+    expect([...targets]).toEqual([
+      [MessageId.make("first"), 0],
+      [MessageId.make("second"), 1],
+      [MessageId.make("third"), 2],
+    ]);
   });
 
   it("assigns run rollback to the turn-start message instead of a later steer", () => {

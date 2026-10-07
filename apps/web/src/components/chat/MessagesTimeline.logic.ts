@@ -22,6 +22,7 @@ export {
 } from "@t3tools/client-runtime/work-log/presentation";
 import {
   deriveRevertTurnCountByUserMessageId,
+  deriveRewindTurnCountByUserMessageId,
   formatDuration,
   isStreamingMessageTextUpdate,
   isStreamingTurnItemTextUpdate,
@@ -1215,6 +1216,7 @@ export function deriveMessagesTimelineRows(input: {
   activeTurnStartedAt?: string | null;
   turnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
   supportsConversationRollback: boolean;
+  supportsMessageRewind?: boolean;
   /** Task ids of subagents still working, used by the active tool indicator. */
   liveAgentTaskIds?: ReadonlySet<string> | undefined;
   /** Live bootstrap progress. Renders a stage card under the first user message. */
@@ -1229,12 +1231,14 @@ export function deriveMessagesTimelineRows(input: {
       turnDiffSummaryByAssistantMessageId.set(summary.assistantMessageId, summary);
     }
   }
-  const revertTurnCountByUserMessageId = input.supportsConversationRollback
-    ? deriveRevertTurnCountByUserMessageId({
-        timelineEntries: timelineEntries,
-        checkpoints: input.turnDiffSummaries,
-      })
-    : new Map<MessageId, number>();
+  const revertTurnCountByUserMessageId = input.supportsMessageRewind
+    ? deriveRewindTurnCountByUserMessageId(timelineEntries)
+    : input.supportsConversationRollback
+      ? deriveRevertTurnCountByUserMessageId({
+          timelineEntries: timelineEntries,
+          checkpoints: input.turnDiffSummaries,
+        })
+      : new Map<MessageId, number>();
   const nextRows: MessagesTimelineRow[] = [];
   const durationStartByMessageId = computeMessageDurationStart(
     timelineEntries.flatMap((entry) => (entry.kind === "message" ? [entry.message] : [])),

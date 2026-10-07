@@ -457,6 +457,8 @@ interface MessagesTimelineProps {
     readonly scopeId: string;
   }) => void;
   supportsConversationRollback: boolean;
+  /** Claude threads: every sent message gets the rewind menu. */
+  supportsMessageRewind?: boolean;
   onRevertToTurnCount: (targetTurnCount: number, messageId: MessageId) => void;
   onUseArtifactTemplate?: (template: CodexArtifactTemplate) => void;
   onRunShellCommand?: (command: string) => void;
@@ -532,6 +534,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onForkFromRun,
   onRollbackCheckpoint,
   supportsConversationRollback,
+  supportsMessageRewind = false,
   onRevertToTurnCount,
   onUseArtifactTemplate = NOOP_USE_ARTIFACT_TEMPLATE,
   onRunShellCommand,
@@ -773,6 +776,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         activeTurnStartedAt,
         turnDiffSummaries,
         supportsConversationRollback,
+        supportsMessageRewind,
         worktreeSetup,
       },
       previous?.threadKey === listIdentityKey && previous.workspaceRoot === workspaceRoot
@@ -796,6 +800,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     activeTurnStartedAt,
     turnDiffSummaries,
     supportsConversationRollback,
+    supportsMessageRewind,
     worktreeSetup,
   ]);
   const rows = useStableRows(rawRows, listIdentityKey);
