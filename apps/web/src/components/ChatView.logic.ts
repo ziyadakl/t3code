@@ -28,6 +28,7 @@ import {
   THREAD_REWIND_CHOICES,
   type ThreadRewindChoice,
   threadRewindPreviewOffersCode,
+  threadRewindRestores,
   type WorktreeSetupSnapshot,
 } from "@t3tools/contracts";
 import { worktreeSetupAgentStarted } from "@t3tools/client-runtime/worktree-setup";
@@ -1118,35 +1119,47 @@ export function messageRewindBlockedReason(
     : null;
 }
 
+/** One row of the rewind menu; an unavailable row shows, disabled, in its place. */
+export interface MessageRewindMenuRow {
+  readonly choice: ThreadRewindChoice;
+  readonly available: boolean;
+}
+
 /**
- * The rewind menu for one message in a Claude thread: the code choices show
- * only when Claude's dry run says restoring would change a file. `note` tells
- * the user what a code restore would do, or why there is none.
+ * The rewind menu for one sent message: every choice T3 Code can carry out,
+ * in Claude Code's order, from the first paint. The code choices stay
+ * disabled until Claude's dry run says restoring would change a file, so no
+ * row moves under a tap when the dry run returns. `note` tells the user what
+ * a code restore would do, or why there is none.
  */
 export function deriveMessageRewindMenu(input: {
   /** Null while the dry run is in flight, or when it failed. */
   readonly preview: OrchestrationV2ThreadRewindPreview | null;
   readonly error: string | null;
-}): { readonly choices: ReadonlyArray<ThreadRewindChoice>; readonly note: string | null } {
-  const conversationOnly: ReadonlyArray<ThreadRewindChoice> = ["conversation"];
+}): { readonly rows: ReadonlyArray<MessageRewindMenuRow>; readonly note: string | null } {
+  const offersCode = input.preview !== null && threadRewindPreviewOffersCode(input.preview);
+  const rows = THREAD_REWIND_CHOICES.flatMap((choice) => {
+    const restores = threadRewindRestores(choice);
+    return restores === null ? [] : [{ choice, available: !restores.code || offersCode }];
+  });
   if (input.preview === null) {
     return {
-      choices: conversationOnly,
+      rows,
       note:
         input.error === null
           ? "Checking for code changes..."
           : `Could not check for code changes: ${input.error}`,
     };
   }
-  if (!threadRewindPreviewOffersCode(input.preview)) {
-    return { choices: conversationOnly, note: input.preview.unavailableReason ?? null };
+  if (!offersCode) {
+    return {
+      rows,
+      note: input.preview.unavailableReason ?? "Claude changed no files after this message.",
+    };
   }
   const files = input.preview.filesChanged.length;
   return {
-    choices: THREAD_REWIND_CHOICES.filter(
-      (choice) =>
-        choice === "code-and-conversation" || choice === "conversation" || choice === "code",
-    ),
+    rows,
     note: `Restoring code changes ${files === 1 ? "1 file" : `${files} files`} (+${input.preview.insertions} -${input.preview.deletions}).`,
   };
 }

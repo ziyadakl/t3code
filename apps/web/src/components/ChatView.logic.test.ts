@@ -2269,25 +2269,42 @@ describe("messageRewindBlockedReason", () => {
 });
 
 describe("deriveMessageRewindMenu", () => {
-  it("offers the code choices, in Claude Code's order, when restoring would change files", () => {
+  const rows = (available: { readonly code: boolean }) => [
+    { choice: "code-and-conversation", available: available.code },
+    { choice: "conversation", available: true },
+    { choice: "code", available: available.code },
+  ];
+
+  it("enables the code choices, in Claude Code's order, when restoring would change files", () => {
     expect(
       deriveMessageRewindMenu({
         preview: { filesChanged: ["/w/a.ts", "/w/b.ts"], insertions: 3, deletions: 1 },
         error: null,
       }),
     ).toEqual({
-      choices: ["code-and-conversation", "conversation", "code"],
+      rows: rows({ code: true }),
       note: "Restoring code changes 2 files (+3 -1).",
     });
   });
 
-  it("hides the code choices when Claude changed no files after the message", () => {
+  it("keeps every choice in place from the first paint, so no button moves under a tap", () => {
+    const checking = deriveMessageRewindMenu({ preview: null, error: null });
+    const checked = deriveMessageRewindMenu({
+      preview: { filesChanged: ["/w/a.ts"], insertions: 1, deletions: 0 },
+      error: null,
+    });
+
+    expect(checking.rows.map((row) => row.choice)).toEqual(checked.rows.map((row) => row.choice));
+    expect(checking).toEqual({ rows: rows({ code: false }), note: "Checking for code changes..." });
+  });
+
+  it("disables the code choices when Claude changed no files after the message", () => {
     expect(
       deriveMessageRewindMenu({
         preview: { filesChanged: [], insertions: 0, deletions: 0 },
         error: null,
       }),
-    ).toEqual({ choices: ["conversation"], note: null });
+    ).toEqual({ rows: rows({ code: false }), note: "Claude changed no files after this message." });
   });
 
   it("says why there is no code to restore when Claude kept no snapshots", () => {
@@ -2302,18 +2319,14 @@ describe("deriveMessageRewindMenu", () => {
         error: null,
       }),
     ).toEqual({
-      choices: ["conversation"],
+      rows: rows({ code: false }),
       note: "Claude kept no file snapshots for this message.",
     });
   });
 
-  it("offers the conversation choice while checking, and says so", () => {
-    expect(deriveMessageRewindMenu({ preview: null, error: null })).toEqual({
-      choices: ["conversation"],
-      note: "Checking for code changes...",
-    });
+  it("says when the check failed", () => {
     expect(deriveMessageRewindMenu({ preview: null, error: "Connection lost." })).toEqual({
-      choices: ["conversation"],
+      rows: rows({ code: false }),
       note: "Could not check for code changes: Connection lost.",
     });
   });

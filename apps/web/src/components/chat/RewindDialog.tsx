@@ -1,4 +1,4 @@
-import { THREAD_REWIND_CHOICES, type ThreadRewindChoice } from "@t3tools/contracts";
+import type { ThreadRewindChoice } from "@t3tools/contracts";
 import { useState } from "react";
 
 import { Button } from "../ui/button";
@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Textarea } from "../ui/textarea";
+import type { MessageRewindMenuRow } from "../ChatView.logic";
 
 /** Claude Code's `/rewind` menu labels. */
 export const REWIND_CHOICE_LABELS: Record<ThreadRewindChoice, string> = {
@@ -26,14 +27,15 @@ const isSummarizeChoice = (choice: ThreadRewindChoice) =>
   choice === "summarize-from" || choice === "summarize-up-to";
 
 /**
- * The rewind menu for one sent user message. It lists `choices` in Claude
- * Code's order, then "Never mind". A summarize choice first asks for optional
- * instructions. Every row is a full-size button, so it works by touch.
+ * The rewind menu for one sent user message. It lists `rows` as given, then
+ * "Never mind"; an unavailable row stays in place, disabled. A summarize
+ * choice first asks for optional instructions. Every row is a full-size
+ * button, so it works by touch.
  */
 export function RewindDialog(props: {
   open: boolean;
-  /** The choices the server can carry out for this message. */
-  choices: ReadonlyArray<ThreadRewindChoice>;
+  /** Every choice T3 Code can carry out, in Claude Code's order. */
+  rows: ReadonlyArray<MessageRewindMenuRow>;
   /** What a code restore would change, or why there is none. */
   note?: string | null;
   onChoose: (choice: ThreadRewindChoice, instructions: string | undefined) => void;
@@ -52,7 +54,6 @@ export function RewindDialog(props: {
     setInstructions("");
     props.onChoose(choice, text);
   };
-  const offered = THREAD_REWIND_CHOICES.filter((choice) => props.choices.includes(choice));
 
   return (
     <Dialog
@@ -69,18 +70,16 @@ export function RewindDialog(props: {
               ? "Go back to before this message."
               : `${REWIND_CHOICE_LABELS[summarizeChoice]}. Your files stay as they are.`}
           </DialogDescription>
-          {summarizeChoice === null && props.note ? (
-            <p className="text-muted-foreground text-sm">{props.note}</p>
-          ) : null}
         </DialogHeader>
         <DialogPanel>
           {summarizeChoice === null ? (
             <div className="grid gap-2">
-              {offered.map((choice) => (
+              {props.rows.map(({ choice, available }) => (
                 <Button
                   key={choice}
                   variant="outline"
                   size="lg"
+                  disabled={!available}
                   onClick={() =>
                     isSummarizeChoice(choice)
                       ? setSummarizeChoice(choice)
@@ -93,6 +92,8 @@ export function RewindDialog(props: {
               <Button variant="ghost" size="lg" onClick={close}>
                 Never mind
               </Button>
+              {/* Below the buttons, so a note that changes length moves none of them. */}
+              {props.note ? <p className="text-muted-foreground text-sm">{props.note}</p> : null}
             </div>
           ) : (
             <Textarea

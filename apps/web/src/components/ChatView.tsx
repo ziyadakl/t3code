@@ -11828,7 +11828,7 @@ export default function ChatView(props: ChatViewProps) {
           pendingRevert !== null &&
           pendingRevert.routeThreadKey === routeThreadKey
         }
-        choices={messageRewindMenu.choices}
+        rows={messageRewindMenu.rows}
         note={messageRewindMenu.note}
         onCancel={() => setPendingRevert(null)}
         onChoose={(choice, instructions) => {

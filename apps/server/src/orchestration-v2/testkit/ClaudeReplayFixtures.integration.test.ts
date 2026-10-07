@@ -11,7 +11,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 
-import { classifyClaudeNativeTool } from "../Adapters/ClaudeAdapterV2.ts";
+import * as ClaudeAdapterV2 from "../Adapters/ClaudeAdapterV2.ts";
 import { ClaudeOrchestratorReplayHarness } from "../Adapters/ClaudeAdapterV2.testkit.ts";
 import * as IdAllocator from "../IdAllocator.ts";
 import * as Orchestrator from "../Orchestrator.ts";
@@ -20,6 +20,7 @@ import { userFacingDispatchErrorMessage } from "../UserFacingErrors.ts";
 import { provideDeterministicTestRuntime } from "./DeterministicRuntime.ts";
 import { ORCHESTRATOR_REPLAY_FIXTURES } from "./fixtures/index.ts";
 import { subagentInput } from "./fixtures/subagent/input.ts";
+import { turnInterruptMidToolInput } from "./fixtures/turn_interrupt_mid_tool/input.ts";
 import { runOrchestratorV2Scenario } from "./OrchestratorScenario.ts";
 import * as ProviderReplayHarness from "./ProviderReplayHarness.ts";
 import { materializeReplayTranscriptRuntimeInstructions } from "./ReplayTranscriptNdjson.ts";
@@ -493,6 +494,66 @@ describe("Claude Agent SDK replay fixtures", () => {
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
+  it.effect(
+    "a turn stopped while its last reply only called a tool resumes at that reply after a rewind",
+    () =>
+      Effect.gen(function* () {
+        const raw = yield* readClaudeTranscriptFixture("turn_interrupt_mid_tool");
+        const transcript = yield* ClaudeOrchestratorReplayHarness.decodeTranscript(
+          materializeReplayTranscriptRuntimeInstructions(raw, {
+            driver: ProviderDriverKind.make("claudeAgent"),
+            model: CLAUDE_MODEL_SELECTION.model,
+          }),
+        );
+        const materialized = yield* materializeFixtureInput({
+          scenario: "turn_interrupt_mid_tool",
+          fixtureInput: turnInterruptMidToolInput(),
+          driver: ProviderDriverKind.make("claudeAgent"),
+          modelSelection: CLAUDE_MODEL_SELECTION,
+        }).pipe(Effect.provide(IdAllocator.layer), provideDeterministicTestRuntime);
+        const scenario = {
+          name: "turn_interrupt_mid_tool/claudeAgent:rewind-cursor",
+          transcript,
+          commands: materialized.commands,
+          steps: materialized.steps,
+          projectionThreadIds: materialized.projectionThreadIds,
+        };
+        const result = yield* runOrchestratorV2Scenario(scenario).pipe(
+          Effect.provide(
+            ProviderReplayHarness.layerProviderReplay(scenario, ClaudeOrchestratorReplayHarness),
+          ),
+          provideDeterministicTestRuntime,
+        );
+        const projection = result.projections.get(materialized.projectionThreadIds[0]!);
+        assert.isDefined(projection);
+        const [stopped] = projection.providerTurns;
+        assert.isDefined(stopped);
+        const providerThread = projection.providerThreads.find(
+          (candidate) => candidate.id === stopped.providerThreadId,
+        )!;
+
+        // The recording's last reply holds only a tool_use block.
+        const toolCallReply = "ae2c90aa-4ded-4184-941b-ff32527cc9de";
+        assert.equal(stopped.nativeTurnRef?.nativeId, toolCallReply);
+        // Rewinding a later message keeps this turn: the session resumes at
+        // that reply, with its tool call unanswered. Claude Code repairs it
+        // when the next prompt goes out: CLI 2.1.292 adds a tool_result
+        // "[Tool result missing due to internal error]" (ensureToolResultPairing),
+        // so the API never sees a tool call without a result.
+        assert.equal(
+          yield* ClaudeAdapterV2.resolveClaudeRollbackResumeSessionAt({
+            providerThread,
+            target: { type: "provider_turn", appRunOrdinal: 1, providerTurn: stopped },
+            providerThreadTurns: [
+              stopped,
+              { ...stopped, id: "provider-turn:later" as never, ordinal: stopped.ordinal + 1 },
+            ],
+          }),
+          toolCallReply,
+        );
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
   it.effect("refuses messages to a native subagent thread without touching it", () =>
     Effect.gen(function* () {
       const raw = yield* readClaudeTranscriptFixture("subagent");
@@ -571,7 +632,7 @@ describe("Claude Agent SDK replay fixtures", () => {
           const transcript = yield* readTranscript(provider.transcriptFile);
           for (const toolName of claudeToolUseNamesFromTranscript(transcript)) {
             seenToolNames.add(toolName);
-            const classification = classifyClaudeNativeTool(toolName);
+            const classification = ClaudeAdapterV2.classifyClaudeNativeTool(toolName);
             // MCP tools are open-ended and deliberately become dynamic tools.
             if (!classification.known && !toolName.startsWith("mcp__")) {
               unknownToolNames.add(`${fixture.name}:${toolName}`);
