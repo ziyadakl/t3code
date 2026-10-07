@@ -38,6 +38,13 @@ function causeMessage(cause: unknown): string | undefined {
           return new ContextHandoffBudgetError().message;
         case "ClaudeBackgroundWorkBlocksQueryReplacementError":
           return stringField(cause, "message");
+        case "ClaudeAgentSdkQueryRunnerError": {
+          // Claude's own error (exit code and stderr) says what went wrong;
+          // boundedText redacts credentials before it leaves the server.
+          const detail = stringField((cause as Record<string, unknown>).cause, "message");
+          if (detail !== undefined && detail.trim() !== "") return detail;
+          break;
+        }
         case "ContextHandoffDeliveryUncertainError":
           return "T3 could not confirm whether conversation history reached the provider. Retry the turn to recover the session.";
         case "ProviderAdapterTurnStartError":

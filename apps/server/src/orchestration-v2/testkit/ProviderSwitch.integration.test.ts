@@ -1188,6 +1188,217 @@ describe("orchestration v2 provider switching", () => {
       ),
   );
 
+  it.live(
+    "resumes an imported Claude session on its first turn without replaying its history",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const cwd = yield* checkpointWorkspace("imported-session-resume");
+          const capturedTurns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
+          const injectedHistory = yield* Ref.make<ReadonlyArray<unknown>>([]);
+          const layerRegistry = ProviderAdapterRegistry.layerFromAdapters([
+            makeTestAdapter({
+              instanceId: CLAUDE_MODEL_SELECTION.instanceId,
+              driver: CLAUDE_DRIVER,
+              capabilities: ClaudeProviderCapabilitiesV2,
+              modelSelection: CLAUDE_MODEL_SELECTION,
+              responseByRunOrdinal: {},
+              capturedTurns,
+              injectedHistory,
+            }),
+          ]);
+          yield* Effect.gen(function* () {
+            const orchestrator = yield* Orchestrator.OrchestratorV2;
+            const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+            const eventSink = yield* EventSink.EventSinkV2;
+            yield* orchestrator.dispatch({
+              type: "thread.create",
+              commandId: CommandId.make("imported-session:create"),
+              threadId,
+              projectId,
+              createdBy: "user",
+              creationSource: "web",
+              title: "Imported Claude session",
+              modelSelection: CLAUDE_MODEL_SELECTION,
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              branch: null,
+              worktreePath: null,
+            });
+            // The shape AgentSessionImporter writes: imported messages with no
+            // run, and a provider thread bound to the session's native id.
+            const nativeThreadId = "80453194-c04d-4db7-b893-75e09c1b3733";
+            const providerThreadId = ProviderThreadId.make(
+              `provider-thread:provider:${CLAUDE_DRIVER}:native-thread:${nativeThreadId}`,
+            );
+            const created = (yield* orchestrator.getThreadProjection(threadId)).thread;
+            const at = created.createdAt;
+            const importedMessage = (index: number, role: "user" | "assistant", text: string) => {
+              const messageId = MessageId.make(`imported-session:${index}`);
+              const common = {
+                id: TurnItemId.make(`imported-session:turn-item:${index}`),
+                threadId,
+                runId: null,
+                nodeId: null,
+                providerThreadId: null,
+                providerTurnId: null,
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: index + 1,
+                status: "completed" as const,
+                title: null,
+                startedAt: at,
+                completedAt: at,
+                updatedAt: at,
+              };
+              return [
+                {
+                  id: EventId.make(`imported-session:message:${index}`),
+                  type: "message.updated" as const,
+                  threadId,
+                  occurredAt: at,
+                  payload: {
+                    createdBy: role === "user" ? ("user" as const) : ("agent" as const),
+                    creationSource: "server" as const,
+                    id: messageId,
+                    threadId,
+                    runId: null,
+                    nodeId: null,
+                    role,
+                    text,
+                    attachments: [],
+                    streaming: false,
+                    createdAt: at,
+                    updatedAt: at,
+                  },
+                },
+                {
+                  id: EventId.make(`imported-session:turn-item:${index}`),
+                  type: "turn-item.updated" as const,
+                  threadId,
+                  occurredAt: at,
+                  payload:
+                    role === "user"
+                      ? {
+                          ...common,
+                          createdBy: "user" as const,
+                          creationSource: "server" as const,
+                          type: "user_message" as const,
+                          messageId,
+                          inputIntent: "turn_start" as const,
+                          text,
+                          attachments: [],
+                        }
+                      : {
+                          ...common,
+                          type: "assistant_message" as const,
+                          messageId,
+                          text,
+                          streaming: false,
+                        },
+                },
+              ];
+            };
+            yield* eventSink.write({
+              events: [
+                {
+                  id: EventId.make("imported-session:thread"),
+                  type: "thread.created",
+                  threadId,
+                  providerInstanceId: CLAUDE_MODEL_SELECTION.instanceId,
+                  occurredAt: at,
+                  payload: {
+                    ...created,
+                    historyOrigin: "v1_import",
+                    activeProviderThreadId: providerThreadId,
+                  },
+                },
+                ...importedMessage(0, "user", "Remember the code word PELICAN."),
+                ...importedMessage(1, "assistant", "OK"),
+                {
+                  id: EventId.make("imported-session:provider-thread"),
+                  type: "provider-thread.updated",
+                  threadId,
+                  driver: CLAUDE_DRIVER,
+                  providerInstanceId: CLAUDE_MODEL_SELECTION.instanceId,
+                  occurredAt: at,
+                  payload: {
+                    id: providerThreadId,
+                    driver: CLAUDE_DRIVER,
+                    providerInstanceId: CLAUDE_MODEL_SELECTION.instanceId,
+                    providerSessionId: null,
+                    appThreadId: threadId,
+                    ownerNodeId: null,
+                    nativeThreadRef: {
+                      driver: CLAUDE_DRIVER,
+                      nativeId: nativeThreadId,
+                      strength: "strong",
+                    },
+                    nativeConversationHeadRef: null,
+                    status: "idle",
+                    firstRunOrdinal: null,
+                    lastRunOrdinal: null,
+                    handoffIds: [],
+                    forkedFrom: null,
+                    pendingBackgroundTasks: [],
+                    createdAt: at,
+                    updatedAt: at,
+                  },
+                },
+              ],
+            });
+
+            yield* orchestrator.dispatch({
+              type: "message.dispatch",
+              commandId: CommandId.make("imported-session:send"),
+              threadId,
+              messageId: MessageId.make("imported-session:send"),
+              createdBy: "user",
+              creationSource: "web",
+              text: "What was the code word?",
+              attachments: [],
+              modelSelection: CLAUDE_MODEL_SELECTION,
+              dispatchMode: { type: "start_immediately" },
+            });
+            yield* orchestrator.streamStoredEvents.pipe(
+              Stream.filter(
+                ({ event }) =>
+                  event.type === "run.updated" &&
+                  (event.payload.status === "completed" || event.payload.status === "failed"),
+              ),
+              Stream.runHead,
+            );
+            yield* worker.drain();
+
+            const projection = yield* orchestrator.getThreadProjection(threadId);
+            assert.equal(projection.runs.at(-1)?.status, "completed");
+            assert.isNull(projection.runs.at(-1)?.contextHandoffId ?? null);
+            assert.lengthOf(projection.contextHandoffs, 0);
+            assert.deepEqual(yield* Ref.get(injectedHistory), []);
+            const turns = yield* Ref.get(capturedTurns);
+            assert.lengthOf(turns, 1);
+            assert.equal(turns[0]?.nativeThreadId, nativeThreadId);
+            assert.equal(turns[0]?.text, "What was the code word?");
+            assert.isTrue(turns[0]?.nativeThreadHasTurns);
+          }).pipe(
+            Effect.provide(
+              ProviderReplayHarness.layerWithRegistry(
+                {
+                  name: "imported-session-resume",
+                  runtimePolicyOverride: {
+                    cwd,
+                    approvalPolicy: "never",
+                    sandboxPolicy: { type: "readOnly" },
+                  },
+                },
+                layerRegistry,
+              ),
+            ),
+          );
+        }),
+      ),
+  );
+
   it.live.each(
     (["failed", "interrupted"] as const).flatMap((status) =>
       [false, true].flatMap((queued) =>

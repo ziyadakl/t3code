@@ -14,6 +14,7 @@ it("reissues imported context until a V2 run completes", () => {
       historyOrigin: "v1_import",
       hasCompletedRun: false,
       legacyImportItemCount: 2,
+      hasNativeThread: false,
     }),
   );
   assert.isFalse(
@@ -21,6 +22,7 @@ it("reissues imported context until a V2 run completes", () => {
       historyOrigin: "v1_import",
       hasCompletedRun: true,
       legacyImportItemCount: 2,
+      hasNativeThread: false,
     }),
   );
   assert.isFalse(
@@ -28,6 +30,7 @@ it("reissues imported context until a V2 run completes", () => {
       historyOrigin: undefined,
       hasCompletedRun: false,
       legacyImportItemCount: 2,
+      hasNativeThread: false,
     }),
   );
   assert.isFalse(
@@ -35,6 +38,18 @@ it("reissues imported context until a V2 run completes", () => {
       historyOrigin: "v1_import",
       hasCompletedRun: false,
       legacyImportItemCount: 0,
+      hasNativeThread: false,
+    }),
+  );
+});
+
+it("resumes an imported provider session instead of replaying its history as text", () => {
+  assert.isFalse(
+    shouldPrepareLegacyImportHandoff({
+      historyOrigin: "v1_import",
+      hasCompletedRun: false,
+      legacyImportItemCount: 2,
+      hasNativeThread: true,
     }),
   );
 });

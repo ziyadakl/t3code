@@ -1234,11 +1234,21 @@ export const layer: Layer.Layer<
           ) + 1,
         // Legacy accepted attempts have no native id. They count only before
         // a replacement, while no accepted attempt records a native identity.
+        // An imported session's native thread holds its history before T3
+        // Code runs a turn on it, so the first turn resumes it. The importer
+        // derives the provider thread id from that native id; a resume
+        // fallback binds a new native id, which does not match.
         nativeThreadHasTurns:
           nativeInputRunIds.size > 0 ||
           (legacyInputRunIds.size > 0 &&
             sameNativeThread &&
-            !acceptedAttempts.some((source) => source.nativeThreadId !== undefined)),
+            !acceptedAttempts.some((source) => source.nativeThreadId !== undefined)) ||
+          (projection.thread.historyOrigin === "v1_import" &&
+            typeof runningProviderThread.nativeThreadRef?.nativeId === "string" &&
+            idAllocator.derive.providerThread({
+              driver: session.driver,
+              nativeThreadId: runningProviderThread.nativeThreadRef.nativeId,
+            }) === providerThread.id),
         shouldStartProviderTurn: runControls.shouldStartProviderTurn,
         shouldFinalizeRun: runControls.shouldFinalizeRun,
         hasUnpairedRunInterruptRequest: runControls.hasUnpairedRunInterruptRequest,

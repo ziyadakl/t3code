@@ -5214,7 +5214,7 @@ export function makeClaudeAdapterV2(
               providerSessionId: input.providerSessionId,
               providerThreadId: context.input.providerThread.id,
               providerTurnId: context.providerTurnId,
-              cause,
+              cause: Cause.pretty(cause),
             });
           }
         });

@@ -20,6 +20,7 @@ import {
 import * as IdAllocator from "./IdAllocator.ts";
 import { ContextHandoffBudgetError } from "./ContextHandoffDelivery.ts";
 import { ProviderAdapterTurnStartError } from "./ProviderAdapter.ts";
+import { ClaudeAgentSdkQueryRunnerError } from "./Adapters/ClaudeAdapterV2.ts";
 
 it("redacts credentials and URL secrets from provider failures", () => {
   const failure = makeProviderFailure({
@@ -99,6 +100,24 @@ it("preserves actionable handoff errors wrapped by turn startup", () => {
     makeProviderFailure({ cause: Cause.fail(cause) }).message,
     new ContextHandoffBudgetError().message,
   );
+});
+
+it("shows the Claude CLI's own error for a failed Claude query, redacted", () => {
+  const failure = makeProviderFailure({
+    cause: Cause.fail(
+      new ClaudeAgentSdkQueryRunnerError({
+        method: "messages",
+        cause: new Error(
+          "Claude Code process exited with code 1. stderr: Error: Session ID 80453194-c04d-4db7-b893-75e09c1b3733 is already in use. Bearer leaked-secret",
+        ),
+      }),
+    ),
+  });
+  assert.include(
+    failure.message,
+    "Session ID 80453194-c04d-4db7-b893-75e09c1b3733 is already in use.",
+  );
+  assert.notInclude(failure.message, "leaked-secret");
 });
 
 it("does not expose defect text nested inside a known error category", () => {
