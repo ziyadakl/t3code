@@ -16,6 +16,7 @@ import * as Option from "effect/Option";
 import * as ProviderSessionRuntime from "../../persistence/ProviderSessionRuntime.ts";
 import * as AgentSessionImporter from "../../project/AgentSessionImporter.ts";
 import * as AgentSessionScanner from "../../project/AgentSessionScanner.ts";
+import * as ImportedRewindHeal from "../../project/ImportedRewindHeal.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
 import { ClaudeOrchestratorReplayHarness } from "../Adapters/ClaudeAdapterV2.testkit.ts";
 import * as EventSink from "../EventSink.ts";
@@ -258,6 +259,18 @@ const runImportedRewind = (input: {
       runtimePolicyOverride: { cwd },
     };
 
+    const runtimes = Layer.mock(ProviderSessionRuntime.ProviderSessionRuntimeRepository)({
+      upsert: () => Effect.void,
+      recordImportedTranscript: () => Effect.void,
+      list: () =>
+        Effect.succeed([
+          {
+            threadId,
+            providerName: "claudeAgent",
+            runtimePayload: { cwd, importedTranscripts: [source] },
+          },
+        ] as never),
+    });
     const result = yield* Effect.gen(function* () {
       const importer = yield* AgentSessionImporter.AgentSessionImporter;
       yield* importer.importThread({
@@ -292,7 +305,7 @@ const runImportedRewind = (input: {
             at: "2026-09-02T09:00:00.000Z",
           }),
         });
-        assert.equal(yield* importer.healImportedRewindPoints(), 1);
+        assert.equal(yield* (yield* ImportedRewindHeal.ImportedRewindHeal).run(), 1);
       }
       const preview =
         input.restoresCode === true
@@ -304,25 +317,15 @@ const runImportedRewind = (input: {
       return { preview, ...(yield* runOrchestratorV2Scenario(scenario)) };
     }).pipe(
       Effect.provide(
-        AgentSessionImporter.layer.pipe(
+        ImportedRewindHeal.layer.pipe(
+          Layer.provideMerge(AgentSessionImporter.layer),
           Layer.provide(
             Layer.mergeAll(
               Layer.mock(AgentSessionScanner.AgentSessionScanner)({
                 readThread: () => Effect.succeed(Option.some({ thread: whole, source })),
               }),
               Layer.mock(ProjectService.ProjectService)({}),
-              Layer.mock(ProviderSessionRuntime.ProviderSessionRuntimeRepository)({
-                upsert: () => Effect.void,
-                recordImportedTranscript: () => Effect.void,
-                list: () =>
-                  Effect.succeed([
-                    {
-                      threadId,
-                      providerName: "claudeAgent",
-                      runtimePayload: { cwd, importedTranscripts: [source] },
-                    },
-                  ] as never),
-              }),
+              runtimes,
               IdAllocator.layer,
             ),
           ),

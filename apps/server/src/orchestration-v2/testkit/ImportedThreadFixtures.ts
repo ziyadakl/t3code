@@ -23,10 +23,12 @@ export function claudeTurnRunInT3Code(input: {
   readonly reply: string;
   readonly nativeReplyId: string;
   readonly at: string;
+  /** The run's id; the orchestrator derives it from the thread and ordinal. */
+  readonly runId?: RunId;
 }): ReadonlyArray<OrchestrationV2DomainEvent> {
   const threadId = input.providerThread.appThreadId!;
   const name = `t3-code-turn-${input.ordinal}`;
-  const runId = RunId.make(`run:${name}`);
+  const runId = input.runId ?? RunId.make(`run:${name}`);
   const nodeId = NodeId.make(`node:${name}`);
   const attemptId = RunAttemptId.make(`attempt:${name}`);
   const providerTurnId = ProviderTurnId.make(`provider-turn:${name}`);

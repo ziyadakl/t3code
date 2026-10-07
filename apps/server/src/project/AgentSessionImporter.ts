@@ -88,6 +88,31 @@ class AgentSessionThreadModifiedError extends Schema.TaggedError<AgentSessionThr
   }
 }
 
+const IMPORTED_THREAD_PREFIX = "import:";
+
+/** The thread an agent session is imported into, one per provider session. */
+export function importedThreadId(session: {
+  readonly providerInstanceId: string;
+  readonly providerSessionId: string;
+}): ThreadId {
+  return ThreadId.make(
+    `${IMPORTED_THREAD_PREFIX}${session.providerInstanceId}:${session.providerSessionId}`,
+  );
+}
+
+/** Whether `threadId` was made by `importedThreadId`, not started in T3 Code. */
+export function isImportedThreadId(threadId: ThreadId): boolean {
+  return threadId.startsWith(IMPORTED_THREAD_PREFIX);
+}
+
+/** The transcript a provider session runtime row was last imported from, if any. */
+export function latestImportedTranscript(
+  runtimePayload: unknown,
+): AgentSessionImportSource | undefined {
+  const payload = decodeImportedTranscriptPayload(runtimePayload);
+  return Option.isSome(payload) ? payload.value.importedTranscripts?.at(-1) : undefined;
+}
+
 function dateTime(value: string): DateTime.Utc {
   return DateTime.makeUnsafe(value);
 }
@@ -908,56 +933,51 @@ const make = Effect.gen(function* () {
   });
 
   /**
-   * Gives Claude chats imported before imports kept transcript uuids a run per
-   * prompt, read from the whole transcript each was imported from. Only the
-   * messages they already show are touched, each placed by its content, so
+   * Gives a Claude chat imported before imports kept transcript uuids a run
+   * per prompt, read from the whole transcript it was imported from. Only the
+   * messages it already shows are touched, each placed by its content, so
    * repeating it is a no-op. A chat that ran turns in T3 Code since keeps
-   * them as they are. Returns the number of threads healed.
+   * them as they are. Callers hold the thread's command lock: the new runs
+   * take the next ordinals, as a turn being started would. Returns whether
+   * the chat was healed.
    */
-  const healImportedRewindPoints = Effect.fn("healImportedAgentRewindPointsV2")(function* () {
-    const rows = yield* runtimes.list();
-    let healed = 0;
-    for (const row of rows) {
-      if (!row.threadId.startsWith("import:") || row.providerName !== "claudeAgent") continue;
-      const payload = decodeImportedTranscriptPayload(row.runtimePayload);
-      const source = Option.isSome(payload) ? payload.value.importedTranscripts?.at(-1) : undefined;
-      if (source === undefined) continue;
-      const threadId = row.threadId;
-      const didHeal = yield* Effect.gen(function* () {
-        const existing = yield* importRecords(threadId);
-        if (
-          Option.isNone(existing) ||
-          existing.value.runs.some(
-            (run) => isImportedTranscriptRun(run) || !SETTLED_RUN_STATUSES.has(run.status),
-          )
-        ) {
-          return false;
-        }
-        const read = yield* scanner.readThread({
-          filePath: source.filePath,
-          source: "claudeAgent",
-          providerInstanceId: source.providerInstanceId,
-          allMessages: true,
-        });
-        if (Option.isNone(read)) return false;
-        const { recordedTurns } = yield* syncImport({
+  const healImportedThread = Effect.fn("healImportedAgentThreadV2")(function* (input: {
+    readonly threadId: ThreadId;
+    readonly source: AgentSessionImportSource;
+  }) {
+    const { threadId, source } = input;
+    return yield* Effect.gen(function* () {
+      const existing = yield* importRecords(threadId);
+      if (
+        Option.isNone(existing) ||
+        existing.value.runs.some(
+          (run) => isImportedTranscriptRun(run) || !SETTLED_RUN_STATUSES.has(run.status),
+        )
+      ) {
+        return false;
+      }
+      const read = yield* scanner.readThread({
+        filePath: source.filePath,
+        source: "claudeAgent",
+        providerInstanceId: source.providerInstanceId,
+        allMessages: true,
+      });
+      if (Option.isNone(read)) return false;
+      const { recordedTurns } = yield* syncImport({
+        threadId,
+        thread: read.value.thread,
+        records: existing.value,
+        append: false,
+      });
+      return recordedTurns;
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Could not record rewind points for an imported chat", {
           threadId,
-          thread: read.value.thread,
-          records: existing.value,
-          append: false,
-        });
-        return recordedTurns;
-      }).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("Could not record rewind points for an imported chat", {
-            threadId,
-            cause,
-          }).pipe(Effect.as(false)),
-        ),
-      );
-      if (didHeal) healed += 1;
-    }
-    return healed;
+          cause,
+        }).pipe(Effect.as(false)),
+      ),
+    );
   });
 
   const importRecentAgentThreads = Effect.fn("importRecentAgentThreadsV2")(function* (
@@ -1011,9 +1031,7 @@ const make = Effect.gen(function* () {
           return;
         }
         const source = outcome.source;
-        const threadId = ThreadId.make(
-          `import:${source.providerInstanceId}:${source.providerSessionId}`,
-        );
+        const threadId = importedThreadId(source);
         if (outcome._tag === "AlreadyImported") {
           importedThreadIds.add(threadId);
           importedCount += 1;
@@ -1058,7 +1076,7 @@ const make = Effect.gen(function* () {
     importRecentAgentThreads,
     importThread,
     appendImportedMessages,
-    healImportedRewindPoints,
+    healImportedThread,
     isUntouchedImport: (threadId: ThreadId) =>
       untouchedImport(threadId).pipe(Effect.map(Option.isSome)),
   };

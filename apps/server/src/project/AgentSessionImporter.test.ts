@@ -7,7 +7,9 @@ import {
   type OrchestrationV2Run,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
@@ -17,11 +19,13 @@ import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as IdAllocator from "../orchestration-v2/IdAllocator.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
+import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import { claudeTurnRunInT3Code } from "../orchestration-v2/testkit/ImportedThreadFixtures.ts";
 import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as AgentSessionImporter from "./AgentSessionImporter.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
+import * as ImportedRewindHeal from "./ImportedRewindHeal.ts";
 import * as ProjectService from "./ProjectService.ts";
 
 const projectId = ProjectId.make("agent-session-import-project");
@@ -497,12 +501,18 @@ function parseClaudeTranscript(
   return thread;
 }
 
-/** The importer over a real projection store, as the server runs it. */
+/** The importer and the rewind heal over a real projection store, as the server runs them. */
 const storeBackedImporter = (input?: {
   readonly scanner?: Partial<AgentSessionScanner.AgentSessionScanner["Service"]>;
   readonly runtimes?: Partial<ProviderSessionRuntime.ProviderSessionRuntimeRepository["Service"]>;
 }) => {
   const storeLayer = ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory));
+  const runtimesLayer = Layer.mock(ProviderSessionRuntime.ProviderSessionRuntimeRepository)({
+    upsert: () => Effect.void,
+    recordImportedTranscript: () => Effect.void,
+    list: () => Effect.succeed([]),
+    ...input?.runtimes,
+  });
   const importerLayer = Layer.unwrap(
     Effect.gen(function* () {
       const store = yield* ProjectionStore.ProjectionStoreV2;
@@ -533,19 +543,18 @@ const storeBackedImporter = (input?: {
                   Effect.orDie,
                 ),
             }),
-            Layer.mock(ProviderSessionRuntime.ProviderSessionRuntimeRepository)({
-              upsert: () => Effect.void,
-              recordImportedTranscript: () => Effect.void,
-              list: () => Effect.succeed([]),
-              ...input?.runtimes,
-            }),
+            runtimesLayer,
             IdAllocator.layer,
           ),
         ),
       );
     }),
   );
-  return Layer.provideMerge(importerLayer, storeLayer);
+  return ImportedRewindHeal.layer.pipe(
+    Layer.provideMerge(importerLayer),
+    Layer.provide(runtimesLayer),
+    Layer.provideMerge(storeLayer),
+  );
 };
 
 /**
@@ -683,6 +692,7 @@ it.effect("heals chats imported before rewind points, once, from their transcrip
   const reads: Array<string> = [];
   return Effect.gen(function* () {
     const importer = yield* AgentSessionImporter.AgentSessionImporter;
+    const heal = yield* ImportedRewindHeal.ImportedRewindHeal;
     yield* importer.importThread({
       projectId,
       workspaceRoot: "/workspace/project",
@@ -695,7 +705,7 @@ it.effect("heals chats imported before rewind points, once, from their transcrip
       { prompt: "Add a title", rewind: "none" },
     ]);
 
-    expect(yield* importer.healImportedRewindPoints()).toBe(1);
+    expect(yield* heal.run()).toBe(1);
     expect(yield* rewindPoints(rewindThreadId)).toEqual([
       {
         prompt: "Create notes.md",
@@ -713,7 +723,7 @@ it.effect("heals chats imported before rewind points, once, from their transcrip
 
     const store = yield* ProjectionStore.ProjectionStoreV2;
     const before = yield* store.getThreadRecords(rewindThreadId, ["messages", "runs"]);
-    expect(yield* importer.healImportedRewindPoints()).toBe(0);
+    expect(yield* heal.run()).toBe(0);
     const after = yield* store.getThreadRecords(rewindThreadId, ["messages", "runs"]);
     expect(after.messages).toEqual(before.messages);
     expect(after.runs).toEqual(before.runs);
@@ -747,6 +757,109 @@ it.effect("heals chats imported before rewind points, once, from their transcrip
       }),
     ),
   );
+});
+
+it.live("a first turn sent while the heal reads the transcript keeps its own run", () => {
+  const transcript = parseClaudeTranscript(
+    claudeTranscript([
+      { prompt: "Create notes.md", reply: "Created notes.md." },
+      { prompt: "Add a title", reply: "Added the title." },
+    ]),
+  );
+  const beforeRewindPoints = {
+    ...transcript,
+    messages: transcript.messages.map(
+      ({ nativeUserMessageId: _id, nativeTurnId: _turn, ...message }) => message,
+    ),
+  };
+  return Effect.gen(function* () {
+    const reading = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const importerLayer = storeBackedImporter({
+      runtimes: {
+        list: () =>
+          Effect.succeed([
+            {
+              threadId: rewindThreadId,
+              providerName: "claudeAgent",
+              runtimePayload: { cwd: "/workspace/project", importedTranscripts: [rewindSource] },
+            },
+          ] as never),
+      },
+      scanner: {
+        readThread: () =>
+          Deferred.succeed(reading, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.as(Option.some({ thread: transcript, source: rewindSource })),
+          ),
+      },
+    });
+    yield* Effect.gen(function* () {
+      const importer = yield* AgentSessionImporter.AgentSessionImporter;
+      const heal = yield* ImportedRewindHeal.ImportedRewindHeal;
+      const threadLocks = yield* ThreadCommandExecutor.ThreadCommandExecutor;
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const ids = yield* IdAllocator.IdAllocatorV2;
+      yield* importer.importThread({
+        projectId,
+        workspaceRoot: "/workspace/project",
+        threadId: rewindThreadId,
+        thread: beforeRewindPoints,
+        source: rewindSource,
+      });
+
+      const healing = yield* Effect.forkChild(heal.run());
+      yield* Deferred.await(reading);
+      // What starting a turn does under the thread's dispatch lock: the next
+      // ordinal, and the run id the orchestrator derives from it.
+      const firstTurn = yield* Effect.forkChild(
+        threadLocks.withLock(
+          rewindThreadId,
+          Effect.gen(function* () {
+            const records = yield* store.getThreadRecords(rewindThreadId, [
+              "runs",
+              "providerThreads",
+            ]);
+            const ordinal = records.runs.length + 1;
+            const events = claudeTurnRunInT3Code({
+              providerThread: records.providerThreads[0]!,
+              ordinal,
+              providerTurnOrdinal: ordinal,
+              prompt: "Sent right after the restart",
+              reply: "Done in T3 Code.",
+              nativeReplyId: "reply-live",
+              at: "2026-09-02T09:00:00.000Z",
+              runId: ids.derive.run({ threadId: rewindThreadId, ordinal }),
+            });
+            yield* Effect.forEach(events, (event) => store.apply(event));
+          }),
+        ),
+      );
+      // Give the turn every chance to land while the heal is still reading.
+      yield* Fiber.await(firstTurn).pipe(Effect.timeoutOption("200 millis"));
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(healing);
+      yield* Fiber.join(firstTurn);
+
+      const records = yield* store.getThreadRecords(rewindThreadId, ["messages", "runs"]);
+      expect(
+        records.messages
+          .filter((message) => message.role === "user")
+          .map((message) => ({
+            prompt: message.text,
+            ownRun:
+              records.runs.find((run) => run.id === message.runId)?.userMessageId === message.id,
+          })),
+      ).toEqual([
+        { prompt: "Create notes.md", ownRun: true },
+        { prompt: "Add a title", ownRun: true },
+        { prompt: "Sent right after the restart", ownRun: true },
+      ]);
+      expect(new Set(records.runs.map((run) => run.ordinal)).size).toBe(3);
+    }).pipe(
+      Effect.provide(Layer.mergeAll(importerLayer, ThreadCommandExecutor.layer, IdAllocator.layer)),
+    );
+  });
 });
 
 /** `count` Claude turns, "Prompt n" answered by "Reply n", as the desktop app writes them. */
@@ -789,6 +902,7 @@ const importRow = {
 it.effect("heals a long chat whose kept messages shifted since it was imported", () =>
   Effect.gen(function* () {
     const importer = yield* AgentSessionImporter.AgentSessionImporter;
+    const heal = yield* ImportedRewindHeal.ImportedRewindHeal;
     const store = yield* ProjectionStore.ProjectionStoreV2;
     // Imported at 110 turns: the first prompt, then the last 199 messages.
     yield* importer.importThread({
@@ -806,7 +920,7 @@ it.effect("heals a long chat whose kept messages shifted since it was imported",
     ]);
 
     // The desktop chat has since grown to 130 turns, so its newest 199 messages start later.
-    expect(yield* importer.healImportedRewindPoints()).toBe(1);
+    expect(yield* heal.run()).toBe(1);
 
     const points = yield* rewindPoints(rewindThreadId);
     expect(points).toHaveLength(100);
@@ -842,7 +956,7 @@ it.effect("heals a long chat whose kept messages shifted since it was imported",
     );
 
     const runs = (yield* store.getThreadRecords(rewindThreadId, ["runs"])).runs;
-    expect(yield* importer.healImportedRewindPoints()).toBe(0);
+    expect(yield* heal.run()).toBe(0);
     expect((yield* store.getThreadRecords(rewindThreadId, ["runs"])).runs).toEqual(runs);
   }).pipe(
     Effect.provide(
@@ -922,6 +1036,7 @@ it.effect("leaves a message it cannot place for certain without a rewind point",
   ].join("\n");
   return Effect.gen(function* () {
     const importer = yield* AgentSessionImporter.AgentSessionImporter;
+    const heal = yield* ImportedRewindHeal.ImportedRewindHeal;
     yield* importer.importThread({
       projectId,
       workspaceRoot: "/workspace/project",
@@ -930,7 +1045,7 @@ it.effect("leaves a message it cannot place for certain without a rewind point",
       source: rewindSource,
     });
 
-    expect(yield* importer.healImportedRewindPoints()).toBe(1);
+    expect(yield* heal.run()).toBe(1);
     expect(yield* rewindPoints(rewindThreadId)).toEqual([
       {
         prompt: "Prompt 1",
@@ -970,6 +1085,7 @@ it.effect("heals the imported part of a chat that already ran turns in T3 Code",
   ]);
   return Effect.gen(function* () {
     const importer = yield* AgentSessionImporter.AgentSessionImporter;
+    const heal = yield* ImportedRewindHeal.ImportedRewindHeal;
     const store = yield* ProjectionStore.ProjectionStoreV2;
     yield* importer.importThread({
       projectId,
@@ -996,7 +1112,7 @@ it.effect("heals the imported part of a chat that already ran turns in T3 Code",
     const before = yield* store.getThreadRecords(rewindThreadId, ["runs", "providerTurns"]);
     expect(yield* importer.isUntouchedImport(rewindThreadId)).toBe(false);
 
-    expect(yield* importer.healImportedRewindPoints()).toBe(1);
+    expect(yield* heal.run()).toBe(1);
     expect(yield* rewindPoints(rewindThreadId)).toEqual([
       {
         prompt: "Prompt 1",
@@ -1026,7 +1142,7 @@ it.effect("heals the imported part of a chat that already ran turns in T3 Code",
     expect(after.runs.map((run) => run.ordinal).toSorted()).toEqual([1, 2, 3]);
 
     const healed = yield* store.getThreadRecords(rewindThreadId, ["runs", "messages"]);
-    expect(yield* importer.healImportedRewindPoints()).toBe(0);
+    expect(yield* heal.run()).toBe(0);
     expect(yield* store.getThreadRecords(rewindThreadId, ["runs", "messages"])).toEqual(healed);
   }).pipe(
     Effect.provide(
@@ -1044,6 +1160,7 @@ it.effect("leaves a chat that ran turns in T3 Code alone when its transcript hid
   const transcript = claudeTranscript([...desktop, { prompt: "Something else", reply: "Done." }]);
   return Effect.gen(function* () {
     const importer = yield* AgentSessionImporter.AgentSessionImporter;
+    const heal = yield* ImportedRewindHeal.ImportedRewindHeal;
     const store = yield* ProjectionStore.ProjectionStoreV2;
     yield* importer.importThread({
       projectId,
@@ -1066,7 +1183,7 @@ it.effect("leaves a chat that ran turns in T3 Code alone when its transcript hid
       yield* store.apply(event);
     }
 
-    expect(yield* importer.healImportedRewindPoints()).toBe(0);
+    expect(yield* heal.run()).toBe(0);
     expect((yield* rewindPoints(rewindThreadId))[0]).toEqual({
       prompt: "Prompt 1",
       rewind: "none",

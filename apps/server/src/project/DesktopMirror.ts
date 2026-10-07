@@ -29,9 +29,9 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import { forkParked } from "../serverActivation.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
-import * as AgentSessionImporter from "./AgentSessionImporter.ts";
 import * as AgentSessionResume from "./AgentSessionResume.ts";
 import * as ClaudeSessionSources from "./ClaudeSessionSources.ts";
+import * as ImportedRewindHeal from "./ImportedRewindHeal.ts";
 import * as ProjectService from "./ProjectService.ts";
 
 const SYNC_INTERVAL = "1 minute";
@@ -132,7 +132,7 @@ const make = Effect.gen(function* () {
   const settingsService = yield* ServerSettingsService;
   const projects = yield* ProjectService.ProjectService;
   const resume = yield* AgentSessionResume.AgentSessionResume;
-  const importer = yield* AgentSessionImporter.AgentSessionImporter;
+  const rewindHeal = yield* ImportedRewindHeal.ImportedRewindHeal;
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const sql = yield* SqlClient.SqlClient;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -409,12 +409,13 @@ const make = Effect.gen(function* () {
   });
 
   /**
-   * Mirror once at server start, then every minute. Chats imported before
-   * imports kept rewind points get them first, whether or not the mirror is on.
+   * Mirror once at server start, then every minute. Each pass first gives
+   * chats imported before imports kept rewind points their points, whether or
+   * not the mirror is on.
    */
   const start = Effect.fn("DesktopMirror.start")(function* () {
     yield* forkParked(
-      importer.healImportedRewindPoints().pipe(
+      rewindHeal.run().pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("Imported chat rewind point backfill failed", { cause }),
         ),
@@ -423,9 +424,9 @@ const make = Effect.gen(function* () {
             Effect.catchCause((cause) =>
               Effect.logWarning("Desktop mirror pass failed", { cause }),
             ),
-            Effect.repeat(Schedule.spaced(SYNC_INTERVAL)),
           ),
         ),
+        Effect.repeat(Schedule.spaced(SYNC_INTERVAL)),
         Effect.asVoid,
       ),
     );

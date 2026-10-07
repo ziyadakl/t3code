@@ -215,9 +215,10 @@ const make = Effect.gen(function* () {
       return { threadId: continued, created: false } satisfies AgentSessionResumeResult;
     }
     const { target, inWorktree, runCwd, read } = yield* handOffAndRead(project, session);
-    const threadId = ThreadId.make(
-      `import:${target.providerInstanceId}:${read.thread.providerSessionId}`,
-    );
+    const threadId = AgentSessionImporter.importedThreadId({
+      providerInstanceId: target.providerInstanceId,
+      providerSessionId: read.thread.providerSessionId,
+    });
     const created = yield* importer
       .importThread({
         projectId: project.id,
