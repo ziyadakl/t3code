@@ -447,12 +447,13 @@ export interface ProviderAdapterV2ReadThreadSnapshotInput {
 export type ProviderAdapterV2RollbackTarget =
   | {
       readonly type: "thread_start";
-      readonly checkpointId: CheckpointId;
+      /** Absent for a rewind to a message, which needs no checkpoint. */
+      readonly checkpointId?: CheckpointId;
       readonly appRunOrdinal: 0;
     }
   | {
       readonly type: "provider_turn";
-      readonly checkpointId: CheckpointId;
+      readonly checkpointId?: CheckpointId;
       readonly appRunOrdinal: number;
       readonly providerTurn: OrchestrationV2ProviderTurn;
     };

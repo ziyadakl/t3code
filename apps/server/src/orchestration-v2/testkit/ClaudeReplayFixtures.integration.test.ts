@@ -6,8 +6,10 @@ import {
   MessageId,
   ProviderDriverKind,
   type ProviderReplayTranscript,
+  type ThreadRewindChoice,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 
 import { classifyClaudeNativeTool } from "../Adapters/ClaudeAdapterV2.ts";
 import { ClaudeOrchestratorReplayHarness } from "../Adapters/ClaudeAdapterV2.testkit.ts";
@@ -20,7 +22,14 @@ import { subagentInput } from "./fixtures/subagent/input.ts";
 import { runOrchestratorV2Scenario } from "./OrchestratorScenario.ts";
 import * as ProviderReplayHarness from "./ProviderReplayHarness.ts";
 import { materializeReplayTranscriptRuntimeInstructions } from "./ReplayTranscriptNdjson.ts";
-import { CLAUDE_MODEL_SELECTION, materializeFixtureInput } from "./fixtures/shared.ts";
+import { assertClaudeThreadRollbackOutput } from "./fixtures/thread_rollback/claude_output.ts";
+import {
+  CLAUDE_MODEL_SELECTION,
+  materializeFixtureInput,
+  THREAD_ROLLBACK_AFTER_PROMPT,
+  THREAD_ROLLBACK_FIRST_PROMPT,
+  THREAD_ROLLBACK_SECOND_PROMPT,
+} from "./fixtures/shared.ts";
 import {
   THREAD_FORK_NATIVE_CONTINUE_FORK_MARKER,
   THREAD_FORK_NATIVE_CONTINUE_RECALL,
@@ -132,6 +141,91 @@ function claudeToolUseNamesFromTranscript(
 }
 
 describe("Claude Agent SDK replay fixtures", () => {
+  it.effect(
+    "restores the conversation to before a message in a folder that is not a git repo",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-rewind-no-git-" });
+        const raw = yield* readClaudeTranscriptFixture("thread_rollback");
+        const transcript = yield* ClaudeOrchestratorReplayHarness.decodeTranscript(
+          materializeReplayTranscriptRuntimeInstructions(raw, {
+            driver: ProviderDriverKind.make("claudeAgent"),
+            model: CLAUDE_MODEL_SELECTION.model,
+          }),
+        );
+        const materialized = yield* materializeFixtureInput({
+          scenario: "thread_rollback",
+          fixtureInput: {
+            steps: [
+              { type: "message", text: THREAD_ROLLBACK_FIRST_PROMPT },
+              { type: "message", text: THREAD_ROLLBACK_SECOND_PROMPT },
+              { type: "rewind", targetMessageIndex: 2, choice: "conversation" },
+              { type: "message", text: THREAD_ROLLBACK_AFTER_PROMPT },
+            ],
+          },
+          driver: ProviderDriverKind.make("claudeAgent"),
+          modelSelection: CLAUDE_MODEL_SELECTION,
+        }).pipe(Effect.provide(IdAllocator.layer), provideDeterministicTestRuntime);
+        const scenario = {
+          name: "thread_rollback/claudeAgent:rewind-conversation-no-git",
+          transcript,
+          commands: materialized.commands,
+          steps: materialized.steps,
+          projectionThreadIds: materialized.projectionThreadIds,
+          runtimePolicyOverride: { cwd },
+        };
+        yield* Effect.gen(function* () {
+          // The replay fails unless the next query resumes at the recorded
+          // resumeSessionAt, the SDK uuid of the first turn's last assistant message.
+          const result = yield* runOrchestratorV2Scenario(scenario);
+          assertClaudeThreadRollbackOutput(result, transcript);
+          const threadId = materialized.projectionThreadIds[0]!;
+          const projection = result.projections.get(threadId);
+          assert.isDefined(projection);
+          assert.isTrue(
+            projection.checkpoints.every((checkpoint) => checkpoint.status !== "ready"),
+          );
+
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const before = yield* orchestrator.getThreadEventSequence(threadId);
+          const [first, rewound] = projection.messages.filter((message) => message.role === "user");
+          const refusal = (name: string, messageId: MessageId, choice: ThreadRewindChoice) =>
+            orchestrator
+              .dispatch({
+                type: "thread.rewind",
+                commandId: CommandId.make(`command:rewind-refusal:${name}`),
+                threadId,
+                messageId,
+                choice,
+              })
+              .pipe(Effect.flip, Effect.map(userFacingDispatchErrorMessage));
+          assert.equal(
+            yield* refusal("rewound", rewound!.id, "conversation"),
+            "This message was already rewound.",
+          );
+          assert.equal(
+            yield* refusal("unknown", MessageId.make("message:not-in-thread"), "conversation"),
+            "Only a message you sent that started a turn can be rewound.",
+          );
+          assert.equal(
+            yield* refusal("code", first!.id, "code"),
+            "This rewind choice is not available yet.",
+          );
+          assert.equal(yield* orchestrator.getThreadEventSequence(threadId), before);
+        }).pipe(
+          Effect.provide(
+            ProviderReplayHarness.layerProviderReplay(scenario, ClaudeOrchestratorReplayHarness),
+          ),
+          provideDeterministicTestRuntime,
+        );
+        assert.equal(
+          metadataString(raw, "resumeSessionAt"),
+          "3831efb6-619c-4c16-a38a-bf788040ac42",
+        );
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
   it.effect("refuses messages to a native subagent thread without touching it", () =>
     Effect.gen(function* () {
       const raw = yield* readClaudeTranscriptFixture("subagent");

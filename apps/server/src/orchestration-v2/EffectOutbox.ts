@@ -12,6 +12,7 @@ import {
   RunId,
   RuntimeRequestId,
   ThreadId,
+  ThreadRewindChoice,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -87,6 +88,13 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
     checkpointId: CheckpointId,
     scopeId: CheckpointScopeId,
   }),
+  /** Rewinds to just before the user message that started `runId`. */
+  Schema.Struct({
+    type: Schema.Literal("provider-thread.rewind"),
+    providerThreadId: ProviderThreadId,
+    runId: RunId,
+    choice: ThreadRewindChoice,
+  }),
   Schema.Struct({
     type: Schema.Literal("checkpoint.capture"),
     runId: RunId,
@@ -118,6 +126,7 @@ export const REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS = [
   "provider-runtime.continue",
   "provider-session.detach",
   "provider-thread.rollback",
+  "provider-thread.rewind",
   "checkpoint.capture",
   "terminal.cleanup",
   "attachment.cleanup",
