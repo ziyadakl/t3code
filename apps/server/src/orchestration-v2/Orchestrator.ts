@@ -9253,7 +9253,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const providerThread = projection.providerThreads.find(
         (candidate) => candidate.id === projection.thread.activeProviderThreadId,
       );
-      if (providerThread === undefined || providerThread.providerSessionId === null) {
+      // An imported Claude chat holds its native history before T3 Code opens
+      // a session for it; rewinding it opens one, as its first turn would.
+      const bindsImportedSession =
+        providerThread?.providerSessionId === null &&
+        providerThread.driver === CLAUDE_DRIVER &&
+        projection.thread.historyOrigin === "v1_import" &&
+        providerThread.nativeThreadRef?.nativeId != null;
+      if (
+        providerThread === undefined ||
+        (providerThread.providerSessionId === null && !bindsImportedSession)
+      ) {
         return yield* refuse("This thread has no Claude session to rewind yet.");
       }
       if (providerThread.driver !== CLAUDE_DRIVER) {
@@ -9286,6 +9296,37 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
 
       const now = yield* DateTime.now;
+      if (bindsImportedSession) {
+        const instanceId = projection.thread.modelSelection.instanceId;
+        const adapter = yield* providerAdapters.get(instanceId).pipe(
+          Effect.mapError(
+            (cause) =>
+              new OrchestratorProviderAdapterError({
+                commandId: command.commandId,
+                providerInstanceId: instanceId,
+                cause,
+              }),
+          ),
+        );
+        const providerSessionId = yield* mapDispatchError(command)(
+          providerSessionIdFor({
+            adapter,
+            providerInstanceId: instanceId,
+            threadId: command.threadId,
+          }),
+        );
+        yield* emit(
+          events,
+          command,
+        )({
+          type: "provider-thread.updated",
+          threadId: command.threadId,
+          driver: providerThread.driver,
+          providerInstanceId: providerThread.providerInstanceId,
+          occurredAt: now,
+          payload: { ...providerThread, providerSessionId, updatedAt: now },
+        });
+      }
       // This rewind becomes the only one whose failure the thread records.
       yield* emit(
         events,
