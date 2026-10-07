@@ -1109,7 +1109,6 @@ export async function waitForStartedServerThread(
 export async function waitForRevertedMessage(
   threadRef: ScopedThreadRef,
   messageId: MessageId,
-  turnCount: number,
   requestId: CommandId,
   revert: () => Promise<void>,
   timeoutMs = 120_000,
@@ -1144,10 +1143,7 @@ export async function waitForRevertedMessage(
       }
       if (
         accepted &&
-        thread.runs.some(
-          (run) =>
-            run.id === messageRunId && run.ordinal > turnCount && run.status === "rolled_back",
-        )
+        thread.runs.some((run) => run.id === messageRunId && run.status === "rolled_back")
       )
         finish();
     };

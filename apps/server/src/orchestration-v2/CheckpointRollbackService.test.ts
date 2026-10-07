@@ -381,6 +381,8 @@ it.effect.each([
     checkpointScopes: [{ id: scopeId, cwd: process.cwd() }],
     runs: [1, 2, 3].map((ordinal) => ({
       id: `run-${ordinal}`,
+      threadId,
+      userMessageId: `message-${ordinal}`,
       ordinal,
       status: ordinal === 3 ? "rolled_back" : "completed",
       rootNodeId: null,

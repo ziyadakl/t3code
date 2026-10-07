@@ -9291,7 +9291,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ) {
         return yield* refuse("This message's turn has not finished yet.");
       }
-      const previousRun = previousConversationRun(projection.runs, run.ordinal);
+      const previousRun = previousConversationRun(projection.runs, run);
       const previousTurn =
         previousRun === undefined ? undefined : providerTurnForRun(projection, previousRun);
       if (

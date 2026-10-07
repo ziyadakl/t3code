@@ -71,17 +71,44 @@ export class CheckpointRollbackExecutionError extends Schema.TaggedError<Checkpo
 const isCheckpointRollbackExecutionError = Schema.is(CheckpointRollbackExecutionError);
 
 /**
- * The last run before `ordinal` still in the conversation: rewinding to the
- * message of run `ordinal` keeps the conversation up to its end. Undefined
- * means the rewind goes back to the thread start.
+ * Whether `run` replays a prompt of the transcript its thread was imported
+ * from (imported message ids start with the thread id). Those turns happened
+ * before any turn T3 Code ran on the thread, even when a thread that had
+ * already run turns recorded them later, with higher ordinals.
+ */
+export function isImportedTranscriptRun(
+  run: Pick<OrchestrationV2Run, "threadId" | "userMessageId">,
+): boolean {
+  return run.userMessageId.startsWith(`${run.threadId}:`);
+}
+
+/** Orders runs as their turns happened: imported transcript prompts first, then by ordinal. */
+export function compareConversationOrder(
+  left: Pick<OrchestrationV2Run, "threadId" | "userMessageId" | "ordinal">,
+  right: Pick<OrchestrationV2Run, "threadId" | "userMessageId" | "ordinal">,
+): number {
+  return (
+    Number(isImportedTranscriptRun(right)) - Number(isImportedTranscriptRun(left)) ||
+    left.ordinal - right.ordinal
+  );
+}
+
+/**
+ * The last run before `run` still in the conversation: rewinding to the
+ * message of `run` keeps the conversation up to its end. Undefined means the
+ * rewind goes back to the thread start.
  */
 export function previousConversationRun(
   runs: ReadonlyArray<OrchestrationV2Run>,
-  ordinal: number,
+  run: OrchestrationV2Run,
 ): OrchestrationV2Run | undefined {
   return runs
-    .filter((run) => run.ordinal < ordinal && run.status !== "rolled_back")
-    .toSorted((left, right) => right.ordinal - left.ordinal)[0];
+    .filter(
+      (candidate) =>
+        compareConversationOrder(candidate, run) < 0 && candidate.status !== "rolled_back",
+    )
+    .toSorted(compareConversationOrder)
+    .at(-1);
 }
 
 export interface CheckpointRollbackServiceV2Shape {
@@ -159,6 +186,15 @@ export const layer: Layer.Layer<
         readonly restoreFiles: Effect.Effect<void, unknown>;
       }) {
         const { projection, providerThread, targetOrdinal } = input;
+        // Imported runs can carry higher ordinals than turns that came after
+        // them, so "after the target" follows conversation order.
+        const targetRun = projection.runs.find((run) => run.ordinal === targetOrdinal);
+        const isAfterTarget = (ordinal: number) => {
+          const run = projection.runs.find((candidate) => candidate.ordinal === ordinal);
+          return targetRun === undefined || run === undefined
+            ? ordinal > targetOrdinal
+            : compareConversationOrder(run, targetRun) > 0;
+        };
         const failure = (reason: CheckpointRollbackExecutionError["reason"]) =>
           new CheckpointRollbackExecutionError({
             reason,
@@ -195,7 +231,7 @@ export const layer: Layer.Layer<
         // conversation too, so they must not stay visible.
         const runsToRollback = projection.runs.filter(
           (run) =>
-            run.ordinal > targetOrdinal &&
+            isAfterTarget(run.ordinal) &&
             (run.status === "completed" ||
               run.status === "interrupted" ||
               run.status === "failed" ||
@@ -257,7 +293,7 @@ export const layer: Layer.Layer<
         const staleCheckpoints = projection.checkpoints.filter(
           (candidate) =>
             candidate.appRunOrdinal !== null &&
-            candidate.appRunOrdinal > targetOrdinal &&
+            isAfterTarget(candidate.appRunOrdinal) &&
             candidate.status !== "stale",
         );
         for (const scope of projection.checkpointScopes) {
@@ -450,7 +486,7 @@ export const layer: Layer.Layer<
         projection,
         providerThread,
         providerSessionId: providerThread.providerSessionId,
-        targetOrdinal: previousConversationRun(projection.runs, run.ordinal)?.ordinal ?? 0,
+        targetOrdinal: previousConversationRun(projection.runs, run)?.ordinal ?? 0,
         checkpointId: undefined,
         restoreFiles: Effect.void,
       });

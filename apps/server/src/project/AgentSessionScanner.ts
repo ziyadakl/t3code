@@ -151,6 +151,8 @@ interface AgentSessionTranscriptMetadata {
   readonly providerInstanceId: ProviderInstanceId;
   readonly fallbackSessionId: string;
   readonly lastActiveAtMs: number;
+  /** Keep every message instead of the first prompt and the newest ones. */
+  readonly allMessages?: boolean;
 }
 
 export interface AgentSessionThreadMessage {
@@ -252,6 +254,8 @@ export class AgentSessionScanner extends Context.Service<
       readonly filePath: string;
       readonly source: AgentSessionSource;
       readonly providerInstanceId: ProviderInstanceId;
+      /** Keep every message, for matching an import against its whole transcript. */
+      readonly allMessages?: boolean;
     }) => Effect.Effect<
       Option.Option<{
         readonly thread: AgentSessionThread;
@@ -435,7 +439,7 @@ function parseAgentSessionRecords(
       firstUserMessage = message;
     }
     messages.push(message);
-    if (messages.length > MAX_IMPORTED_MESSAGES) messages.shift();
+    if (input.allMessages !== true && messages.length > MAX_IMPORTED_MESSAGES) messages.shift();
   };
 
   const hasMatchingCodexEventInTurn = (text: string) => {
@@ -1591,6 +1595,7 @@ export const make = Effect.gen(function* () {
         providerInstanceId: input.providerInstanceId,
         fallbackSessionId: path.basename(input.filePath, ".jsonl"),
         lastActiveAtMs: identity.mtimeMs ?? DateTime.toEpochMillis(yield* DateTime.now),
+        ...(input.allMessages === undefined ? {} : { allMessages: input.allMessages }),
       },
       snapshot.records,
     );

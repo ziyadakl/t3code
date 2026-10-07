@@ -153,6 +153,8 @@ const make = Effect.gen(function* () {
   const handOffAndRead = Effect.fn("AgentSessionResume.handOffAndRead")(function* (
     project: { readonly id: ProjectId; readonly workspaceRoot: string },
     session: ClaudeSessionSources.ResumableClaudeSession,
+    /** Read every message, not just the first prompt and the newest ones. */
+    allMessages = false,
   ) {
     const target = (yield* scanner.providerHomes("claudeAgent"))[0];
     if (target === undefined) {
@@ -186,6 +188,7 @@ const make = Effect.gen(function* () {
       filePath: transcriptPath,
       source: "claudeAgent",
       providerInstanceId: target.providerInstanceId,
+      ...(allMessages ? { allMessages } : {}),
     });
     if (Option.isNone(read)) {
       return yield* new AgentSessionResumeError({
@@ -256,7 +259,7 @@ const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
   }) {
     if (!(yield* importer.isUntouchedImport(input.threadId))) return 0;
-    const { read } = yield* handOffAndRead(input.project, input.session);
+    const { read } = yield* handOffAndRead(input.project, input.session, true);
     return yield* importer.appendImportedMessages({
       threadId: input.threadId,
       thread: read.thread,

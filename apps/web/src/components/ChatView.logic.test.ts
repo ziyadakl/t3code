@@ -2126,7 +2126,7 @@ describe("waitForRevertedMessage", () => {
 
   it("rejects with the projected reason when the rollback fails for good", async () => {
     const { state, projection } = projectionAtom();
-    const waiting = waitForRevertedMessage(threadRef, messageId, 1, requestId, async () => {});
+    const waiting = waitForRevertedMessage(threadRef, messageId, requestId, async () => {});
     await Promise.resolve();
     appAtomRegistry.set(state, {
       data: Option.some({
@@ -2141,10 +2141,25 @@ describe("waitForRevertedMessage", () => {
     await expect(waiting).rejects.toThrow("The provider could not roll back.");
   });
 
+  it("resolves once the message's run is rolled back, whatever its ordinal", async () => {
+    const { state, projection } = projectionAtom();
+    // A turn T3 Code ran on a chat whose three imported prompts were numbered after it.
+    const waiting = waitForRevertedMessage(threadRef, messageId, requestId, async () => {});
+    await Promise.resolve();
+    appAtomRegistry.set(state, {
+      data: Option.some({
+        ...projection,
+        runs: [{ id: RunId.make("run-2"), ordinal: 1, status: "rolled_back" }],
+      } as never),
+    });
+
+    await expect(waiting).resolves.toBeUndefined();
+  });
+
   it("ignores a failure recorded for an earlier rollback", async () => {
     vi.useFakeTimers();
     const { state, projection } = projectionAtom();
-    const waiting = waitForRevertedMessage(threadRef, messageId, 1, requestId, async () => {}, 50);
+    const waiting = waitForRevertedMessage(threadRef, messageId, requestId, async () => {}, 50);
     const settled = expect(waiting).rejects.toThrow("Timed out waiting for the thread to rewind.");
     appAtomRegistry.set(state, {
       data: Option.some({

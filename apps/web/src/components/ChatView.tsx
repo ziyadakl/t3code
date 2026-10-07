@@ -8274,7 +8274,7 @@ export default function ChatView(props: ChatViewProps) {
           );
         }
         const commandId = CommandId.make(randomUUID());
-        await waitForRevertedMessage(routeThreadRef, messageId, turnCount, commandId, async () => {
+        await waitForRevertedMessage(routeThreadRef, messageId, commandId, async () => {
           const result =
             action.type === "checkpoint"
               ? await revertThreadCheckpoint({
