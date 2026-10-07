@@ -155,16 +155,14 @@ it.effect("passes on Claude's reason when it cannot restore a message", () => {
   return Effect.gen(function* () {
     const service = yield* ThreadCodeRewindService.ThreadCodeRewindServiceV2;
     const preview = yield* service.preview({ threadId, messageId: secondMessageId });
-    const error = yield* service
-      .restore({ threadId, runId: RunId.make("run:2") })
-      .pipe(Effect.flip);
+    const restored = yield* service.restore({ threadId, runId: RunId.make("run:2") });
 
     assert.equal(preview.unavailableReason, "No file checkpoint found for this message.");
     assert.deepEqual(preview.filesChanged, []);
-    assert.equal(
-      error.message,
-      "Could not restore code: No file checkpoint found for this message.",
-    );
+    assert.deepEqual(restored, {
+      restored: false,
+      reason: "Could not restore code: No file checkpoint found for this message.",
+    });
   }).pipe(Effect.provide(layer));
 });
 
@@ -177,9 +175,9 @@ it.effect("reports files a restore left alone", () => {
     const service = yield* ThreadCodeRewindService.ThreadCodeRewindServiceV2;
     const result = yield* service.restore({ threadId, runId: RunId.make("run:2") });
 
-    assert.deepEqual(result, { skippedLinks: 2 });
+    assert.deepEqual(result, { restored: true, skippedLinks: 2 });
     assert.equal(
-      ThreadCodeRewindService.skippedFilesMessage(result.skippedLinks),
+      ThreadCodeRewindService.skippedFilesMessage(2),
       "Code restored, but 2 files were left as they are: a link made them unsafe to write.",
     );
     assert.deepEqual(requests, [{ nativeUserMessageId: "claude-user-uuid-2", dryRun: false }]);

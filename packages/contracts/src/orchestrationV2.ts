@@ -435,6 +435,18 @@ export const OrchestrationV2AppThread = Schema.Struct({
       }),
     ),
   ),
+  /**
+   * Latest rewind that finished, with what the user should know about it (for
+   * example files a code restore left alone); cleared when the next rollback starts.
+   */
+  rollbackCompletion: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        requestId: CommandId,
+        notice: Schema.optional(TrimmedNonEmptyString),
+      }),
+    ),
+  ),
   deletedAt: Schema.NullOr(Schema.DateTimeUtc),
 });
 export type OrchestrationV2AppThread = typeof OrchestrationV2AppThread.Type;
@@ -3125,6 +3137,14 @@ const OrchestrationV2InternalCommand = Schema.Union([
     threadId: ThreadId,
     requestId: CommandId,
     message: TrimmedNonEmptyString,
+  }),
+  /** Records that the rewind `requestId` finished, with an optional notice for the user. */
+  Schema.Struct({
+    type: Schema.Literal("checkpoint.rollback.complete"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    requestId: CommandId,
+    notice: Schema.optional(TrimmedNonEmptyString),
   }),
   /**
    * Follows a Stop once its provider returned: background work the settled

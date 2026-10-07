@@ -39,19 +39,28 @@ export const NO_FILE_SNAPSHOTS_MESSAGE = "Claude kept no file snapshots for this
 /** The notice for a restore that left files alone, or null when it restored all. */
 export function skippedFilesMessage(skippedLinks: number): string | null {
   if (skippedLinks === 0) return null;
-  return `Code restored, but ${skippedLinks === 1 ? "1 file was" : `${skippedLinks} files were`} left as they are: a link made them unsafe to write.`;
+  return skippedLinks === 1
+    ? "Code restored, but 1 file was left as it is: a link made it unsafe to write."
+    : `Code restored, but ${skippedLinks} files were left as they are: a link made them unsafe to write.`;
 }
+
+export type ThreadCodeRestoreResult =
+  | { readonly restored: true; readonly skippedLinks: number }
+  | { readonly restored: false; readonly reason: string };
 
 export interface ThreadCodeRewindServiceV2Shape {
   readonly preview: (input: {
     readonly threadId: ThreadId;
     readonly messageId: MessageId;
   }) => Effect.Effect<ThreadCodeRewindPreview, ThreadCodeRewindError>;
-  /** Puts files back as they were before the user message that started `runId`. */
+  /**
+   * Puts files back as they were before the user message that started `runId`.
+   * Claude refusing (no snapshot) is an answer, not an error: retrying cannot help.
+   */
   readonly restore: (input: {
     readonly threadId: ThreadId;
     readonly runId: RunId;
-  }) => Effect.Effect<{ readonly skippedLinks: number }, ThreadCodeRewindError>;
+  }) => Effect.Effect<ThreadCodeRestoreResult, ThreadCodeRewindError>;
 }
 
 export class ThreadCodeRewindServiceV2 extends Context.Service<
@@ -69,10 +78,14 @@ const projectionFields = [
 type CodeRewindProjection = ProjectionRecords<(typeof projectionFields)[number]>;
 
 /**
- * The provider turn holding the uuid of the run's user message. A retried run
- * sent it once per attempt; the first one is before any of its edits.
+ * The provider turn holding the uuid Claude keyed the run's file snapshot by
+ * (its user message). A retried run sent it once per attempt; the first one is
+ * before any of its edits. Undefined: Claude kept no snapshot for the run.
  */
-function firstUserMessageTurn(projection: CodeRewindProjection, runId: RunId) {
+export function runFileCheckpointTurn(
+  projection: Pick<CodeRewindProjection, "attempts" | "providerTurns">,
+  runId: RunId,
+) {
   const attemptIds = new Set(
     projection.attempts.filter((attempt) => attempt.runId === runId).map((attempt) => attempt.id),
   );
@@ -103,7 +116,7 @@ export const layer: Layer.Layer<
       runId: RunId,
       dryRun: boolean,
     ) {
-      const turn = firstUserMessageTurn(projection, runId);
+      const turn = runFileCheckpointTurn(projection, runId);
       const providerThread = projection.providerThreads.find(
         (candidate) => candidate.id === turn?.providerThreadId,
       );
@@ -182,12 +195,12 @@ export const layer: Layer.Layer<
         const projection = yield* projections.getThreadRecords(input.threadId, projectionFields);
         const result = yield* rewindRun(projection, input.runId, false);
         if (result === null || !result.canRewind) {
-          return yield* new ThreadCodeRewindError({
-            threadId: input.threadId,
-            detail: `Could not restore code: ${result?.error ?? NO_FILE_SNAPSHOTS_MESSAGE}`,
-          });
+          return {
+            restored: false as const,
+            reason: `Could not restore code: ${result?.error ?? NO_FILE_SNAPSHOTS_MESSAGE}`,
+          };
         }
-        return { skippedLinks: result.skippedLinks };
+        return { restored: true as const, skippedLinks: result.skippedLinks };
       }).pipe(withUserError(input.threadId));
 
     return ThreadCodeRewindServiceV2.of({ preview, restore });
