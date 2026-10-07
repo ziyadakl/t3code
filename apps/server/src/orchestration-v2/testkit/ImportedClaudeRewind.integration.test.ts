@@ -89,8 +89,8 @@ function desktopTranscript(input: {
 
 /**
  * Claude answering a code restore of an imported chat from that session's own
- * file checkpoints: a query resumed only for the call answers a dry run, then
- * a second one restores. Frame shapes are from a live dry run on a desktop
+ * file checkpoints: a query resumed only for each call answers the menu's dry
+ * run, then the restore's own dry run, then the restore. Frame shapes are from a live dry run on a desktop
  * session (CLI 2.1.280).
  */
 function codeRestoreEntries(sessionId: string, promptUuid: string) {
@@ -121,14 +121,18 @@ function codeRestoreEntries(sessionId: string, promptUuid: string) {
       frame: { type: "files.rewound", ...answer },
     },
   ];
+  const changes = {
+    canRewind: true,
+    filesChanged: ["/workspace/desktop/notes.md"],
+    insertions: 0,
+    deletions: 16,
+  };
   return [
     open("query.open:rewind-preview"),
-    ...rewind(true, {
-      canRewind: true,
-      filesChanged: ["/workspace/desktop/notes.md"],
-      insertions: 0,
-      deletions: 16,
-    }),
+    ...rewind(true, changes),
+    // The restore checks again before it touches a file.
+    open("query.open:rewind-restore-check"),
+    ...rewind(true, changes),
     open("query.open:rewind-restore"),
     ...rewind(false, { canRewind: true, skippedLinks: 0 }),
   ];

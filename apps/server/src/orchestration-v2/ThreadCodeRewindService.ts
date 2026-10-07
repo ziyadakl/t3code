@@ -29,6 +29,9 @@ export class ThreadCodeRewindError extends Schema.TaggedError<ThreadCodeRewindEr
   }
 }
 
+const NO_CODE_CHANGES_MESSAGE =
+  "Claude changed no files after this message, so there is no code to restore.";
+
 /** The notice for a restore that left files alone, or null when it restored all. */
 export function skippedFilesMessage(skippedLinks: number): string | null {
   if (skippedLinks === 0) return null;
@@ -46,8 +49,9 @@ export class ThreadCodeRewindServiceV2 extends Context.Service<
       readonly messageId: MessageId;
     }) => Effect.Effect<OrchestrationV2ThreadRewindPreview, ThreadCodeRewindError>;
     /**
-     * Puts files back as they were before the user message that started `runId`.
-     * Claude refusing (no snapshot) is an answer, not an error: retrying cannot help.
+     * Puts files back as they were before the user message that started
+     * `runId`, once a dry run shows it would change some. Claude refusing, or
+     * having nothing to restore, is an answer, not an error: retrying cannot help.
      */
     readonly restore: (input: {
       readonly threadId: ThreadId;
@@ -191,12 +195,20 @@ const make = Effect.gen(function* () {
   const restore: ThreadCodeRewindServiceV2["Service"]["restore"] = (input) =>
     Effect.gen(function* () {
       const projection = yield* readProjection(input.threadId);
+      const refused = (reason: string) => ({
+        restored: false as const,
+        reason: `Could not restore code: ${reason}`,
+      });
+      // A dry run first, so a restore that would change nothing is refused
+      // before any file is touched.
+      const dryRun = yield* rewindRun(projection, input.runId, true);
+      if (dryRun === null || !dryRun.canRewind) {
+        return refused(dryRun?.error ?? NO_FILE_SNAPSHOTS_MESSAGE);
+      }
+      if (dryRun.filesChanged.length === 0) return refused(NO_CODE_CHANGES_MESSAGE);
       const result = yield* rewindRun(projection, input.runId, false);
       if (result === null || !result.canRewind) {
-        return {
-          restored: false as const,
-          reason: `Could not restore code: ${result?.error ?? NO_FILE_SNAPSHOTS_MESSAGE}`,
-        };
+        return refused(result?.error ?? NO_FILE_SNAPSHOTS_MESSAGE);
       }
       return { restored: true as const, skippedLinks: result.skippedLinks };
     }).pipe(withRewindError(input.threadId));

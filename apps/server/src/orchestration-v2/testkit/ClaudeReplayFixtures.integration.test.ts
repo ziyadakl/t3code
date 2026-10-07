@@ -57,19 +57,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+type FilesRewound = {
+  readonly canRewind: boolean;
+  readonly filesChanged?: ReadonlyArray<string>;
+  readonly insertions?: number;
+  readonly deletions?: number;
+  readonly skippedLinks?: number;
+  readonly error?: string;
+};
+
 /**
  * The thread_rollback recording, as a Claude session with file checkpoints on
- * answers it: each prompt is echoed with its SDK uuid, and the first restore
- * after the second turn gets `restored`. Frame shapes are from a live run
- * (SDK 0.3.276, CLI 2.1.292); the recording predates checkpoints.
+ * answers it: each prompt is echoed with its SDK uuid. After the second turn,
+ * Claude answers a dry run of the second prompt with `answers.dryRun`, then a
+ * restore with `answers.restored` when there is one. Frame shapes are from a
+ * live run (SDK 0.3.276, CLI 2.1.292); the recording predates checkpoints.
  */
 function withFileCheckpoints(
   raw: ProviderReplayTranscript,
-  restored: {
-    readonly canRewind: boolean;
-    readonly skippedLinks?: number;
-    readonly error?: string;
-  },
+  answers: { readonly dryRun: FilesRewound; readonly restored?: FilesRewound },
 ): ProviderReplayTranscript {
   const sessionId = "f9415703-bf61-49e3-8155-1d3fed83f935";
   const echo = (index: number) => ({
@@ -95,17 +101,21 @@ function withFileCheckpoints(
       entries.push(echo(inits));
     }
     if (frame.type === "result" && ++results === 2) {
-      entries.push(
+      const rewind = (dryRun: boolean, answer: FilesRewound) => [
         {
-          type: "expect_outbound",
-          label: "query.rewind_files",
-          frame: { type: "query.rewind_files", userMessageId: "prompt-uuid-2", dryRun: false },
+          type: "expect_outbound" as const,
+          label: `query.rewind_files:${dryRun ? "dry-run" : "restore"}`,
+          frame: { type: "query.rewind_files", userMessageId: "prompt-uuid-2", dryRun },
         },
         {
-          type: "emit_inbound",
+          type: "emit_inbound" as const,
           label: "files.rewound",
-          frame: { type: "files.rewound", ...restored },
+          frame: { type: "files.rewound", ...answer },
         },
+      ];
+      entries.push(
+        ...rewind(true, answers.dryRun),
+        ...(answers.restored === undefined ? [] : rewind(false, answers.restored)),
       );
     }
   }
@@ -298,14 +308,14 @@ describe("Claude Agent SDK replay fixtures", () => {
   const codeRewindScenario = Effect.fn("codeRewindScenario")(function* (input: {
     readonly name: string;
     readonly choice: ThreadRewindChoice;
-    readonly restored: Parameters<typeof withFileCheckpoints>[1];
+    readonly answers: Parameters<typeof withFileCheckpoints>[1];
     readonly sendAfter: boolean;
   }) {
     const fs = yield* FileSystem.FileSystem;
     const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-rewind-code-no-git-" });
     const raw = withFileCheckpoints(
       yield* readClaudeTranscriptFixture("thread_rollback"),
-      input.restored,
+      input.answers,
     );
     const transcript = yield* ClaudeOrchestratorReplayHarness.decodeTranscript(
       materializeReplayTranscriptRuntimeInstructions(
@@ -364,7 +374,15 @@ describe("Claude Agent SDK replay fixtures", () => {
         const { projection } = yield* codeRewindScenario({
           name: "rewind-code-no-git",
           choice: "code",
-          restored: { canRewind: true, skippedLinks: 0 },
+          answers: {
+            dryRun: {
+              canRewind: true,
+              filesChanged: ["/tmp/notes.md"],
+              insertions: 1,
+              deletions: 1,
+            },
+            restored: { canRewind: true, skippedLinks: 0 },
+          },
           sendAfter: false,
         });
 
@@ -388,7 +406,10 @@ describe("Claude Agent SDK replay fixtures", () => {
       const { projection } = yield* codeRewindScenario({
         name: "rewind-code-skipped",
         choice: "code",
-        restored: { canRewind: true, skippedLinks: 1 },
+        answers: {
+          dryRun: { canRewind: true, filesChanged: ["/tmp/notes.md"], insertions: 1, deletions: 1 },
+          restored: { canRewind: true, skippedLinks: 1 },
+        },
         sendAfter: false,
       });
 
@@ -404,7 +425,10 @@ describe("Claude Agent SDK replay fixtures", () => {
       const { projection } = yield* codeRewindScenario({
         name: "rewind-code-refused",
         choice: "code",
-        restored: { canRewind: false, error: "No file checkpoint found for this message." },
+        // Claude refuses the dry run, so nothing is restored.
+        answers: {
+          dryRun: { canRewind: false, error: "No file checkpoint found for this message." },
+        },
         sendAfter: false,
       });
 
@@ -420,6 +444,29 @@ describe("Claude Agent SDK replay fixtures", () => {
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
+  it.effect("restore code refuses up front when Claude changed no files after the message", () =>
+    Effect.gen(function* () {
+      const { projection } = yield* codeRewindScenario({
+        name: "rewind-code-nothing-changed",
+        choice: "code",
+        answers: {
+          dryRun: { canRewind: true, filesChanged: [], insertions: 0, deletions: 0 },
+        },
+        sendAfter: false,
+      });
+
+      assert.deepEqual(projection.thread.rollbackFailure, {
+        requestId: projection.thread.rollbackRequestId!,
+        message:
+          "Could not restore code: Claude changed no files after this message, so there is no code to restore.",
+      });
+      assert.deepEqual(
+        projection.runs.map((run) => run.status),
+        ["completed", "completed"],
+      );
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
   it.effect(
     "restore code and conversation puts files back, then resumes Claude from before the message",
     () =>
@@ -427,7 +474,15 @@ describe("Claude Agent SDK replay fixtures", () => {
         const { result, transcript, projection } = yield* codeRewindScenario({
           name: "rewind-code-and-conversation-no-git",
           choice: "code-and-conversation",
-          restored: { canRewind: true, skippedLinks: 0 },
+          answers: {
+            dryRun: {
+              canRewind: true,
+              filesChanged: ["/tmp/notes.md"],
+              insertions: 1,
+              deletions: 1,
+            },
+            restored: { canRewind: true, skippedLinks: 0 },
+          },
           sendAfter: true,
         });
 
