@@ -885,7 +885,7 @@ it.live("a first turn sent while the mirror appends desktop messages keeps its o
   const scanner = {
     providerHomes: () =>
       Effect.succeed([{ providerInstanceId: claudeInstanceId, homePath: claudeHome }] as never),
-    readThread: () => Effect.succeed(Option.some({ thread: grown, source: rewindSource })),
+    readThread: () => Effect.succeedSome({ thread: grown, source: rewindSource }),
   };
   const importerLayer = storeBackedImporter({ scanner });
   const resumeLayer = AgentSessionResume.layer.pipe(
