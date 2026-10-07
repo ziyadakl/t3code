@@ -1,6 +1,13 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto has no generateKeyPairSync or sign.
+import * as NodeCrypto from "node:crypto";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  AuthAccessTokenType,
+  AuthEnvironmentBootstrapTokenType,
   AuthSessionId,
+  AuthStandardClientScopes,
+  AuthTokenExchangeGrantType,
   EnvironmentAuthenticatedAuth,
   EnvironmentHttpApi,
 } from "@t3tools/contracts";
@@ -277,4 +284,180 @@ it.effect("gives an allow-listed device a standard session instead of the pairin
       (environment) => Effect.promise(() => environment.dispose()),
     );
   }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+const tokenRequest = (
+  subjectToken: string,
+  headers?: Readonly<Record<string, string>>,
+  scope?: string,
+) =>
+  new Request("http://127.0.0.1/oauth/token", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded", ...headers },
+    body: new URLSearchParams({
+      grant_type: AuthTokenExchangeGrantType,
+      subject_token: subjectToken,
+      subject_token_type: AuthEnvironmentBootstrapTokenType,
+      requested_token_type: AuthAccessTokenType,
+      ...(scope ? { scope } : {}),
+    }).toString(),
+  });
+
+type ListedClient = {
+  readonly subject: string;
+  readonly method: string;
+  readonly scopes: ReadonlyArray<string>;
+  readonly client: { readonly label?: string };
+};
+
+// Runs requests against one fresh environment. `clients` lists sessions the
+// way the connected-clients screen sees them, through the dev token.
+const withEnvironment = (
+  run: (environment: {
+    readonly send: (request: Request) => Promise<Response>;
+    readonly clients: () => Promise<ReadonlyArray<ListedClient>>;
+    readonly mintPairingCode: () => Promise<string>;
+  }) => Promise<void>,
+) =>
+  Effect.gen(function* () {
+    const crypto = yield* Crypto.Crypto;
+    const unusedSecretStore = ServerSecretStore.ServerSecretStore.of({
+      get: () => Effect.succeedNone,
+      set: () => Effect.void,
+      create: () => Effect.void,
+      getOrCreateRandom: () => Effect.die("Not used by these routes."),
+      remove: () => Effect.void,
+    });
+    const requestContext = Context.make(Crypto.Crypto, crypto).pipe(
+      Context.add(ServerSecretStore.ServerSecretStore, unusedSecretStore),
+    );
+    return yield* Effect.acquireUseRelease(
+      Effect.sync(() => HttpRouter.toWebHandler(layerRoutes, { disableLogger: true })),
+      (environment) =>
+        Effect.tryPromise(() => {
+          const send = (request: Request) => environment.handler(request, requestContext);
+          const admin = { authorization: `Bearer ${DEV_TOKEN}` };
+          return run({
+            send,
+            clients: async () => {
+              const response = await send(
+                new Request("http://127.0.0.1/api/auth/clients", { headers: admin }),
+              );
+              expect(response.status).toBe(200);
+              return (await response.json()) as ReadonlyArray<ListedClient>;
+            },
+            mintPairingCode: async () => {
+              const response = await send(postJson("/api/auth/pairing-token", {}, admin));
+              expect(response.status).toBe(200);
+              return ((await response.json()) as { credential: string }).credential;
+            },
+          });
+        }),
+      (environment) => Effect.promise(() => environment.dispose()),
+    );
+  }).pipe(Effect.provide(NodeServices.layer));
+
+it.effect("pairs an allow-listed device's app with any code", () =>
+  withEnvironment(async ({ send, clients }) => {
+    const response = await send(tokenRequest("ok", { "x-test-trusted-device": "iphone" }));
+    expect(response.status).toBe(200);
+    const token = (await response.json()) as { token_type: string; scope: string };
+    expect(token.token_type).toBe("Bearer");
+    expect(token.scope.split(" ")).toEqual([...AuthStandardClientScopes]);
+
+    const trusted = (await clients()).find((c) => c.subject === "trusted-device:iphone");
+    expect(trusted?.client.label).toBe("Trusted device: iphone");
+    expect(trusted?.scopes).toEqual([...AuthStandardClientScopes]);
+  }),
+);
+
+// The stub resolves no device without its header, which is also what an empty
+// allow-list resolves to (TrustedDevices.test.ts), so this covers both.
+it.effect("refuses a made-up code from a device that is not allow-listed", () =>
+  withEnvironment(async ({ send, clients }) => {
+    const response = await send(tokenRequest("ok"));
+    expect(response.status).toBe(401);
+    expect(await response.json()).toMatchObject({ _tag: "EnvironmentAuthInvalidError" });
+    expect((await clients()).map((c) => c.subject)).not.toContainEqual(
+      expect.stringMatching(/^trusted-device:/),
+    );
+  }),
+);
+
+it.effect("pairs a device that is not allow-listed with a real code, once", () =>
+  withEnvironment(async ({ send, clients, mintPairingCode }) => {
+    const code = await mintPairingCode();
+    const first = await send(tokenRequest(code));
+    expect(first.status).toBe(200);
+    expect((await clients()).map((c) => c.subject)).not.toContainEqual(
+      expect.stringMatching(/^trusted-device:/),
+    );
+
+    const again = await send(tokenRequest(code));
+    expect(again.status).toBe(401);
+  }),
+);
+
+it.effect("leaves a real code unused when an allow-listed device pairs with it", () =>
+  withEnvironment(async ({ send, clients, mintPairingCode }) => {
+    const code = await mintPairingCode();
+    const trusted = await send(tokenRequest(code, { "x-test-trusted-device": "iphone" }));
+    expect(trusted.status).toBe(200);
+    expect((await clients()).map((c) => c.subject)).toContain("trusted-device:iphone");
+
+    const later = await send(tokenRequest(code));
+    expect(later.status).toBe(200);
+  }),
+);
+
+const signDpopProof = (url: string) => {
+  const { privateKey, publicKey } = NodeCrypto.generateKeyPairSync("ec", { namedCurve: "P-256" });
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  const header = encode({
+    typ: "dpop+jwt",
+    alg: "ES256",
+    jwk: publicKey.export({ format: "jwk" }),
+  });
+  const payload = encode({
+    htm: "POST",
+    htu: url,
+    jti: NodeCrypto.randomUUID(),
+    // The server checks iat against its real clock.
+    // @effect-diagnostics-next-line globalDate:off
+    iat: Math.floor(Date.now() / 1000),
+  });
+  const signature = NodeCrypto.sign("sha256", Buffer.from(`${header}.${payload}`), {
+    key: privateKey,
+    dsaEncoding: "ieee-p1363",
+  }).toString("base64url");
+  return `${header}.${payload}.${signature}`;
+};
+
+it.effect("binds an allow-listed device's app token to its DPoP key", () =>
+  withEnvironment(async ({ send, clients }) => {
+    const response = await send(
+      tokenRequest("ok", {
+        "x-test-trusted-device": "iphone",
+        // A web Request carries no host header, so the server sees localhost.
+        dpop: signDpopProof("http://localhost/oauth/token"),
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ token_type: "DPoP" });
+    expect(await clients()).toContainEqual(
+      expect.objectContaining({ subject: "trusted-device:iphone", method: "dpop-access-token" }),
+    );
+  }),
+);
+
+it.effect("narrows an allow-listed device's app token to the scopes it asks for", () =>
+  withEnvironment(async ({ send }) => {
+    const trusted = { "x-test-trusted-device": "iphone" };
+    const narrowed = await send(tokenRequest("ok", trusted, "orchestration:read"));
+    expect(await narrowed.json()).toMatchObject({ scope: "orchestration:read" });
+
+    const beyond = await send(tokenRequest("ok", trusted, "access:write"));
+    expect(beyond.status).toBe(400);
+    expect(await beyond.json()).toMatchObject({ reason: "scope_not_granted" });
+  }),
 );
