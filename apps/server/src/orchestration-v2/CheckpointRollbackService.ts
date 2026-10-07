@@ -147,8 +147,10 @@ export const layer: Layer.Layer<
 
     /**
      * Rewinds the provider conversation to just after run `targetOrdinal` (0:
-     * the thread start). Later runs leave the conversation and their
-     * checkpoints go stale. `restoreFiles` runs once the provider rewound.
+     * the thread start). Later runs leave the conversation and their ready
+     * checkpoints go stale: only in `scopeId` for a checkpoint rollback, in
+     * every scope for a rewind to a message. `restoreFiles` runs once the
+     * provider rewound.
      */
     const rollbackConversation = Effect.fn("orchestrationV2.checkpointRollback.conversation")(
       function* (input: {
@@ -158,6 +160,7 @@ export const layer: Layer.Layer<
         readonly providerSessionId: ProviderSessionId;
         readonly targetOrdinal: number;
         readonly checkpointId: CheckpointId | undefined;
+        readonly scopeId: CheckpointScopeId | undefined;
         readonly restoreFiles: Effect.Effect<void, unknown>;
       }) {
         const { projection, providerThread, targetOrdinal } = input;
@@ -247,14 +250,13 @@ export const layer: Layer.Layer<
         yield* input.restoreFiles;
         const staleCheckpoints = projection.checkpoints.filter(
           (candidate) =>
+            (input.scopeId === undefined || candidate.scopeId === input.scopeId) &&
             candidate.appRunOrdinal !== null &&
             isAfterTarget(candidate.appRunOrdinal) &&
-            candidate.status !== "stale",
+            candidate.status === "ready",
         );
         for (const scope of projection.checkpointScopes) {
-          const staleRefs = staleCheckpoints.filter(
-            (candidate) => candidate.scopeId === scope.id && candidate.status === "ready",
-          );
+          const staleRefs = staleCheckpoints.filter((candidate) => candidate.scopeId === scope.id);
           if (staleRefs.length > 0) {
             yield* checkpoints.deleteStaleRefs({ scope, checkpoints: staleRefs });
           }
@@ -395,6 +397,7 @@ export const layer: Layer.Layer<
         providerSessionId: providerThread.providerSessionId,
         targetOrdinal: checkpoint.appRunOrdinal ?? 0,
         checkpointId: checkpoint.id,
+        scopeId: scope.id,
         restoreFiles:
           input.restoreFiles === false
             ? Effect.void
@@ -456,6 +459,7 @@ export const layer: Layer.Layer<
           providerSessionId: providerThread.providerSessionId,
           targetOrdinal: previousConversationRun(projection.runs, run)?.ordinal ?? 0,
           checkpointId: undefined,
+          scopeId: undefined,
           restoreFiles: Effect.void,
         });
       }
