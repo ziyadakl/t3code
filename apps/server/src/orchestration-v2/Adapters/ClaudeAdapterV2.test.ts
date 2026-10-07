@@ -8692,4 +8692,21 @@ describe("ClaudeAdapterV2 rewind cursor", () => {
       );
     }).pipe(Effect.provide(NodeServices.layer)),
   );
+
+  it.effect("starts over at the thread start, or resumes where an import's start is", () =>
+    Effect.gen(function* () {
+      const resolveStart = (nativeResumeAt?: string) =>
+        ClaudeAdapterV2.resolveClaudeRollbackResumeSessionAt({
+          providerThread: { id: providerThreadId } as never,
+          target: {
+            type: "thread_start",
+            appRunOrdinal: 0,
+            ...(nativeResumeAt === undefined ? {} : { nativeResumeAt }),
+          },
+          providerThreadTurns: [],
+        });
+      assert.equal(yield* resolveStart(), null);
+      assert.equal(yield* resolveStart("reply-2"), "reply-2");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
 });

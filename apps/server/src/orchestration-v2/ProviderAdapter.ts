@@ -464,6 +464,11 @@ export type ProviderAdapterV2RollbackTarget =
       /** Absent for a rewind to a message, which needs no checkpoint. */
       readonly checkpointId?: CheckpointId;
       readonly appRunOrdinal: 0;
+      /**
+       * Claude only: an imported chat's start is where its transcript before
+       * its first recorded prompt ends, so the session resumes there.
+       */
+      readonly nativeResumeAt?: string;
     }
   | {
       readonly type: "provider_turn";

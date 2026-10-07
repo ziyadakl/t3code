@@ -16,7 +16,10 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 
-import { previousConversationRun } from "../orchestration-v2/ThreadRewindTargets.ts";
+import {
+  previousConversationRun,
+  threadStartResumeAt,
+} from "../orchestration-v2/ThreadRewindTargets.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as IdAllocator from "../orchestration-v2/IdAllocator.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
@@ -564,8 +567,8 @@ const storeBackedImporter = (input?: {
 
 /**
  * What a rewind to just before each prompt of an imported thread would use:
- * the Claude uuid the resumed session continues after (null: the thread start)
- * and the prompt uuid Claude restores files by.
+ * the Claude uuid the resumed session continues after (null: the session
+ * starts over) and the prompt uuid Claude restores files by.
  */
 const rewindPoints = Effect.fn("rewindPoints")(function* (threadId: ThreadId) {
   const store = yield* ProjectionStore.ProjectionStoreV2;
@@ -588,7 +591,9 @@ const rewindPoints = Effect.fn("rewindPoints")(function* (threadId: ThreadId) {
       return {
         prompt: message.text,
         resumeAfter:
-          previous === undefined ? null : (turnOf(previous)?.nativeTurnRef?.nativeId ?? "missing"),
+          previous === undefined
+            ? (threadStartResumeAt(records.providerTurns, turnOf(run)!.providerThreadId) ?? null)
+            : (turnOf(previous)?.nativeTurnRef?.nativeId ?? "missing"),
         restoreFilesBy: turnOf(run)?.nativeUserMessageId ?? "missing",
         hiddenWithIt: records.messages
           .filter((candidate) => candidate.runId === run.id)
@@ -1083,6 +1088,105 @@ it.effect("heals a long chat whose kept messages shifted since it was imported",
       storeBackedImporter({
         runtimes: { list: () => Effect.succeed([importRow] as never) },
         scanner: transcriptReader(longChat(130)),
+      }),
+    ),
+  ),
+);
+
+/** The desktop app writing the records of turns `from` to `to` of `contents` again, after them. */
+const withRewrittenHistory = (contents: string, from: number, to: number) => {
+  const lines = contents.split("\n");
+  // claudeTranscript writes five records per answered turn.
+  const block = lines.slice((from - 1) * 5, to * 5).map((line) => {
+    const record = JSON.parse(line) as Record<string, unknown>;
+    return JSON.stringify({ ...record, slug: "rewritten", gitBranch: "main", promptId: "again" });
+  });
+  return [...lines.slice(0, to * 5), ...block, ...lines.slice(to * 5)].join("\n");
+};
+
+it.effect("heals a chat whose transcript the desktop app wrote parts of again", () =>
+  Effect.gen(function* () {
+    const importer = yield* AgentSessionImporter.AgentSessionImporter;
+    const heal = yield* ImportedRewindHeal.ImportedRewindHeal;
+    yield* importer.importThread({
+      projectId,
+      workspaceRoot: "/workspace/project",
+      threadId: rewindThreadId,
+      thread: withoutRewindPoints(parseClaudeTranscript(longChat(3))),
+      source: rewindSource,
+    });
+
+    expect(yield* heal.run()).toBe(1);
+
+    expect(yield* rewindPoints(rewindThreadId)).toEqual([
+      {
+        prompt: "Prompt 1",
+        resumeAfter: null,
+        restoreFilesBy: "prompt-1",
+        hiddenWithIt: ["Prompt 1", "Reply 1"],
+      },
+      {
+        prompt: "Prompt 2",
+        resumeAfter: "reply-1",
+        restoreFilesBy: "prompt-2",
+        hiddenWithIt: ["Prompt 2", "Reply 2"],
+      },
+      {
+        prompt: "Prompt 3",
+        resumeAfter: "reply-2",
+        restoreFilesBy: "prompt-3",
+        hiddenWithIt: ["Prompt 3", "Reply 3"],
+      },
+    ]);
+  }).pipe(
+    Effect.provide(
+      storeBackedImporter({
+        runtimes: { list: () => Effect.succeed([importRow] as never) },
+        scanner: transcriptReader(withRewrittenHistory(longChat(3), 1, 2)),
+      }),
+    ),
+  ),
+);
+
+it.effect("heals a chat whose first message is a reply from the turns before it", () =>
+  Effect.gen(function* () {
+    const importer = yield* AgentSessionImporter.AgentSessionImporter;
+    const heal = yield* ImportedRewindHeal.ImportedRewindHeal;
+    const store = yield* ProjectionStore.ProjectionStoreV2;
+    const whole = parseClaudeTranscript(longChat(4));
+    // Imported showing Reply 2 onward.
+    yield* importer.importThread({
+      projectId,
+      workspaceRoot: "/workspace/project",
+      threadId: rewindThreadId,
+      thread: withoutRewindPoints({ ...whole, messages: whole.messages.slice(3) }),
+      source: rewindSource,
+    });
+
+    expect(yield* heal.run()).toBe(1);
+
+    expect(yield* rewindPoints(rewindThreadId)).toEqual([
+      {
+        prompt: "Prompt 3",
+        // Rewinding the first prompt shown keeps the turns before it in the session.
+        resumeAfter: "reply-2",
+        restoreFilesBy: "prompt-3",
+        hiddenWithIt: ["Prompt 3", "Reply 3"],
+      },
+      {
+        prompt: "Prompt 4",
+        resumeAfter: "reply-3",
+        restoreFilesBy: "prompt-4",
+        hiddenWithIt: ["Prompt 4", "Reply 4"],
+      },
+    ]);
+    const { messages } = yield* store.getThreadRecords(rewindThreadId, ["messages"]);
+    expect(messages.find((message) => message.text === "Reply 2")?.runId).toBeNull();
+  }).pipe(
+    Effect.provide(
+      storeBackedImporter({
+        runtimes: { list: () => Effect.succeed([importRow] as never) },
+        scanner: transcriptReader(longChat(4)),
       }),
     ),
   ),

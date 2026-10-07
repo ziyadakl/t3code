@@ -1,4 +1,9 @@
-import type { OrchestrationV2Run, RunId } from "@t3tools/contracts";
+import type {
+  OrchestrationV2ProviderTurn,
+  OrchestrationV2Run,
+  ProviderThreadId,
+  RunId,
+} from "@t3tools/contracts";
 
 import type { ProjectionRecords } from "./ProjectionStore.ts";
 
@@ -43,6 +48,21 @@ export function previousConversationRun(
     )
     .toSorted(compareConversationOrder)
     .at(-1);
+}
+
+/**
+ * Where a rewind to the thread start resumes the provider session: in a chat
+ * imported from the middle of a Claude transcript, where the transcript before
+ * its first recorded prompt ends, so that earlier context stays. Undefined:
+ * the session starts over.
+ */
+export function threadStartResumeAt(
+  providerTurns: ReadonlyArray<OrchestrationV2ProviderTurn>,
+  providerThreadId: ProviderThreadId,
+): string | undefined {
+  return providerTurns.find(
+    (turn) => turn.providerThreadId === providerThreadId && turn.nativePriorMessageId !== undefined,
+  )?.nativePriorMessageId;
 }
 
 /**

@@ -1008,6 +1008,13 @@ export const OrchestrationV2ProviderTurn = Schema.Struct({
    * restores files to their state before that message by this id.
    */
   nativeUserMessageId: Schema.optional(TrimmedNonEmptyString),
+  /**
+   * Imported Claude turns only, when the prompt is not its transcript's
+   * first: the provider's id of where the transcript before the prompt ends.
+   * A rewind to before this turn resumes there, keeping that earlier
+   * transcript, instead of starting the session over.
+   */
+  nativePriorMessageId: Schema.optional(TrimmedNonEmptyString),
   ordinal: PositiveInt,
   status: Schema.Literals([
     "pending",
