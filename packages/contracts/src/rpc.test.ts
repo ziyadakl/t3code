@@ -67,4 +67,33 @@ describe("WebSocket RPC contracts", () => {
       ),
     ).toBe(true);
   });
+
+  it("accepts a thread rewind with any of Claude Code's choices and optional instructions", () => {
+    const dispatchCommand = WsRpcGroup.requests.get(ORCHESTRATION_V2_WS_METHODS.dispatchCommand);
+    if (dispatchCommand === undefined) throw new Error("dispatchCommand is not registered");
+    const decode = Schema.decodeUnknownExit(dispatchCommand.payloadSchema);
+    const rewind = (fields: Record<string, unknown>) =>
+      decode({
+        type: "thread.rewind",
+        commandId: "rewind-1",
+        threadId: "thread-1",
+        messageId: "message-1",
+        ...fields,
+      });
+
+    for (const choice of [
+      "code-and-conversation",
+      "conversation",
+      "code",
+      "summarize-from",
+      "summarize-up-to",
+    ]) {
+      expect(Exit.isSuccess(rewind({ choice }))).toBe(true);
+    }
+    expect(
+      Exit.isSuccess(rewind({ choice: "summarize-from", instructions: "Keep the API decisions" })),
+    ).toBe(true);
+    expect(Exit.isFailure(rewind({ choice: "never-mind" }))).toBe(true);
+    expect(Exit.isFailure(rewind({}))).toBe(true);
+  });
 });

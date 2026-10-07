@@ -426,6 +426,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "runtime-request.respond":
     case "thread.user-input.dismiss":
     case "checkpoint.rollback":
+    case "thread.rewind":
     case "checkpoint.rollback.fail":
     case "thread.background-work.settle":
     case "thread.stop":
@@ -10317,6 +10318,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "checkpoint.rollback.fail":
         yield* dispatchCheckpointRollbackFail(command, events);
         break;
+      case "thread.rewind":
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "Rewind is not available on this server yet.",
+        });
       case "thread.background-work.settle":
         yield* dispatchBackgroundWorkSettle(command, events, effects);
         break;

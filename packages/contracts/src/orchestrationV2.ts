@@ -986,6 +986,11 @@ export const OrchestrationV2ProviderTurn = Schema.Struct({
   nodeId: NodeId,
   runAttemptId: Schema.NullOr(RunAttemptId),
   nativeTurnRef: Schema.NullOr(OrchestrationV2ProviderRef),
+  /**
+   * The provider's id for the user message that started this turn. Claude
+   * restores files to their state before that message by this id.
+   */
+  nativeUserMessageId: Schema.optional(TrimmedNonEmptyString),
   ordinal: PositiveInt,
   status: Schema.Literals([
     "pending",
@@ -2605,6 +2610,27 @@ export const OrchestrationV2StoredEventJson = Schema.Struct({
 });
 export type OrchestrationV2StoredEventJson = typeof OrchestrationV2StoredEventJson.Type;
 
+/**
+ * The choices of Claude Code's `/rewind` menu, in its order. Its last choice,
+ * "Never mind", changes nothing and never reaches the server.
+ */
+export const ThreadRewindChoice = Schema.Literals([
+  "code-and-conversation",
+  "conversation",
+  "code",
+  "summarize-from",
+  "summarize-up-to",
+]);
+export type ThreadRewindChoice = typeof ThreadRewindChoice.Type;
+export const THREAD_REWIND_CHOICES = ThreadRewindChoice.literals;
+
+/** Whether the rewound message's prompt goes back into the composer after `choice`. */
+export function threadRewindRestoresPrompt(choice: ThreadRewindChoice): boolean {
+  return (
+    choice === "code-and-conversation" || choice === "conversation" || choice === "summarize-from"
+  );
+}
+
 export const OrchestrationV2Command = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("thread.create"),
@@ -2975,6 +3001,20 @@ export const OrchestrationV2Command = Schema.Union([
     threadId: ThreadId,
     scopeId: CheckpointScopeId,
     checkpointId: CheckpointId,
+  }),
+  /**
+   * Claude Code style rewind to just before a sent user message. The server
+   * decides whether the choice is possible for that message and refuses
+   * otherwise; clients only offer what it allows.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.rewind"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    messageId: MessageId,
+    choice: ThreadRewindChoice,
+    /** Extra guidance for the summary; only the summarize choices use it. */
+    instructions: Schema.optional(TrimmedNonEmptyString),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.fork"),
