@@ -72,6 +72,11 @@ export interface AuthenticatedSession {
   readonly expiresAt?: DateTime.DateTime;
 }
 
+/** Binds an issued access token to a DPoP proof key; absent means Bearer. */
+export interface AccessTokenBinding {
+  readonly proofKeyThumbprint?: string;
+}
+
 const serverAuthInternalErrorContext = {
   cause: Schema.Defect(),
 };
@@ -455,9 +460,7 @@ export class EnvironmentAuth extends Context.Service<
       deviceName: string,
       requestedScopes: ReadonlyArray<AuthEnvironmentScope> | undefined,
       requestMetadata: AuthClientMetadata,
-      input?: {
-        readonly proofKeyThumbprint?: string;
-      },
+      input?: AccessTokenBinding,
     ) => Effect.Effect<
       AuthAccessTokenResult,
       ServerAuthInvalidRequestError | ServerAuthInternalError
@@ -466,9 +469,7 @@ export class EnvironmentAuth extends Context.Service<
       credential: string,
       requestedScopes: ReadonlyArray<AuthEnvironmentScope> | undefined,
       requestMetadata: AuthClientMetadata,
-      input?: {
-        readonly proofKeyThumbprint?: string;
-      },
+      input?: AccessTokenBinding,
     ) => Effect.Effect<
       AuthAccessTokenResult,
       ServerAuthInvalidCredentialError | ServerAuthInvalidRequestError | ServerAuthInternalError
@@ -798,14 +799,18 @@ export const make = Effect.gen(function* () {
     );
   };
 
+  const trustedDeviceIdentity = (deviceName: string, requestMetadata: AuthClientMetadata) => ({
+    subject: `trusted-device:${deviceName}`,
+    client: { ...requestMetadata, label: `Trusted device: ${deviceName}` },
+  });
+
   const issueTrustedDeviceBrowserSession: EnvironmentAuth["Service"]["issueTrustedDeviceBrowserSession"] =
     (deviceName, requestMetadata) =>
       sessions
         .issue({
           method: "browser-session-cookie",
-          subject: `trusted-device:${deviceName}`,
           scopes: AuthStandardClientScopes,
-          client: { ...requestMetadata, label: `Trusted device: ${deviceName}` },
+          ...trustedDeviceIdentity(deviceName, requestMetadata),
         })
         .pipe(
           Effect.mapError((cause) => new ServerAuthAuthenticatedSessionIssueError({ cause })),
@@ -823,7 +828,7 @@ export const make = Effect.gen(function* () {
 
   const toAccessTokenResult = (
     session: SessionStore.IssuedSession,
-    input: { readonly proofKeyThumbprint?: string } | undefined,
+    input: AccessTokenBinding | undefined,
   ) =>
     DateTime.now.pipe(
       Effect.map(
@@ -841,30 +846,48 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const trustedDeviceScopes: ReadonlySet<AuthEnvironmentScope> = new Set(AuthStandardClientScopes);
+  /**
+   * Issues a Bearer or DPoP access token for `subject`, granting the requested
+   * scopes (default: all of `allowedScopes`) only when each is allowed.
+   */
+  const issueAccessToken = (input: {
+    readonly subject: string;
+    readonly allowedScopes: ReadonlyArray<AuthEnvironmentScope>;
+    readonly requestedScopes: ReadonlyArray<AuthEnvironmentScope> | undefined;
+    readonly client: AuthClientMetadata;
+    readonly binding: AccessTokenBinding | undefined;
+    readonly replaceActiveForSubjectAndMethod: boolean;
+  }) =>
+    Effect.gen(function* () {
+      const grantedScopes = input.requestedScopes ?? input.allowedScopes;
+      if (!grantedScopes.every((scope) => input.allowedScopes.includes(scope))) {
+        return yield* new ServerAuthScopeNotGrantedError({});
+      }
+      const proofKeyThumbprint = input.binding?.proofKeyThumbprint;
+      const session = yield* sessions
+        .issue({
+          method: proofKeyThumbprint ? "dpop-access-token" : "bearer-access-token",
+          subject: input.subject,
+          scopes: grantedScopes,
+          ...(proofKeyThumbprint ? { proofKeyThumbprint, ttl: Duration.hours(1) } : {}),
+          replaceActiveForSubjectAndMethod: input.replaceActiveForSubjectAndMethod,
+          client: input.client,
+        })
+        .pipe(
+          Effect.mapError((cause) => new ServerAuthAuthenticatedAccessTokenIssueError({ cause })),
+        );
+      return yield* toAccessTokenResult(session, input.binding);
+    });
+
   const issueTrustedDeviceAccessToken: EnvironmentAuth["Service"]["issueTrustedDeviceAccessToken"] =
-    Effect.fn("EnvironmentAuth.issueTrustedDeviceAccessToken")(
-      function* (deviceName, requestedScopes, requestMetadata, input) {
-        const grantedScopes = requestedScopes ?? AuthStandardClientScopes;
-        if (!grantedScopes.every((scope) => trustedDeviceScopes.has(scope))) {
-          return yield* new ServerAuthScopeNotGrantedError({});
-        }
-        const session = yield* sessions
-          .issue({
-            method: input?.proofKeyThumbprint ? "dpop-access-token" : "bearer-access-token",
-            subject: `trusted-device:${deviceName}`,
-            scopes: grantedScopes,
-            ...(input?.proofKeyThumbprint
-              ? { proofKeyThumbprint: input.proofKeyThumbprint, ttl: Duration.hours(1) }
-              : {}),
-            client: { ...requestMetadata, label: `Trusted device: ${deviceName}` },
-          })
-          .pipe(
-            Effect.mapError((cause) => new ServerAuthAuthenticatedAccessTokenIssueError({ cause })),
-          );
-        return yield* toAccessTokenResult(session, input);
-      },
-    );
+    (deviceName, requestedScopes, requestMetadata, input) =>
+      issueAccessToken({
+        ...trustedDeviceIdentity(deviceName, requestMetadata),
+        allowedScopes: AuthStandardClientScopes,
+        requestedScopes,
+        binding: input,
+        replaceActiveForSubjectAndMethod: false,
+      }).pipe(Effect.withSpan("EnvironmentAuth.issueTrustedDeviceAccessToken"));
 
   type ResolvedBootstrapGrant = Pick<
     PairingGrantStore.BootstrapGrant,
@@ -874,7 +897,7 @@ export const make = Effect.gen(function* () {
   };
   const resolveBootstrapGrant = (
     credential: string,
-    input?: { readonly proofKeyThumbprint?: string },
+    input?: AccessTokenBinding,
   ): Effect.Effect<
     ResolvedBootstrapGrant,
     ServerAuthInvalidCredentialError | ServerAuthInternalError
@@ -901,38 +924,20 @@ export const make = Effect.gen(function* () {
     (credential, requestedScopes, requestMetadata, input) =>
       resolveBootstrapGrant(credential, input).pipe(
         Effect.flatMap((grant) =>
-          Effect.gen(function* () {
-            const grantedScopes = requestedScopes ?? grant.scopes;
-            if (!grantedScopes.every((scope) => grant.scopes.includes(scope))) {
-              return yield* new ServerAuthScopeNotGrantedError({});
-            }
-            return yield* sessions
-              .issue({
-                method: input?.proofKeyThumbprint ? "dpop-access-token" : "bearer-access-token",
-                subject: grant.subject,
-                scopes: grantedScopes,
-                ...(input?.proofKeyThumbprint
-                  ? {
-                      proofKeyThumbprint: input.proofKeyThumbprint,
-                      ttl: Duration.hours(1),
-                    }
-                  : {}),
-                // Desktop restarts forget the previous bearer token. Replace
-                // its session, including stale entries left by older versions.
-                replaceActiveForSubjectAndMethod: grant.method === "desktop-bootstrap",
-                client: {
-                  ...requestMetadata,
-                  ...(grant.label ? { label: grant.label } : {}),
-                },
-              })
-              .pipe(
-                Effect.mapError(
-                  (cause) => new ServerAuthAuthenticatedAccessTokenIssueError({ cause }),
-                ),
-              );
+          issueAccessToken({
+            subject: grant.subject,
+            allowedScopes: grant.scopes,
+            requestedScopes,
+            binding: input,
+            // Desktop restarts forget the previous bearer token. Replace
+            // its session, including stale entries left by older versions.
+            replaceActiveForSubjectAndMethod: grant.method === "desktop-bootstrap",
+            client: {
+              ...requestMetadata,
+              ...(grant.label ? { label: grant.label } : {}),
+            },
           }),
         ),
-        Effect.flatMap((session) => toAccessTokenResult(session, input)),
         Effect.withSpan("EnvironmentAuth.exchangeBootstrapCredentialForAccessToken"),
       );
 
