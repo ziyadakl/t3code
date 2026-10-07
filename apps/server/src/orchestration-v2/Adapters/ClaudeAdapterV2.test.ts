@@ -8457,6 +8457,171 @@ describe("ClaudeAdapterV2 query message stream", () => {
   );
 });
 
+describe("ClaudeAdapterV2 file restore", () => {
+  const makeFileRestoreAdapter = Effect.fn("makeFileRestoreAdapter")(function* (sdk: {
+    readonly opened: Array<ClaudeAdapterV2.ClaudeAgentSdkQueryOptions>;
+    readonly rewinds: Array<{ readonly userMessageId: string; readonly dryRun: boolean }>;
+  }) {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
+      prefix: "t3-claude-rewind-files-",
+    });
+    return ClaudeAdapterV2.makeClaudeAdapterV2({
+      instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+      settings: DEFAULT_CLAUDE_SETTINGS,
+      environment: {},
+      attachmentsDir,
+      fileSystem,
+      path: yield* Path.Path,
+      crypto: yield* Crypto.Crypto,
+      idAllocator: yield* IdAllocator.IdAllocatorV2,
+      queryRunner: {
+        allocateSessionId: Effect.succeed("native-thread-claude-rewind-files"),
+        open: (input) =>
+          Effect.sync(() => {
+            sdk.opened.push(input.options);
+            return {
+              messages: Stream.never,
+              offer: () => Effect.void,
+              setModel: () => Effect.void,
+              setPermissionMode: () => Effect.void,
+              interrupt: Effect.void,
+              close: Effect.void,
+              rewindFiles: (userMessageId, options) =>
+                Effect.sync(() => {
+                  sdk.rewinds.push({ userMessageId, dryRun: options.dryRun });
+                  return options.dryRun
+                    ? {
+                        canRewind: true,
+                        filesChanged: ["/workspace/notes.md"],
+                        insertions: 1,
+                        deletions: 2,
+                      }
+                    : { canRewind: true, skippedLinks: 1 };
+                }),
+            };
+          }),
+        forkSession: () => Effect.die("unused"),
+        subagentLaunchToolUseId: () => Effect.succeed(null),
+        assertComplete: Effect.void,
+      },
+    });
+  });
+
+  it.effect("previews and restores files of an idle thread through its resumed session", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sdk = { opened: [], rewinds: [] } as {
+          opened: Array<ClaudeAdapterV2.ClaudeAgentSdkQueryOptions>;
+          rewinds: Array<{ userMessageId: string; dryRun: boolean }>;
+        };
+        const adapter = yield* makeFileRestoreAdapter(sdk);
+        const threadId = ThreadId.make("thread-claude-rewind-files");
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("provider-session-claude-rewind-files"),
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+        });
+        assert.isFunction(runtime.rewindFiles);
+        const restore = (dryRun: boolean) =>
+          runtime.rewindFiles!({
+            providerThread,
+            nativeUserMessageId: "user-uuid-2",
+            dryRun,
+            modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+            runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+          });
+
+        const preview = yield* restore(true);
+        const restored = yield* restore(false);
+
+        assert.deepEqual(preview, {
+          canRewind: true,
+          filesChanged: ["/workspace/notes.md"],
+          insertions: 1,
+          deletions: 2,
+          skippedLinks: 0,
+        });
+        assert.deepEqual(restored, {
+          canRewind: true,
+          filesChanged: [],
+          insertions: 0,
+          deletions: 0,
+          skippedLinks: 1,
+        });
+        assert.deepEqual(sdk.rewinds, [
+          { userMessageId: "user-uuid-2", dryRun: true },
+          { userMessageId: "user-uuid-2", dryRun: false },
+        ]);
+        // The session's file history lives in its transcript: each restore
+        // resumes it with checkpointing on.
+        assert.isTrue(
+          sdk.opened.every(
+            (options) =>
+              options.resume === "native-thread-claude-rewind-files" &&
+              options.enableFileCheckpointing === true,
+          ),
+        );
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect(
+    "restores files through the thread's open Claude process without starting another",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const sdk = { opened: [], rewinds: [] } as {
+            opened: Array<ClaudeAdapterV2.ClaudeAgentSdkQueryOptions>;
+            rewinds: Array<{ userMessageId: string; dryRun: boolean }>;
+          };
+          const adapter = yield* makeFileRestoreAdapter(sdk);
+          const threadId = ThreadId.make("thread-claude-rewind-files-live");
+          const runtime = yield* adapter.openSession({
+            threadId,
+            providerSessionId: ProviderSessionId.make("provider-session-claude-rewind-files-live"),
+            modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+            runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+          });
+          const providerThread = yield* runtime.ensureThread({
+            threadId,
+            modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+            runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+          });
+          yield* runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId,
+              providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("attempt-claude-rewind-files-live"),
+              text: "Edit the notes.",
+              attachments: [],
+              runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+            }),
+          );
+
+          const restored = yield* runtime.rewindFiles!({
+            providerThread,
+            nativeUserMessageId: "user-uuid-1",
+            dryRun: false,
+            modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+            runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+          });
+
+          assert.isTrue(restored.canRewind);
+          assert.equal(sdk.opened.length, 1);
+          assert.deepEqual(sdk.rewinds, [{ userMessageId: "user-uuid-1", dryRun: false }]);
+        }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+      ),
+  );
+});
+
 describe("ClaudeAdapterV2 rewind cursor", () => {
   const providerThreadId = ProviderThreadId.make("provider-thread-claude-rewind-cursor");
   const turn = (ordinal: number, nativeId: string) =>

@@ -76,6 +76,7 @@ import {
   SHARED_WORKSPACE_RESTORE_MESSAGE,
 } from "./CheckpointRestoreSafety.ts";
 import { previousConversationRun } from "./CheckpointRollbackService.ts";
+import { NO_FILE_SNAPSHOTS_MESSAGE, runFileCheckpointTurn } from "./ThreadCodeRewindService.ts";
 import { CheckpointServiceV2 } from "./CheckpointService.ts";
 import { CommandPolicyV2, resolveMessageDispatchIntent } from "./CommandPolicy.ts";
 import { CommandReceiptStoreV2 } from "./CommandReceiptStore.ts";
@@ -432,6 +433,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "checkpoint.rollback":
     case "thread.rewind":
     case "checkpoint.rollback.fail":
+    case "checkpoint.rollback.complete":
     case "thread.background-work.settle":
     case "thread.stop":
     case "provider.switch":
@@ -9191,6 +9193,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...projection.thread,
           rollbackRequestId: command.commandId,
           rollbackFailure: null,
+          rollbackCompletion: null,
           updatedAt: now,
         },
       });
@@ -9269,7 +9272,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (providerThread.driver !== CLAUDE_DRIVER) {
         return yield* refuse("Rewind is only available in Claude threads.");
       }
-      if (command.choice !== "conversation") {
+      if (
+        command.choice !== "conversation" &&
+        command.choice !== "code" &&
+        command.choice !== "code-and-conversation"
+      ) {
         return yield* refuse("This rewind choice is not available yet.");
       }
       const message = projection.messages.find((candidate) => candidate.id === command.messageId);
@@ -9291,10 +9298,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ) {
         return yield* refuse("This message's turn has not finished yet.");
       }
+      if (
+        command.choice !== "conversation" &&
+        runFileCheckpointTurn(projection, run.id) === undefined
+      ) {
+        return yield* refuse(NO_FILE_SNAPSHOTS_MESSAGE);
+      }
       const previousRun = previousConversationRun(projection.runs, run);
       const previousTurn =
         previousRun === undefined ? undefined : providerTurnForRun(projection, previousRun);
       if (
+        command.choice !== "code" &&
         previousRun !== undefined &&
         (previousTurn === undefined || previousTurn.providerThreadId !== providerThread.id)
       ) {
@@ -9348,6 +9362,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...projection.thread,
           rollbackRequestId: command.commandId,
           rollbackFailure: null,
+          rollbackCompletion: null,
           updatedAt: now,
         },
       });
@@ -9400,6 +9415,46 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         payload: {
           ...thread,
           rollbackFailure: { requestId: command.requestId, message: command.message },
+          updatedAt: now,
+        },
+      });
+    });
+
+  /** Records that the current rewind finished, so clients waiting on it stop. */
+  const dispatchCheckpointRollbackComplete = (
+    command: Extract<
+      OrchestrationV2InternalCommand,
+      { readonly type: "checkpoint.rollback.complete" }
+    >,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+  ) =>
+    Effect.gen(function* () {
+      const thread = yield* projectionStore
+        .getThread(command.threadId)
+        .pipe(mapDispatchError(command));
+      if (thread.deletedAt !== null) return;
+      if (thread.rollbackRequestId !== command.requestId) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Rollback ${command.requestId} is no longer the thread's current rollback.`,
+        });
+      }
+      const now = yield* DateTime.now;
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "thread.metadata-updated",
+        threadId: command.threadId,
+        providerInstanceId: thread.providerInstanceId,
+        occurredAt: now,
+        payload: {
+          ...thread,
+          rollbackCompletion: {
+            requestId: command.requestId,
+            ...(command.notice === undefined ? {} : { notice: command.notice }),
+          },
           updatedAt: now,
         },
       });
@@ -10463,6 +10518,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "checkpoint.rollback.fail":
         yield* dispatchCheckpointRollbackFail(command, events);
+        break;
+      case "checkpoint.rollback.complete":
+        yield* dispatchCheckpointRollbackComplete(command, events);
         break;
       case "thread.rewind":
         yield* dispatchThreadRewind(command, events, effects);

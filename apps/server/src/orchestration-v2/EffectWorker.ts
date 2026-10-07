@@ -371,12 +371,49 @@ export const layerExecutor: Layer.Layer<
           case "provider-thread.rewind":
             return (
               effect.request.type === "provider-thread.rewind"
-                ? checkpointRollback.rewind({
-                    threadId: effect.threadId,
-                    providerThreadId: effect.request.providerThreadId,
-                    runId: effect.request.runId,
-                    choice: effect.request.choice,
-                  })
+                ? checkpointRollback
+                    .rewind({
+                      threadId: effect.threadId,
+                      providerThreadId: effect.request.providerThreadId,
+                      runId: effect.request.runId,
+                      choice: effect.request.choice,
+                    })
+                    .pipe(
+                      // Waiting clients learn how the rewind ended: a code
+                      // restore changes no run, so only this tells them.
+                      Effect.flatMap((outcome) =>
+                        threads
+                          .dispatch(
+                            outcome.type === "refused"
+                              ? {
+                                  type: "checkpoint.rollback.fail",
+                                  commandId: CommandId.make(`${effect.commandId}:rollback-failed`),
+                                  threadId: effect.threadId,
+                                  requestId: effect.commandId,
+                                  message: outcome.message,
+                                }
+                              : {
+                                  type: "checkpoint.rollback.complete",
+                                  commandId: CommandId.make(
+                                    `${effect.commandId}:rollback-completed`,
+                                  ),
+                                  threadId: effect.threadId,
+                                  requestId: effect.commandId,
+                                  ...(outcome.notice === undefined
+                                    ? {}
+                                    : { notice: outcome.notice }),
+                                },
+                          )
+                          .pipe(
+                            Effect.catchCause((recordCause) =>
+                              Effect.logWarning("Failed to record rewind outcome", {
+                                effectId: effect.id,
+                                cause: recordCause,
+                              }),
+                            ),
+                          ),
+                      ),
+                    )
                 : checkpointRollback.execute({
                     threadId: effect.threadId,
                     providerThreadId: effect.request.providerThreadId,

@@ -53,6 +53,15 @@ export type OrchestratorV2ScenarioStep =
       readonly threadId: ThreadId;
     }
   | {
+      /**
+       * Waits until the thread records how the rollback or rewind `requestId`
+       * ended. A code restore changes no run, so thread idleness says nothing.
+       */
+      readonly type: "await_rollback_outcome";
+      readonly threadId: ThreadId;
+      readonly requestId: CommandId;
+    }
+  | {
       readonly type: "await_run_steerable";
       readonly threadId: ThreadId;
       readonly runId: OrchestrationV2Run["id"];
@@ -380,6 +389,39 @@ export function runOrchestratorV2Scenario(
           return yield* waitForNoBackgroundWork(threadId, attemptsRemaining - 1, deadlineAt);
         });
 
+      const waitForRollbackOutcome = (
+        threadId: ThreadId,
+        requestId: CommandId,
+        attemptsRemaining = SCENARIO_WAIT_ATTEMPTS,
+        deadlineAt = scenarioWaitDeadline(),
+      ): Effect.Effect<
+        void,
+        Orchestrator.OrchestratorV2Error | OrchestratorV2ScenarioStepError,
+        never
+      > =>
+        Effect.gen(function* () {
+          const { thread } = yield* orchestrator.getThreadProjection(threadId);
+          if (
+            thread.rollbackCompletion?.requestId === requestId ||
+            thread.rollbackFailure?.requestId === requestId
+          ) {
+            return;
+          }
+          if (scenarioWaitExhausted(attemptsRemaining, deadlineAt)) {
+            return yield* new OrchestratorV2ScenarioStepError({
+              scenario: scenario.name,
+              step: `await_rollback_outcome:${threadId}:${requestId}`,
+            });
+          }
+          yield* yieldToRuntime;
+          return yield* waitForRollbackOutcome(
+            threadId,
+            requestId,
+            attemptsRemaining - 1,
+            deadlineAt,
+          );
+        });
+
       const waitForRunSteerable = (
         threadId: ThreadId,
         runId: OrchestrationV2Run["id"],
@@ -657,6 +699,9 @@ export function runOrchestratorV2Scenario(
             break;
           case "await_no_background_work":
             yield* waitForNoBackgroundWork(step.threadId);
+            break;
+          case "await_rollback_outcome":
+            yield* waitForRollbackOutcome(step.threadId, step.requestId);
             break;
           case "await_run_steerable":
             yield* waitForRunSteerable(step.threadId, step.runId);

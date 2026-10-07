@@ -136,7 +136,7 @@ function layerExecutorFor(input: {
       CheckpointRollbackService.CheckpointRollbackServiceV2,
       CheckpointRollbackService.CheckpointRollbackServiceV2.of({
         execute: () => Effect.void,
-        rewind: () => Effect.void,
+        rewind: () => Effect.succeed({ type: "completed" }),
       }),
     ),
     Layer.succeed(

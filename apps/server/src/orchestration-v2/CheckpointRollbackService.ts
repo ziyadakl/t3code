@@ -30,6 +30,7 @@ import * as ProjectStore from "./ProjectStore.ts";
 import type { ProviderAdapterV2RollbackTarget } from "./ProviderAdapter.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
+import { skippedFilesMessage, ThreadCodeRewindServiceV2 } from "./ThreadCodeRewindService.ts";
 
 export const ROLLBACK_FAILED_MESSAGE =
   "The provider could not roll back this conversation. Try again; if it keeps failing, check the provider and server logs.";
@@ -111,6 +112,14 @@ export function previousConversationRun(
     .at(-1);
 }
 
+/**
+ * How a rewind ended. `refused`: the provider declined (for example Claude kept
+ * no file snapshot) and nothing changed; retrying cannot help.
+ */
+export type ThreadRewindOutcome =
+  | { readonly type: "completed"; readonly notice?: string }
+  | { readonly type: "refused"; readonly message: string };
+
 export interface CheckpointRollbackServiceV2Shape {
   readonly execute: (input: {
     readonly threadId: ThreadId;
@@ -125,7 +134,7 @@ export interface CheckpointRollbackServiceV2Shape {
     readonly providerThreadId: ProviderThreadId;
     readonly runId: RunId;
     readonly choice: ThreadRewindChoice;
-  }) => Effect.Effect<void, CheckpointRollbackExecutionError>;
+  }) => Effect.Effect<ThreadRewindOutcome, CheckpointRollbackExecutionError>;
 }
 
 export class CheckpointRollbackServiceV2 extends Context.Service<
@@ -145,6 +154,7 @@ export const layer: Layer.Layer<
   | FileSystem.FileSystem
   | Path.Path
   | ProjectStore.ProjectStoreV2
+  | ThreadCodeRewindServiceV2
 > = Layer.effect(
   CheckpointRollbackServiceV2,
   Effect.gen(function* () {
@@ -157,6 +167,7 @@ export const layer: Layer.Layer<
     const fileSystem = yield* FileSystem.FileSystem;
     const projects = yield* ProjectStore.ProjectStoreV2;
     const path = yield* Path.Path;
+    const codeRewind = yield* ThreadCodeRewindServiceV2;
 
     const projectionFields = [
       "providerThreads",
@@ -463,7 +474,9 @@ export const layer: Layer.Layer<
         providerThread.providerSessionId === null ||
         run === undefined ||
         run.status === "rolled_back" ||
-        input.choice !== "conversation"
+        (input.choice !== "conversation" &&
+          input.choice !== "code" &&
+          input.choice !== "code-and-conversation")
       ) {
         return yield* new CheckpointRollbackExecutionError({
           reason: "rollback-target-invalid",
@@ -481,15 +494,30 @@ export const layer: Layer.Layer<
           providerThreadId: input.providerThreadId,
         });
       }
-      yield* rollbackConversation({
-        threadId: input.threadId,
-        projection,
-        providerThread,
-        providerSessionId: providerThread.providerSessionId,
-        targetOrdinal: previousConversationRun(projection.runs, run)?.ordinal ?? 0,
-        checkpointId: undefined,
-        restoreFiles: Effect.void,
-      });
+      // Files go back first, from the live session that knows the later
+      // turns; a refusal leaves the conversation as it was.
+      let notice: string | null = null;
+      if (input.choice !== "conversation") {
+        const restored = yield* codeRewind.restore({ threadId: input.threadId, runId: run.id });
+        if (!restored.restored) {
+          return { type: "refused" as const, message: restored.reason };
+        }
+        notice = skippedFilesMessage(restored.skippedLinks);
+      }
+      if (input.choice !== "code") {
+        yield* rollbackConversation({
+          threadId: input.threadId,
+          projection,
+          providerThread,
+          providerSessionId: providerThread.providerSessionId,
+          targetOrdinal: previousConversationRun(projection.runs, run)?.ordinal ?? 0,
+          checkpointId: undefined,
+          restoreFiles: Effect.void,
+        });
+      }
+      return notice === null
+        ? { type: "completed" as const }
+        : { type: "completed" as const, notice };
     });
 
     const asExecutionError =

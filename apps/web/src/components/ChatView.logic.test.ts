@@ -85,6 +85,7 @@ import {
   shouldWriteThreadErrorToCurrentServerThread,
   waitForRevertedMessage,
   prepareRevertedMessageAttachments,
+  deriveMessageRewindMenu,
 } from "./ChatView.logic";
 
 const environmentId = EnvironmentId.make("environment-local");
@@ -2153,7 +2154,29 @@ describe("waitForRevertedMessage", () => {
       } as never),
     });
 
-    await expect(waiting).resolves.toBeUndefined();
+    await expect(waiting).resolves.toBeNull();
+  });
+
+  it("resolves with the notice once a code restore finishes, though no turn was rewound", async () => {
+    const { state, projection } = projectionAtom();
+    const waiting = waitForRevertedMessage(threadRef, messageId, requestId, async () => {});
+    await Promise.resolve();
+    appAtomRegistry.set(state, {
+      data: Option.some({
+        ...projection,
+        thread: {
+          ...projection.thread,
+          rollbackCompletion: {
+            requestId,
+            notice: "Code restored, but 1 file was left as it is: a link made it unsafe to write.",
+          },
+        },
+      }),
+    });
+
+    await expect(waiting).resolves.toBe(
+      "Code restored, but 1 file was left as it is: a link made it unsafe to write.",
+    );
   });
 
   it("ignores a failure recorded for an earlier rollback", async () => {
@@ -2173,5 +2196,56 @@ describe("waitForRevertedMessage", () => {
     await vi.advanceTimersByTimeAsync(50);
     await settled;
     vi.useRealTimers();
+  });
+});
+
+describe("deriveMessageRewindMenu", () => {
+  it("offers the code choices, in Claude Code's order, when restoring would change files", () => {
+    expect(
+      deriveMessageRewindMenu({
+        preview: { filesChanged: ["/w/a.ts", "/w/b.ts"], insertions: 3, deletions: 1 },
+        error: null,
+      }),
+    ).toEqual({
+      choices: ["code-and-conversation", "conversation", "code"],
+      note: "Restoring code changes 2 files (+3 -1).",
+    });
+  });
+
+  it("hides the code choices when Claude changed no files after the message", () => {
+    expect(
+      deriveMessageRewindMenu({
+        preview: { filesChanged: [], insertions: 0, deletions: 0 },
+        error: null,
+      }),
+    ).toEqual({ choices: ["conversation"], note: null });
+  });
+
+  it("says why there is no code to restore when Claude kept no snapshots", () => {
+    expect(
+      deriveMessageRewindMenu({
+        preview: {
+          filesChanged: [],
+          insertions: 0,
+          deletions: 0,
+          unavailableReason: "Claude kept no file snapshots for this message.",
+        },
+        error: null,
+      }),
+    ).toEqual({
+      choices: ["conversation"],
+      note: "Claude kept no file snapshots for this message.",
+    });
+  });
+
+  it("offers the conversation choice while checking, and says so", () => {
+    expect(deriveMessageRewindMenu({ preview: null, error: null })).toEqual({
+      choices: ["conversation"],
+      note: "Checking for code changes...",
+    });
+    expect(deriveMessageRewindMenu({ preview: null, error: "Connection lost." })).toEqual({
+      choices: ["conversation"],
+      note: "Could not check for code changes: Connection lost.",
+    });
   });
 });

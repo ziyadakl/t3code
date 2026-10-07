@@ -56,6 +56,61 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+/**
+ * The thread_rollback recording, as a Claude session with file checkpoints on
+ * answers it: each prompt is echoed with its SDK uuid, and the first restore
+ * after the second turn gets `restored`. Frame shapes are from a live run
+ * (SDK 0.3.276, CLI 2.1.292); the recording predates checkpoints.
+ */
+function withFileCheckpoints(
+  raw: ProviderReplayTranscript,
+  restored: {
+    readonly canRewind: boolean;
+    readonly skippedLinks?: number;
+    readonly error?: string;
+  },
+): ProviderReplayTranscript {
+  const sessionId = "f9415703-bf61-49e3-8155-1d3fed83f935";
+  const echo = (index: number) => ({
+    type: "emit_inbound" as const,
+    label: `user.replay:${index}`,
+    frame: {
+      type: "user",
+      message: { role: "user", content: [{ type: "text", text: "echo" }] },
+      parent_tool_use_id: null,
+      isReplay: true,
+      uuid: `prompt-uuid-${index}`,
+      session_id: sessionId,
+    },
+  });
+  const entries: Array<ProviderReplayTranscript["entries"][number]> = [];
+  let inits = 0;
+  let results = 0;
+  for (const entry of raw.entries) {
+    entries.push(entry);
+    const frame = "frame" in entry && isRecord(entry.frame) ? entry.frame : {};
+    if (frame.type === "system" && frame.subtype === "init" && inits < 2) {
+      inits += 1;
+      entries.push(echo(inits));
+    }
+    if (frame.type === "result" && ++results === 2) {
+      entries.push(
+        {
+          type: "expect_outbound",
+          label: "query.rewind_files",
+          frame: { type: "query.rewind_files", userMessageId: "prompt-uuid-2", dryRun: false },
+        },
+        {
+          type: "emit_inbound",
+          label: "files.rewound",
+          frame: { type: "files.rewound", ...restored },
+        },
+      );
+    }
+  }
+  return { ...raw, entries } as ProviderReplayTranscript;
+}
+
 function metadataString(transcript: ProviderReplayTranscript, key: string): string {
   const value = transcript.metadata?.[key];
   if (typeof value !== "string") {
@@ -208,9 +263,14 @@ describe("Claude Agent SDK replay fixtures", () => {
             yield* refusal("unknown", MessageId.make("message:not-in-thread"), "conversation"),
             "Only a message you sent that started a turn can be rewound.",
           );
+          // This recording predates file checkpoints: Claude echoed no prompt uuid.
           assert.equal(
             yield* refusal("code", first!.id, "code"),
-            "This rewind choice is not available yet.",
+            "Claude kept no file snapshots for this message.",
+          );
+          assert.equal(
+            yield* refusal("code-and-conversation", first!.id, "code-and-conversation"),
+            "Claude kept no file snapshots for this message.",
           );
           assert.equal(yield* orchestrator.getThreadEventSequence(threadId), before);
         }).pipe(
@@ -223,6 +283,149 @@ describe("Claude Agent SDK replay fixtures", () => {
           metadataString(raw, "resumeSessionAt"),
           "3831efb6-619c-4c16-a38a-bf788040ac42",
         );
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  const codeRewindScenario = Effect.fn("codeRewindScenario")(function* (input: {
+    readonly name: string;
+    readonly choice: ThreadRewindChoice;
+    readonly restored: Parameters<typeof withFileCheckpoints>[1];
+    readonly sendAfter: boolean;
+  }) {
+    const fs = yield* FileSystem.FileSystem;
+    const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-rewind-code-no-git-" });
+    const raw = withFileCheckpoints(
+      yield* readClaudeTranscriptFixture("thread_rollback"),
+      input.restored,
+    );
+    const transcript = yield* ClaudeOrchestratorReplayHarness.decodeTranscript(
+      materializeReplayTranscriptRuntimeInstructions(
+        input.sendAfter
+          ? raw
+          : {
+              ...raw,
+              // Restore code keeps the conversation, so no third turn is sent.
+              entries: raw.entries.slice(
+                0,
+                raw.entries.findIndex((entry) => entry.type === "runtime_exit") + 1,
+              ),
+            },
+        { driver: ProviderDriverKind.make("claudeAgent"), model: CLAUDE_MODEL_SELECTION.model },
+      ),
+    );
+    const materialized = yield* materializeFixtureInput({
+      scenario: "thread_rollback",
+      fixtureInput: {
+        steps: [
+          { type: "message", text: THREAD_ROLLBACK_FIRST_PROMPT },
+          { type: "message", text: THREAD_ROLLBACK_SECOND_PROMPT },
+          { type: "rewind", targetMessageIndex: 2, choice: input.choice },
+          ...(input.sendAfter
+            ? [{ type: "message" as const, text: THREAD_ROLLBACK_AFTER_PROMPT }]
+            : []),
+        ],
+      },
+      driver: ProviderDriverKind.make("claudeAgent"),
+      modelSelection: CLAUDE_MODEL_SELECTION,
+    }).pipe(Effect.provide(IdAllocator.layer), provideDeterministicTestRuntime);
+    const scenario = {
+      name: `thread_rollback/claudeAgent:${input.name}`,
+      transcript,
+      commands: materialized.commands,
+      steps: materialized.steps,
+      projectionThreadIds: materialized.projectionThreadIds,
+      runtimePolicyOverride: { cwd },
+    };
+    const result = yield* runOrchestratorV2Scenario(scenario).pipe(
+      Effect.provide(
+        ProviderReplayHarness.layerProviderReplay(scenario, ClaudeOrchestratorReplayHarness),
+      ),
+      provideDeterministicTestRuntime,
+    );
+    const projection = result.projections.get(materialized.projectionThreadIds[0]!);
+    assert.isDefined(projection);
+    return { result, transcript, projection };
+  });
+
+  it.effect(
+    "restore code puts files back to before a message and keeps the conversation, in a folder that is not a git repo",
+    () =>
+      Effect.gen(function* () {
+        // The replay fails unless Claude is asked to restore the second prompt's uuid.
+        const { projection } = yield* codeRewindScenario({
+          name: "rewind-code-no-git",
+          choice: "code",
+          restored: { canRewind: true, skippedLinks: 0 },
+          sendAfter: false,
+        });
+
+        assert.deepEqual(
+          projection.runs.map((run) => run.status),
+          ["completed", "completed"],
+        );
+        assert.equal(
+          projection.providerTurns.find((turn) => turn.ordinal === 2)?.nativeUserMessageId,
+          "prompt-uuid-2",
+        );
+        assert.deepEqual(projection.thread.rollbackCompletion, {
+          requestId: projection.thread.rollbackRequestId!,
+        });
+        assert.isNull(projection.thread.rollbackFailure ?? null);
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.effect("restore code reports files Claude left alone", () =>
+    Effect.gen(function* () {
+      const { projection } = yield* codeRewindScenario({
+        name: "rewind-code-skipped",
+        choice: "code",
+        restored: { canRewind: true, skippedLinks: 1 },
+        sendAfter: false,
+      });
+
+      assert.deepEqual(projection.thread.rollbackCompletion, {
+        requestId: projection.thread.rollbackRequestId!,
+        notice: "Code restored, but 1 file was left as it is: a link made it unsafe to write.",
+      });
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.effect("restore code says why when Claude cannot restore, and changes nothing", () =>
+    Effect.gen(function* () {
+      const { projection } = yield* codeRewindScenario({
+        name: "rewind-code-refused",
+        choice: "code",
+        restored: { canRewind: false, error: "No file checkpoint found for this message." },
+        sendAfter: false,
+      });
+
+      assert.deepEqual(projection.thread.rollbackFailure, {
+        requestId: projection.thread.rollbackRequestId!,
+        message: "Could not restore code: No file checkpoint found for this message.",
+      });
+      assert.isNull(projection.thread.rollbackCompletion ?? null);
+      assert.deepEqual(
+        projection.runs.map((run) => run.status),
+        ["completed", "completed"],
+      );
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.effect(
+    "restore code and conversation puts files back, then resumes Claude from before the message",
+    () =>
+      Effect.gen(function* () {
+        const { result, transcript, projection } = yield* codeRewindScenario({
+          name: "rewind-code-and-conversation-no-git",
+          choice: "code-and-conversation",
+          restored: { canRewind: true, skippedLinks: 0 },
+          sendAfter: true,
+        });
+
+        assertClaudeThreadRollbackOutput(result, transcript);
+        assert.deepEqual(projection.thread.rollbackCompletion, {
+          requestId: projection.thread.rollbackRequestId!,
+        });
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 

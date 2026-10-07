@@ -34,6 +34,8 @@ export function RewindDialog(props: {
   open: boolean;
   /** The choices the server can carry out for this message. */
   choices: ReadonlyArray<ThreadRewindChoice>;
+  /** What a code restore would change, or why there is none. */
+  note?: string | null;
   onChoose: (choice: ThreadRewindChoice, instructions: string | undefined) => void;
   /** "Never mind", Escape or a click outside: closes with no change. */
   onCancel: () => void;
@@ -67,6 +69,9 @@ export function RewindDialog(props: {
               ? "Go back to before this message."
               : `${REWIND_CHOICE_LABELS[summarizeChoice]}. Your files stay as they are.`}
           </DialogDescription>
+          {summarizeChoice === null && props.note ? (
+            <p className="text-muted-foreground text-sm">{props.note}</p>
+          ) : null}
         </DialogHeader>
         <DialogPanel>
           {summarizeChoice === null ? (

@@ -435,6 +435,18 @@ export const OrchestrationV2AppThread = Schema.Struct({
       }),
     ),
   ),
+  /**
+   * Latest rewind that finished, with what the user should know about it (for
+   * example files a code restore left alone); cleared when the next rollback starts.
+   */
+  rollbackCompletion: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        requestId: CommandId,
+        notice: Schema.optional(TrimmedNonEmptyString),
+      }),
+    ),
+  ),
   deletedAt: Schema.NullOr(Schema.DateTimeUtc),
 });
 export type OrchestrationV2AppThread = typeof OrchestrationV2AppThread.Type;
@@ -3126,6 +3138,14 @@ const OrchestrationV2InternalCommand = Schema.Union([
     requestId: CommandId,
     message: TrimmedNonEmptyString,
   }),
+  /** Records that the rewind `requestId` finished, with an optional notice for the user. */
+  Schema.Struct({
+    type: Schema.Literal("checkpoint.rollback.complete"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    requestId: CommandId,
+    notice: Schema.optional(TrimmedNonEmptyString),
+  }),
   /**
    * Follows a Stop once its provider returned: background work the settled
    * thread still shows on that provider thread is no longer reported by any
@@ -3175,6 +3195,7 @@ export type OrchestrationV2ServerCommand = OrchestrationV2Command | Orchestratio
 export const ORCHESTRATION_V2_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
   getTurnDiff: "orchestration.getTurnDiff",
+  previewThreadRewind: "orchestration.previewThreadRewind",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
   searchThreads: "orchestration.searchThreads",
   getArchivedShellSnapshot: "orchestration.getArchivedShellSnapshot",
@@ -3524,6 +3545,39 @@ export class OrchestrationGetWorkflowScriptError extends Schema.TaggedError<Orch
   }
 }
 
+export const OrchestrationV2PreviewThreadRewindInput = Schema.Struct({
+  threadId: ThreadId,
+  /** A sent user message; the preview is of restoring code to just before it. */
+  messageId: MessageId,
+});
+export type OrchestrationV2PreviewThreadRewindInput =
+  typeof OrchestrationV2PreviewThreadRewindInput.Type;
+
+/** What the rewind menu's code choices would change for one message (a dry run). */
+export const OrchestrationV2ThreadRewindPreview = Schema.Struct({
+  filesChanged: Schema.Array(Schema.String),
+  insertions: NonNegativeInt,
+  deletions: NonNegativeInt,
+  /** Why code cannot be restored to before this message, for the menu to say. */
+  unavailableReason: Schema.optional(Schema.String),
+});
+export type OrchestrationV2ThreadRewindPreview = typeof OrchestrationV2ThreadRewindPreview.Type;
+
+/** The code choices show only when restoring would change a file. */
+export function threadRewindPreviewOffersCode(
+  preview: OrchestrationV2ThreadRewindPreview,
+): boolean {
+  return preview.filesChanged.length > 0;
+}
+
+export class OrchestrationPreviewThreadRewindError extends Schema.TaggedError<OrchestrationPreviewThreadRewindError>()(
+  "OrchestrationPreviewThreadRewindError",
+  {
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
 export const OrchestrationV2RpcSchemas = {
   dispatchCommand: {
     input: OrchestrationV2Command,
@@ -3532,6 +3586,10 @@ export const OrchestrationV2RpcSchemas = {
   getTurnDiff: {
     input: OrchestrationGetTurnDiffInput,
     output: OrchestrationGetTurnDiffResult,
+  },
+  previewThreadRewind: {
+    input: OrchestrationV2PreviewThreadRewindInput,
+    output: OrchestrationV2ThreadRewindPreview,
   },
   getFullThreadDiff: {
     input: OrchestrationGetFullThreadDiffInput,
