@@ -56,6 +56,7 @@ import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 import * as Orchestrator from "./Orchestrator.ts";
+import { userFacingDispatchErrorMessage } from "./UserFacingErrors.ts";
 import { ROLLBACK_FAILED_MESSAGE } from "./CheckpointRollbackService.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
@@ -671,6 +672,85 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
         requestId: newerCommandId,
         message: ROLLBACK_FAILED_MESSAGE,
       });
+    }),
+  );
+
+  it.effect("refuses a rewind during a running turn and in a Codex thread, changing nothing", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const outbox = yield* EffectOutbox.EffectOutboxV2;
+      const threadId = ThreadId.make("runtime-rewind-refusals");
+      const messageId = MessageId.make("runtime-rewind-refusals-message");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-rewind-refusals-create"),
+        threadId,
+        projectId: ProjectId.make("runtime-rewind-refusals-project"),
+        title: "Rewind refusals",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: process.cwd(),
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-rewind-refusals-message"),
+        threadId,
+        messageId,
+        text: "Start a turn.",
+        attachments: [],
+        dispatchMode: { type: "start_immediately" },
+      });
+      yield* outbox.cancelUnsettled({
+        threadId,
+        effectTypes: ["provider-turn.start"],
+        reason: "not under test",
+      });
+      const rewind = (name: string) =>
+        orchestrator
+          .dispatch({
+            type: "thread.rewind",
+            commandId: CommandId.make(`runtime-rewind-refusals-${name}`),
+            threadId,
+            messageId,
+            choice: "conversation",
+          })
+          .pipe(Effect.flip, Effect.map(userFacingDispatchErrorMessage));
+      const before = yield* orchestrator.getThreadEventSequence(threadId);
+
+      assert.equal(yield* rewind("running"), "Stop the current turn before rewinding.");
+
+      const run = (yield* orchestrator.getThreadProjection(threadId)).runs[0]!;
+      const now = yield* DateTime.now;
+      yield* eventSink.write({
+        commandId: CommandId.make("runtime-rewind-refusals-complete"),
+        events: [
+          {
+            id: EventId.make("runtime-rewind-refusals-run-completed"),
+            type: "run.updated",
+            threadId,
+            runId: run.id,
+            occurredAt: now,
+            payload: { ...run, status: "completed", completedAt: now },
+          },
+        ],
+      });
+      const settled = yield* orchestrator.getThreadEventSequence(threadId);
+      assert.equal(yield* rewind("codex"), "Rewind is only available in Claude threads.");
+      assert.equal(yield* orchestrator.getThreadEventSequence(threadId), settled);
+      assert.isAbove(settled, before);
+      assert.deepEqual(
+        (yield* outbox.listByCommandId(CommandId.make("runtime-rewind-refusals-codex"))).map(
+          (effect) => effect.request.type,
+        ),
+        [],
+      );
     }),
   );
 

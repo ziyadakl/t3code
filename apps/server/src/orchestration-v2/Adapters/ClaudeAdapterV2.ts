@@ -839,6 +839,9 @@ export function makeClaudeQueryOptions(input: {
   if (requestThinkingSummaries && extraArgs["thinking-display"] === undefined) {
     extraArgs["thinking-display"] = "summarized";
   }
+  // Claude echoes each prompt with the uuid its file checkpoint is keyed by;
+  // a rewind restores files by that uuid.
+  extraArgs["replay-user-messages"] = null;
   const threadIdentity: ClaudeAgentSdkThreadIdentity = input.resume
     ? { resume: input.nativeThreadId }
     : { sessionId: input.nativeThreadId };
@@ -869,6 +872,7 @@ export function makeClaudeQueryOptions(input: {
         ? "bypassPermissions"
         : (input.permissionMode ?? "default")),
     includePartialMessages: true,
+    enableFileCheckpointing: true,
     ...(compiledSelection.effort === undefined
       ? {}
       : {
@@ -912,7 +916,7 @@ export function makeClaudeQueryOptions(input: {
         buildRuntimeInstructions({ harness: "Claude Code" }) +
         (input.mcpServers === undefined ? "" : T3_CODE_ORCHESTRATION_INSTRUCTIONS),
     },
-    ...(Object.keys(extraArgs).length === 0 ? {} : { extraArgs }),
+    extraArgs,
   };
   const additionalDirectories = [
     ...(input.cwd === null ? [] : [input.cwd]),
@@ -1225,7 +1229,7 @@ const resolveClaudeForkUpToMessageId = Effect.fn("ClaudeAdapterV2.resolveForkUpT
   },
 );
 
-const resolveClaudeRollbackResumeSessionAt = Effect.fn(
+export const resolveClaudeRollbackResumeSessionAt = Effect.fn(
   "ClaudeAdapterV2.resolveRollbackResumeSessionAt",
 )(function* (input: ProviderAdapter.ProviderAdapterV2RollbackThreadInput) {
   switch (input.target.type) {
@@ -1256,6 +1260,12 @@ const resolveClaudeRollbackResumeSessionAt = Effect.fn(
       );
       if (providerTurnsAfterTarget.length === 0) {
         return null;
+      }
+      // A turn that ended before Claude replied (stopped, failed) recorded no
+      // assistant uuid. Its prompt carries a uuid derived from the attempt,
+      // so the session resumes just after that prompt.
+      if (target.providerTurn.runAttemptId !== null) {
+        return yield* claudePromptUuid(target.providerTurn.runAttemptId);
       }
 
       return yield* new ProviderAdapter.ProviderAdapterRollbackThreadError({
@@ -2711,6 +2721,8 @@ interface ActiveClaudeTurnContext {
   readonly input: ProviderAdapter.ProviderAdapterV2TurnInput;
   readonly nativeTurnId: string;
   nativeMessageCursor: string | null;
+  // The SDK uuid of the prompt that started this turn, from its replay echo.
+  nativeUserMessageId: string | null;
   readonly providerTurnId: OrchestrationV2ProviderTurn["id"];
   readonly providerTurnOrdinal: number;
   readonly startedAt: DateTime.Utc;
@@ -3804,6 +3816,9 @@ export function makeClaudeAdapterV2(
             nativeId: input.context.nativeMessageCursor ?? input.context.nativeTurnId,
             strength: "weak",
           },
+          ...(input.context.nativeUserMessageId === null
+            ? {}
+            : { nativeUserMessageId: input.context.nativeUserMessageId }),
           ordinal: input.context.providerTurnOrdinal,
           status: input.status,
           startedAt: input.context.startedAt,
@@ -6594,6 +6609,15 @@ export function makeClaudeAdapterV2(
         }) {
           const message = input.message;
           const context = yield* Ref.get(activeTurn);
+          // A prompt's replay echo is bookkeeping, not conversation. The
+          // first one of a prompted turn names the uuid its files are
+          // checkpointed by; nothing else reads these frames.
+          if (message.type === "user" && "isReplay" in message && message.isReplay === true) {
+            if (context?.promptUuid != null && context.nativeUserMessageId === null) {
+              context.nativeUserMessageId = message.uuid;
+            }
+            return;
+          }
           const liveQuery = yield* Ref.get(queryContext);
           if (
             context === null ||
@@ -7281,6 +7305,7 @@ export function makeClaudeAdapterV2(
               input: turnInput,
               nativeTurnId,
               nativeMessageCursor: null,
+              nativeUserMessageId: null,
               providerTurnId,
               providerTurnOrdinal,
               startedAt,
@@ -7802,7 +7827,9 @@ export function makeClaudeAdapterV2(
                 };
               }
 
-              const resumeSessionAt = yield* resolveClaudeRollbackResumeSessionAt(rollbackInput);
+              const resumeSessionAt = yield* resolveClaudeRollbackResumeSessionAt(
+                rollbackInput,
+              ).pipe(Effect.provideService(Crypto.Crypto, crypto));
               return {
                 providerThread: {
                   ...rollbackInput.providerThread,

@@ -19,6 +19,7 @@ import {
   type ProviderReplayTranscript,
   type ProviderUserInputAnswers,
   type RuntimeMode,
+  type ThreadRewindChoice,
 } from "@t3tools/contracts";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -291,6 +292,12 @@ export type OrchestratorFixtureInputStep =
       readonly checkpointSuffix: string;
     }
   | {
+      /** Rewinds to just before the user message sent by message step `targetMessageIndex`. */
+      readonly type: "rewind";
+      readonly targetMessageIndex: number;
+      readonly choice: ThreadRewindChoice;
+    }
+  | {
       /**
        * Advance the deterministic test clock, e.g. past the provider session
        * manager's idle timeout so the next message must reopen the session.
@@ -523,6 +530,7 @@ export function materializeFixtureInput(input: {
     const steps: Array<OrchestratorV2ScenarioStep> = [];
     let messageIndex = 0;
     let runIndex = 0;
+    const messageIdByIndex = new Map<number, MessageId>();
     const activeRunDispatchKeys = new Set<string>();
 
     const runIdFor = (runOrdinal: number) =>
@@ -594,18 +602,21 @@ export function materializeFixtureInput(input: {
               nextStep?.type === "approve_next_runtime_request" ||
               nextStep?.type === "answer_next_user_input_request";
             const key = `run:${runIndex}`;
+            const commandId = yield* idAllocator.allocate.command({
+              fixtureName: input.scenario,
+              commandName: `message-${messageIndex}`,
+            });
+            const messageId = yield* idAllocator.allocate.message({
+              threadId: ids.threadId,
+              ordinal: messageIndex,
+            });
+            messageIdByIndex.set(messageIndex, messageId);
             pushDispatch(
               dispatchMessageCommand({
-                commandId: yield* idAllocator.allocate.command({
-                  fixtureName: input.scenario,
-                  commandName: `message-${messageIndex}`,
-                }),
+                commandId,
                 ids,
                 modelSelection: input.modelSelection,
-                messageId: yield* idAllocator.allocate.message({
-                  threadId: ids.threadId,
-                  ordinal: messageIndex,
-                }),
+                messageId,
                 text: step.text,
                 ...(step.attachments === undefined ? {} : { attachments: step.attachments }),
               }),
@@ -922,6 +933,25 @@ export function materializeFixtureInput(input: {
             });
           }
           break;
+        case "rewind": {
+          const messageId = messageIdByIndex.get(step.targetMessageIndex);
+          if (messageId === undefined) {
+            return yield* Effect.die(
+              new Error(`rewind targets message ${step.targetMessageIndex}, which was never sent`),
+            );
+          }
+          pushDispatch({
+            type: "thread.rewind",
+            commandId: yield* idAllocator.allocate.command({
+              fixtureName: input.scenario,
+              commandName: `rewind-${step.targetMessageIndex}-${step.choice}`,
+            }),
+            threadId: ids.threadId,
+            messageId,
+            choice: step.choice,
+          });
+          break;
+        }
       }
     }
 
