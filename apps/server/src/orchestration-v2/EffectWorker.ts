@@ -368,49 +368,57 @@ export const layerExecutor: Layer.Layer<
                 ),
               );
           case "provider-thread.rollback":
-            return checkpointRollback
-              .execute({
-                threadId: effect.threadId,
-                providerThreadId: effect.request.providerThreadId,
-                checkpointId: effect.request.checkpointId,
-                scopeId: effect.request.scopeId,
-                ...(effect.request.restoreFiles === undefined
-                  ? {}
-                  : { restoreFiles: effect.request.restoreFiles }),
-              })
-              .pipe(
-                // The last failed attempt tells waiting clients it failed,
-                // instead of leaving them to time out. Clients get a fixed
-                // message; the worker logs the full cause for each attempt.
-                Effect.tapCause((cause) =>
-                  willRetry || Cause.hasInterruptsOnly(cause)
-                    ? Effect.void
-                    : threads
-                        .dispatch({
-                          type: "checkpoint.rollback.fail",
-                          commandId: CommandId.make(`${effect.commandId}:rollback-failed`),
-                          threadId: effect.threadId,
-                          requestId: effect.commandId,
-                          message: CheckpointRollbackService.ROLLBACK_FAILED_MESSAGE,
-                        })
-                        .pipe(
-                          Effect.catchCause((recordCause) =>
-                            Effect.logWarning("Failed to record rollback failure", {
-                              effectId: effect.id,
-                              cause: recordCause,
-                            }),
-                          ),
+          case "provider-thread.rewind":
+            return (
+              effect.request.type === "provider-thread.rewind"
+                ? checkpointRollback.rewind({
+                    threadId: effect.threadId,
+                    providerThreadId: effect.request.providerThreadId,
+                    runId: effect.request.runId,
+                    choice: effect.request.choice,
+                  })
+                : checkpointRollback.execute({
+                    threadId: effect.threadId,
+                    providerThreadId: effect.request.providerThreadId,
+                    checkpointId: effect.request.checkpointId,
+                    scopeId: effect.request.scopeId,
+                    ...(effect.request.restoreFiles === undefined
+                      ? {}
+                      : { restoreFiles: effect.request.restoreFiles }),
+                  })
+            ).pipe(
+              // The last failed attempt tells waiting clients it failed,
+              // instead of leaving them to time out. Clients get a fixed
+              // message; the worker logs the full cause for each attempt.
+              Effect.tapCause((cause) =>
+                willRetry || Cause.hasInterruptsOnly(cause)
+                  ? Effect.void
+                  : threads
+                      .dispatch({
+                        type: "checkpoint.rollback.fail",
+                        commandId: CommandId.make(`${effect.commandId}:rollback-failed`),
+                        threadId: effect.threadId,
+                        requestId: effect.commandId,
+                        message: CheckpointRollbackService.ROLLBACK_FAILED_MESSAGE,
+                      })
+                      .pipe(
+                        Effect.catchCause((recordCause) =>
+                          Effect.logWarning("Failed to record rollback failure", {
+                            effectId: effect.id,
+                            cause: recordCause,
+                          }),
                         ),
-                ),
-                Effect.mapError(
-                  (cause) =>
-                    new OrchestrationEffectExecutionError({
-                      effectId: effect.id,
-                      effectType: effect.request.type,
-                      cause,
-                    }),
-                ),
-              );
+                      ),
+              ),
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationEffectExecutionError({
+                    effectId: effect.id,
+                    effectType: effect.request.type,
+                    cause,
+                  }),
+              ),
+            );
           case "checkpoint.capture":
             return runFinalization
               .finalize({

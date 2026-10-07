@@ -19,10 +19,12 @@ import {
   NodeId,
   type OrchestrationV2AppThread,
   type OrchestrationV2ProviderThread,
+  type OrchestrationV2ProviderTurn,
   ProjectId,
   ProviderInstanceId,
   type ProviderApprovalDecision,
   ProviderSessionId,
+  ProviderThreadId,
   ProviderTurnId,
   RunAttemptId,
   RunId,
@@ -2218,6 +2220,61 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       };
     });
   const makeWakeHarness = makeWakeHarnessWithOptions();
+
+  it.effect("checkpoints files and records the prompt's SDK uuid on its provider turn", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeWakeHarness;
+      const attemptId = RunAttemptId.make("attempt-claude-file-checkpoint");
+      const promptUuid = yield* ClaudeAdapterV2.claudePromptUuid(attemptId);
+      yield* harness.runtime.startTurn(
+        makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId,
+          text: "Create notes.txt",
+          attachments: [],
+        }),
+      );
+      const options = harness.getOpenedOptions();
+      assert.isTrue(options?.enableFileCheckpointing);
+      assert.isTrue(Object.hasOwn(options?.extraArgs ?? {}, "replay-user-messages"));
+      assert.isNull(options?.extraArgs?.["replay-user-messages"]);
+
+      // With replay-user-messages, the CLI echoes each prompt with the uuid
+      // its file checkpoint is keyed by.
+      yield* harness.offerAndWait(
+        claudeSdkFrame({
+          type: "user",
+          isReplay: true,
+          uuid: promptUuid,
+          session_id: WAKE_NATIVE_SESSION,
+          parent_tool_use_id: null,
+          message: { role: "user", content: "Create notes.txt" },
+        }),
+      );
+      yield* Queue.offer(
+        harness.sdkMessages,
+        claudeSdkFrame({
+          ...makeResultFrame({ uuid: "file-checkpoint-result", result: "Created" }),
+          user_message_uuid: promptUuid,
+        }),
+      );
+      yield* Queue.take(harness.terminalReceipts);
+
+      const turns = harness.events.flatMap((event) =>
+        event.type === "provider_turn.updated" ? [event.providerTurn] : [],
+      );
+      assert.equal(turns.at(-1)?.status, "completed");
+      assert.equal(turns.at(-1)?.nativeUserMessageId, promptUuid);
+      // The echo is bookkeeping, not conversation: it adds no user message.
+      assert.isFalse(
+        harness.events.some(
+          (event) => event.type === "turn_item.updated" && event.turnItem.type === "user_message",
+        ),
+      );
+    }).pipe(Effect.scoped, Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+  );
 
   it.effect.each([
     { isError: false, title: "Check weather" },
@@ -8562,5 +8619,44 @@ describe("ClaudeAdapterV2 file restore", () => {
           assert.deepEqual(sdk.rewinds, [{ userMessageId: "user-uuid-1", dryRun: false }]);
         }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
       ),
+  );
+});
+
+describe("ClaudeAdapterV2 rewind cursor", () => {
+  const providerThreadId = ProviderThreadId.make("provider-thread-claude-rewind-cursor");
+  const turn = (ordinal: number, nativeId: string) =>
+    ({
+      id: ProviderTurnId.make(`provider-turn-${ordinal}`),
+      providerThreadId,
+      runAttemptId: RunAttemptId.make(`attempt-${ordinal}`),
+      nativeTurnRef: { driver: "claudeAgent", nativeId, strength: "weak" },
+      ordinal,
+      status: "completed",
+    }) as unknown as OrchestrationV2ProviderTurn;
+  const resolve = (target: OrchestrationV2ProviderTurn, turns: OrchestrationV2ProviderTurn[]) =>
+    ClaudeAdapterV2.resolveClaudeRollbackResumeSessionAt({
+      providerThread: { id: providerThreadId } as never,
+      target: { type: "provider_turn", appRunOrdinal: target.ordinal, providerTurn: target },
+      providerThreadTurns: turns,
+    });
+
+  it.effect("resumes at the turn's last assistant uuid", () =>
+    Effect.gen(function* () {
+      const target = turn(1, "assistant-uuid-1");
+      assert.equal(
+        yield* resolve(target, [target, turn(2, "assistant-uuid-2")]),
+        "assistant-uuid-1",
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("resumes after the prompt of a turn that ended before Claude replied", () =>
+    Effect.gen(function* () {
+      const target = turn(1, "turn:attempt-1");
+      assert.equal(
+        yield* resolve(target, [target, turn(2, "assistant-uuid-2")]),
+        yield* ClaudeAdapterV2.claudePromptUuid("attempt-1"),
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

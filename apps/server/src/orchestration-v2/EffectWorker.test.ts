@@ -134,7 +134,10 @@ function layerExecutorFor(input: {
     ),
     Layer.succeed(
       CheckpointRollbackService.CheckpointRollbackServiceV2,
-      CheckpointRollbackService.CheckpointRollbackServiceV2.of({ execute: () => Effect.void }),
+      CheckpointRollbackService.CheckpointRollbackServiceV2.of({
+        execute: () => Effect.void,
+        rewind: () => Effect.void,
+      }),
     ),
     Layer.succeed(
       RuntimeRequestService.RuntimeRequestServiceV2,
