@@ -656,3 +656,87 @@ it.effect("keeps rewind points current as the desktop app's transcript grows", (
     expect(yield* importer.isUntouchedImport(rewindThreadId)).toBe(true);
   }).pipe(Effect.provide(storeBackedImporter())),
 );
+
+it.effect("heals chats imported before rewind points, once, from their transcripts", () => {
+  const transcript = parseClaudeTranscript(
+    claudeTranscript([
+      { prompt: "Create notes.md", reply: "Created notes.md." },
+      { prompt: "Add a title", reply: "Added the title." },
+    ]),
+  );
+  // What the importer wrote before it kept transcript uuids.
+  const beforeRewindPoints = {
+    ...transcript,
+    messages: transcript.messages.map(
+      ({ nativeUserMessageId: _id, nativeTurnId: _turn, ...message }) => message,
+    ),
+  };
+  const nativeThreadId = ThreadId.make("thread-started-in-t3");
+  const reads: Array<string> = [];
+  return Effect.gen(function* () {
+    const importer = yield* AgentSessionImporter.AgentSessionImporter;
+    yield* importer.importThread({
+      projectId,
+      workspaceRoot: "/workspace/project",
+      threadId: rewindThreadId,
+      thread: beforeRewindPoints,
+      source: rewindSource,
+    });
+    expect(yield* rewindPoints(rewindThreadId)).toEqual([
+      { prompt: "Create notes.md", rewind: "none" },
+      { prompt: "Add a title", rewind: "none" },
+    ]);
+
+    expect(yield* importer.healImportedRewindPoints()).toBe(1);
+    expect(yield* rewindPoints(rewindThreadId)).toEqual([
+      {
+        prompt: "Create notes.md",
+        resumeAfter: null,
+        restoreFilesBy: "prompt-1",
+        hiddenWithIt: ["Create notes.md", "Created notes.md."],
+      },
+      {
+        prompt: "Add a title",
+        resumeAfter: "reply-1",
+        restoreFilesBy: "prompt-2",
+        hiddenWithIt: ["Add a title", "Added the title."],
+      },
+    ]);
+
+    const store = yield* ProjectionStore.ProjectionStoreV2;
+    const before = yield* store.getThreadRecords(rewindThreadId, ["messages", "runs"]);
+    expect(yield* importer.healImportedRewindPoints()).toBe(0);
+    const after = yield* store.getThreadRecords(rewindThreadId, ["messages", "runs"]);
+    expect(after.messages).toEqual(before.messages);
+    expect(after.runs).toEqual(before.runs);
+    // A thread started in T3 Code is never read, and a healed one is not read again.
+    expect(reads).toEqual([rewindSource.filePath]);
+  }).pipe(
+    Effect.provide(
+      storeBackedImporter({
+        runtimes: {
+          list: () =>
+            Effect.succeed([
+              {
+                threadId: nativeThreadId,
+                providerName: "claudeAgent",
+                runtimePayload: { importedTranscripts: [{ ...rewindSource, filePath: "/native" }] },
+              },
+              {
+                threadId: rewindThreadId,
+                providerName: "claudeAgent",
+                runtimePayload: { cwd: "/workspace/project", importedTranscripts: [rewindSource] },
+              },
+            ] as never),
+        },
+        scanner: {
+          readThread: (input) =>
+            Effect.sync(() => {
+              reads.push(input.filePath);
+              return Option.some({ thread: transcript, source: rewindSource });
+            }),
+        },
+      }),
+    ),
+  );
+});
