@@ -726,7 +726,21 @@ export const layerQueryRunner: Layer.Layer<
             }).pipe(
               Effect.andThen(
                 Effect.tryPromise({
-                  try: () => queryRuntime.rewindFiles(userMessageId, { dryRun: options.dryRun }),
+                  // A real restore the CLI refuses (for example "No file
+                  // checkpoint found for this message.") rejects, where a dry
+                  // run answers canRewind: false. Both answer the same way here.
+                  try: () =>
+                    queryRuntime
+                      .rewindFiles(userMessageId, { dryRun: options.dryRun })
+                      .catch((cause: unknown): RewindFilesResult => {
+                        if (
+                          cause instanceof Error &&
+                          Reflect.get(cause, "errorClass") === "control_request_failed"
+                        ) {
+                          return { canRewind: false, error: cause.message };
+                        }
+                        throw cause;
+                      }),
                   catch: (cause) => queryRunnerError(cause, "rewindFiles"),
                 }),
               ),

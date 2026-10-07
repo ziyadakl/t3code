@@ -43,6 +43,7 @@ import * as RunExecutionService from "./RunExecutionService.ts";
 import * as RunFinalizationService from "./RunFinalizationService.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
 import * as RuntimeRequestService from "./RuntimeRequestService.ts";
+import * as ThreadCodeRewindService from "./ThreadCodeRewindService.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ThreadLaunchService from "./ThreadLaunchService.ts";
 import * as ThreadLifecycleService from "./ThreadLifecycleService.ts";
@@ -178,6 +179,15 @@ const layerCheckpointRollbackServiceProvided = CheckpointRollbackService.layer.p
       layerCheckpointServiceProvided,
       layerEventSinkProvided,
       IdAllocator.layer,
+      ProjectionStore.layer,
+      layerProviderSessionManagerProvided,
+      layerRuntimePolicyProvided,
+    ),
+  ),
+);
+const layerThreadCodeRewindServiceProvided = ThreadCodeRewindService.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
       ProjectionStore.layer,
       layerProviderSessionManagerProvided,
       layerRuntimePolicyProvided,
@@ -328,6 +338,7 @@ const layerProviderRuntimeRecoveryProvided = ProviderRuntimeRecoveryService.laye
 export const layer = Layer.mergeAll(
   layerOrchestratorProvided,
   layerThreadManagementProvided,
+  layerThreadCodeRewindServiceProvided,
   layerEffectWorkerProvided,
   layerProviderSessionManagerProvided,
   layerProviderAuthServiceProvided,
