@@ -940,15 +940,22 @@ export function materializeFixtureInput(input: {
               new Error(`rewind targets message ${step.targetMessageIndex}, which was never sent`),
             );
           }
+          const commandId = yield* idAllocator.allocate.command({
+            fixtureName: input.scenario,
+            commandName: `rewind-${step.targetMessageIndex}-${step.choice}`,
+          });
           pushDispatch({
             type: "thread.rewind",
-            commandId: yield* idAllocator.allocate.command({
-              fixtureName: input.scenario,
-              commandName: `rewind-${step.targetMessageIndex}-${step.choice}`,
-            }),
+            commandId,
             threadId: ids.threadId,
             messageId,
             choice: step.choice,
+          });
+          // Dispatch returns once the rewind is accepted; Claude answers later.
+          steps.push({
+            type: "await_rollback_outcome",
+            threadId: ids.threadId,
+            requestId: commandId,
           });
           break;
         }
