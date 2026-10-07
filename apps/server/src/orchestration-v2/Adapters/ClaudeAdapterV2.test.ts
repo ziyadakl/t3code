@@ -19,10 +19,12 @@ import {
   NodeId,
   type OrchestrationV2AppThread,
   type OrchestrationV2ProviderThread,
+  type OrchestrationV2ProviderTurn,
   ProjectId,
   ProviderInstanceId,
   type ProviderApprovalDecision,
   ProviderSessionId,
+  ProviderThreadId,
   ProviderTurnId,
   RunAttemptId,
   RunId,
@@ -8397,5 +8399,44 @@ describe("ClaudeAdapterV2 query message stream", () => {
       yield* Scope.close(scope, Exit.void);
       assert.isTrue(closed);
     }),
+  );
+});
+
+describe("ClaudeAdapterV2 rewind cursor", () => {
+  const providerThreadId = ProviderThreadId.make("provider-thread-claude-rewind-cursor");
+  const turn = (ordinal: number, nativeId: string) =>
+    ({
+      id: ProviderTurnId.make(`provider-turn-${ordinal}`),
+      providerThreadId,
+      runAttemptId: RunAttemptId.make(`attempt-${ordinal}`),
+      nativeTurnRef: { driver: "claudeAgent", nativeId, strength: "weak" },
+      ordinal,
+      status: "completed",
+    }) as unknown as OrchestrationV2ProviderTurn;
+  const resolve = (target: OrchestrationV2ProviderTurn, turns: OrchestrationV2ProviderTurn[]) =>
+    ClaudeAdapterV2.resolveClaudeRollbackResumeSessionAt({
+      providerThread: { id: providerThreadId } as never,
+      target: { type: "provider_turn", appRunOrdinal: target.ordinal, providerTurn: target },
+      providerThreadTurns: turns,
+    });
+
+  it.effect("resumes at the turn's last assistant uuid", () =>
+    Effect.gen(function* () {
+      const target = turn(1, "assistant-uuid-1");
+      assert.equal(
+        yield* resolve(target, [target, turn(2, "assistant-uuid-2")]),
+        "assistant-uuid-1",
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("resumes after the prompt of a turn that ended before Claude replied", () =>
+    Effect.gen(function* () {
+      const target = turn(1, "turn:attempt-1");
+      assert.equal(
+        yield* resolve(target, [target, turn(2, "assistant-uuid-2")]),
+        yield* ClaudeAdapterV2.claudePromptUuid("attempt-1"),
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

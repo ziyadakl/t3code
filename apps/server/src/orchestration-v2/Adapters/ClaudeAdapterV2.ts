@@ -1225,7 +1225,7 @@ const resolveClaudeForkUpToMessageId = Effect.fn("ClaudeAdapterV2.resolveForkUpT
   },
 );
 
-const resolveClaudeRollbackResumeSessionAt = Effect.fn(
+export const resolveClaudeRollbackResumeSessionAt = Effect.fn(
   "ClaudeAdapterV2.resolveRollbackResumeSessionAt",
 )(function* (input: ProviderAdapter.ProviderAdapterV2RollbackThreadInput) {
   switch (input.target.type) {
@@ -1256,6 +1256,12 @@ const resolveClaudeRollbackResumeSessionAt = Effect.fn(
       );
       if (providerTurnsAfterTarget.length === 0) {
         return null;
+      }
+      // A turn that ended before Claude replied (stopped, failed) recorded no
+      // assistant uuid. Its prompt carries a uuid derived from the attempt,
+      // so the session resumes just after that prompt.
+      if (target.providerTurn.runAttemptId !== null) {
+        return yield* claudePromptUuid(target.providerTurn.runAttemptId);
       }
 
       return yield* new ProviderAdapter.ProviderAdapterRollbackThreadError({
@@ -7802,7 +7808,9 @@ export function makeClaudeAdapterV2(
                 };
               }
 
-              const resumeSessionAt = yield* resolveClaudeRollbackResumeSessionAt(rollbackInput);
+              const resumeSessionAt = yield* resolveClaudeRollbackResumeSessionAt(
+                rollbackInput,
+              ).pipe(Effect.provideService(Crypto.Crypto, crypto));
               return {
                 providerThread: {
                   ...rollbackInput.providerThread,
