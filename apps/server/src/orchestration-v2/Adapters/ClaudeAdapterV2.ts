@@ -18,6 +18,7 @@ import {
   type PermissionResult,
   type PermissionUpdate,
   type Query as ClaudeQuery,
+  type RewindFilesResult,
   type Settings as ClaudeSdkSettings,
   type SDKAssistantMessage,
   type SDKAPIRetryMessage,
@@ -333,6 +334,11 @@ export interface ClaudeAgentSdkQuerySession {
   ) => Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
   readonly interrupt: Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
   readonly close: Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
+  /** Needs the query opened with `enableFileCheckpointing`. */
+  readonly rewindFiles?: (
+    userMessageId: string,
+    options: { readonly dryRun: boolean },
+  ) => Effect.Effect<RewindFilesResult, ClaudeAgentSdkQueryRunnerError>;
 }
 
 type ClaudeQueryStreamExit = Exit.Exit<void, ClaudeAgentSdkQueryRunnerError>;
@@ -491,6 +497,20 @@ export type ClaudeAgentSdkProtocolLogEvent =
       readonly payload: {
         readonly type: "query.close";
       };
+    }
+  | {
+      readonly direction: "outgoing";
+      readonly stage: "decoded";
+      readonly payload: {
+        readonly type: "query.rewind_files";
+        readonly userMessageId: string;
+        readonly dryRun: boolean;
+      };
+    }
+  | {
+      readonly direction: "incoming";
+      readonly stage: "decoded";
+      readonly payload: { readonly type: "files.rewound" } & RewindFilesResult;
     }
   | {
       readonly direction: "outgoing";
@@ -695,6 +715,26 @@ export const layerQueryRunner: Layer.Layer<
                     type: "query.set_permission_mode",
                     mode,
                   },
+                }),
+              ),
+            ),
+          rewindFiles: (userMessageId, options) =>
+            logProtocolEvent({
+              direction: "outgoing",
+              stage: "decoded",
+              payload: { type: "query.rewind_files", userMessageId, dryRun: options.dryRun },
+            }).pipe(
+              Effect.andThen(
+                Effect.tryPromise({
+                  try: () => queryRuntime.rewindFiles(userMessageId, { dryRun: options.dryRun }),
+                  catch: (cause) => queryRunnerError(cause, "rewindFiles"),
+                }),
+              ),
+              Effect.tap((result) =>
+                logProtocolEvent({
+                  direction: "incoming",
+                  stage: "decoded",
+                  payload: { type: "files.rewound", ...result },
                 }),
               ),
             ),
@@ -7426,6 +7466,73 @@ export function makeClaudeAdapterV2(
             ),
         );
 
+        // Claude keeps a session's file history in its transcript. This
+        // thread's live process answers when there is one; otherwise a process
+        // resumed only for the restore answers and is closed again.
+        const rewindFiles = Effect.fn("ClaudeAdapterV2.rewindFiles")(
+          function* (rewindInput: ProviderAdapter.ProviderAdapterV2RewindFilesInput) {
+            const nativeThreadId = yield* getNativeThreadId(rewindInput.providerThread);
+            const rewind = (
+              session: ClaudeAgentSdkQuerySession,
+            ): Effect.Effect<
+              RewindFilesResult,
+              ProviderAdapter.ProviderAdapterProtocolError | ClaudeAgentSdkQueryRunnerError
+            > =>
+              session.rewindFiles === undefined
+                ? Effect.fail(
+                    new ProviderAdapter.ProviderAdapterProtocolError({
+                      driver: CLAUDE_PROVIDER,
+                      detail: "This Claude query cannot restore files.",
+                    }),
+                  )
+                : session.rewindFiles(rewindInput.nativeUserMessageId, {
+                    dryRun: rewindInput.dryRun,
+                  });
+            const live = yield* Ref.get(queryContext);
+            const result =
+              live !== null && live.nativeThreadId === nativeThreadId && !live.stopping
+                ? yield* rewind(live.query)
+                : yield* Effect.acquireUseRelease(
+                    queryRunner.open({
+                      threadId: input.threadId,
+                      providerSessionId: input.providerSessionId,
+                      options: {
+                        ...makeClaudeQueryOptions({
+                          modelSelection: rewindInput.modelSelection,
+                          nativeThreadId,
+                          resume: true,
+                          cwd: rewindInput.runtimePolicy.cwd,
+                          settings: adapterOptions.settings,
+                          environment: adapterOptions.environment,
+                        }),
+                        enableFileCheckpointing: true,
+                      },
+                    }),
+                    rewind,
+                    (session) => session.close.pipe(Effect.ignore),
+                  );
+            return {
+              canRewind: result.canRewind,
+              ...(result.error === undefined ? {} : { error: result.error }),
+              filesChanged: result.filesChanged ?? [],
+              insertions: result.insertions ?? 0,
+              deletions: result.deletions ?? 0,
+              skippedLinks: result.skippedLinks ?? 0,
+            } satisfies ProviderAdapter.ProviderAdapterV2RewindFilesResult;
+          },
+          (effect, rewindInput) =>
+            effect.pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProviderAdapter.ProviderAdapterRewindFilesError({
+                    driver: CLAUDE_PROVIDER,
+                    providerThreadId: rewindInput.providerThread.id,
+                    cause,
+                  }),
+              ),
+            ),
+        );
+
         const interruptTurn = Effect.fn("ClaudeAdapterV2.interruptTurn")(
           function* (turnInput: ProviderAdapter.ProviderAdapterV2InterruptInput) {
             const existing = yield* Ref.get(queryContext);
@@ -7710,6 +7817,7 @@ export function makeClaudeAdapterV2(
             }),
           steerTurn,
           interruptTurn,
+          rewindFiles,
           respondToRuntimeRequest: Effect.fn("ClaudeAdapterV2.respondToRuntimeRequest")(
             function* (requestInput) {
               const pending = (yield* Ref.get(pendingRuntimeRequests)).get(

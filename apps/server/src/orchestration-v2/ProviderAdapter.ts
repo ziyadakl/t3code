@@ -246,6 +246,19 @@ export class ProviderAdapterRollbackThreadError extends Schema.TaggedError<Provi
   }
 }
 
+export class ProviderAdapterRewindFilesError extends Schema.TaggedError<ProviderAdapterRewindFilesError>()(
+  "ProviderAdapterRewindFilesError",
+  {
+    driver: ProviderDriverKind,
+    providerThreadId: ProviderThreadId,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return `Failed to restore files of ${this.driver} provider thread ${this.providerThreadId}.`;
+  }
+}
+
 export class ProviderAdapterForkThreadError extends Schema.TaggedError<ProviderAdapterForkThreadError>()(
   "ProviderAdapterForkThreadError",
   {
@@ -363,6 +376,7 @@ export const ProviderAdapterV2Error = Schema.Union([
   ProviderAdapterReadThreadSnapshotError,
   ProviderAdapterRollbackThreadError,
   ProviderAdapterForkThreadError,
+  ProviderAdapterRewindFilesError,
   ProviderAdapterTurnStartError,
   ProviderAdapterSteerRunUnsupportedError,
   ProviderAdapterSteerRunError,
@@ -461,6 +475,28 @@ export interface ProviderAdapterV2RollbackThreadInput {
   readonly providerThread: OrchestrationV2ProviderThread;
   readonly target: ProviderAdapterV2RollbackTarget;
   readonly providerThreadTurns: ReadonlyArray<OrchestrationV2ProviderTurn>;
+}
+
+export interface ProviderAdapterV2RewindFilesInput {
+  readonly providerThread: OrchestrationV2ProviderThread;
+  /** The provider's id for the user message whose pre-turn file state is restored. */
+  readonly nativeUserMessageId: string;
+  /** Reports what a restore would change without touching any file. */
+  readonly dryRun: boolean;
+  readonly modelSelection: ModelSelection;
+  readonly runtimePolicy: ProviderAdapterV2RuntimePolicy;
+}
+
+export interface ProviderAdapterV2RewindFilesResult {
+  readonly canRewind: boolean;
+  /** Why the provider cannot restore, when `canRewind` is false. */
+  readonly error?: string;
+  /** Files a dry run would change; a real restore leaves it empty. */
+  readonly filesChanged: ReadonlyArray<string>;
+  readonly insertions: number;
+  readonly deletions: number;
+  /** Files a real restore left alone because a link made them unsafe to write. */
+  readonly skippedLinks: number;
 }
 
 export interface ProviderAdapterV2ForkThreadInput {
@@ -578,6 +614,13 @@ export interface ProviderAdapterV2SessionRuntime {
   readonly forkThread: (
     input: ProviderAdapterV2ForkThreadInput,
   ) => Effect.Effect<OrchestrationV2ProviderThread, ProviderAdapterV2Error>;
+  /**
+   * Puts files back as they were before a user message, from the provider's
+   * own file checkpoints (Claude). Absent when the provider keeps none.
+   */
+  readonly rewindFiles?: (
+    input: ProviderAdapterV2RewindFilesInput,
+  ) => Effect.Effect<ProviderAdapterV2RewindFilesResult, ProviderAdapterV2Error>;
 }
 
 export interface ProviderAdapterV2Shape {

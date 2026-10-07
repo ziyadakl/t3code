@@ -3,6 +3,7 @@ import {
   query,
   type CanUseTool,
   type PermissionResult,
+  type RewindFilesResult,
   type SDKAssistantMessage,
   type SDKMessage,
   type SDKUserMessage,
@@ -240,6 +241,14 @@ interface ClaudeSubagentFoundFrame {
   readonly toolUseId: string | null;
 }
 
+interface ClaudeQueryRewindFilesFrame {
+  readonly type: "query.rewind_files";
+  readonly userMessageId: string;
+  readonly dryRun: boolean;
+}
+
+type ClaudeFilesRewoundFrame = { readonly type: "files.rewound" } & RewindFilesResult;
+
 type ClaudeOutboundFrame =
   | ClaudeQueryOpenFrame
   | ClaudePromptOfferFrame
@@ -248,7 +257,8 @@ type ClaudeOutboundFrame =
   | ClaudeQueryInterruptFrame
   | ClaudePermissionResponseFrame
   | ClaudeSessionForkFrame
-  | ClaudeSubagentLookupFrame;
+  | ClaudeSubagentLookupFrame
+  | ClaudeQueryRewindFilesFrame;
 
 interface ClaudeQueryRunner {
   readonly open: (
@@ -748,7 +758,9 @@ function makeReplayQueryRunner(
   };
 
   // The recorded reply to a one-shot session call (fork, subagent lookup).
-  const assertNextReplyFrame = <Frame extends ClaudeSessionForkedFrame | ClaudeSubagentFoundFrame>(
+  const assertNextReplyFrame = <
+    Frame extends ClaudeSessionForkedFrame | ClaudeSubagentFoundFrame | ClaudeFilesRewoundFrame,
+  >(
     type: Frame["type"],
     isValid: (frame: object) => boolean,
   ): Frame => {
@@ -827,6 +839,33 @@ function makeReplayQueryRunner(
         interrupt: replayEffect(() => {
           assertNextOutboundFrame({ type: "query.interrupt" });
         }),
+        rewindFiles: (userMessageId, options) =>
+          Effect.try({
+            try: () => {
+              // The recording names the prompt uuid it saw; map it like echoes.
+              const entry = transcript.entries[cursor];
+              const recorded =
+                entry?.type === "expect_outbound" &&
+                typeof entry.frame === "object" &&
+                entry.frame !== null
+                  ? Reflect.get(entry.frame, "userMessageId")
+                  : undefined;
+              assertNextOutboundFrame({
+                type: "query.rewind_files",
+                userMessageId:
+                  typeof recorded === "string" && replayedPromptUuid(recorded) === userMessageId
+                    ? recorded
+                    : userMessageId,
+                dryRun: options.dryRun,
+              });
+              const { type: _type, ...result } = assertNextReplyFrame<ClaudeFilesRewoundFrame>(
+                "files.rewound",
+                (frame) => typeof Reflect.get(frame, "canRewind") === "boolean",
+              );
+              return result;
+            },
+            catch: (cause) => replayQueryRunnerError(transcript, cause),
+          }),
         close: Effect.void,
       };
     },
