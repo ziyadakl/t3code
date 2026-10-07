@@ -61,8 +61,8 @@ export function threadStartResumeAt(
   providerThreadId: ProviderThreadId,
 ): string | undefined {
   return providerTurns.find(
-    (turn) => turn.providerThreadId === providerThreadId && turn.nativePriorMessageId !== undefined,
-  )?.nativePriorMessageId;
+    (turn) => turn.providerThreadId === providerThreadId && turn.nativeResumeAt !== undefined,
+  )?.nativeResumeAt;
 }
 
 /**

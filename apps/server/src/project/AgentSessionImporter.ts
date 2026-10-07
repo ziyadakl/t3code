@@ -142,7 +142,7 @@ interface ImportedTurn {
   readonly nativeUserMessageId: string;
   readonly nativeTurnId: string;
   /** Where a rewind to before the first turn resumes, when its prompt is not the transcript's first. */
-  readonly nativePriorMessageId?: string;
+  readonly nativeResumeAt?: string;
 }
 
 /**
@@ -264,6 +264,9 @@ function placedTurns(
     index !== undefined &&
     transcript[index]?.role === "user" &&
     transcript[index].nativeUserMessageId !== undefined;
+  // Where a session resumed just after the turn of the prompt at `index` continues.
+  const resumeIdAt = (index: number) =>
+    transcript[index]!.nativeTurnId ?? transcript[index]!.nativeUserMessageId!;
   const firstPrompt = transcript.findIndex((message) => message.role === "user");
   if (!isPrompt(firstPrompt)) return [];
   const starts = placed.flatMap((entry, index) => (isPrompt(entry.transcriptIndex) ? [index] : []));
@@ -271,10 +274,7 @@ function placedTurns(
   // The transcript's turn before the first placed prompt ends where its session resumes.
   let prior = placed[starts[0]!]!.transcriptIndex! - 1;
   while (prior >= 0 && !isPrompt(prior)) prior -= 1;
-  const nativePriorMessageId =
-    prior < 0
-      ? undefined
-      : (transcript[prior]!.nativeTurnId ?? transcript[prior]!.nativeUserMessageId!);
+  const nativeResumeAt = prior < 0 ? undefined : resumeIdAt(prior);
   return starts.map((userIndex, turn) => {
     const next = starts[turn + 1];
     let end = (next === undefined ? endBefore : placed[next]!.transcriptIndex!) - 1;
@@ -284,8 +284,8 @@ function placedTurns(
       userIndex,
       lastIndex: next === undefined ? placed.length - 1 : next - 1,
       nativeUserMessageId: prompt.nativeUserMessageId!,
-      nativeTurnId: transcript[end]!.nativeTurnId ?? transcript[end]!.nativeUserMessageId!,
-      ...(turn === 0 && nativePriorMessageId !== undefined ? { nativePriorMessageId } : {}),
+      nativeTurnId: resumeIdAt(end),
+      ...(turn === 0 && nativeResumeAt !== undefined ? { nativeResumeAt } : {}),
     };
   });
 }
@@ -447,7 +447,7 @@ const make = Effect.gen(function* () {
       if (
         existingTurn?.nativeTurnRef?.nativeId === turn.nativeTurnId &&
         existingTurn.nativeUserMessageId === turn.nativeUserMessageId &&
-        existingTurn.nativePriorMessageId === turn.nativePriorMessageId
+        existingTurn.nativeResumeAt === turn.nativeResumeAt
       ) {
         continue;
       }
@@ -460,9 +460,7 @@ const make = Effect.gen(function* () {
         runAttemptId: attemptId,
         nativeTurnRef: { driver, nativeId: turn.nativeTurnId, strength: "strong" },
         nativeUserMessageId: turn.nativeUserMessageId,
-        ...(turn.nativePriorMessageId === undefined
-          ? {}
-          : { nativePriorMessageId: turn.nativePriorMessageId }),
+        ...(turn.nativeResumeAt === undefined ? {} : { nativeResumeAt: turn.nativeResumeAt }),
         ordinal: turn.providerTurnOrdinal,
         status: "completed",
         startedAt,

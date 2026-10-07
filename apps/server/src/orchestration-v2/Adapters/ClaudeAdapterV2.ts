@@ -7927,10 +7927,10 @@ export function makeClaudeAdapterV2(
               yield* closeLiveQueryForNativeThread(nativeThreadId);
               const now = yield* DateTime.now;
 
-              if (
-                rollbackInput.target.type === "thread_start" &&
-                rollbackInput.target.nativeResumeAt === undefined
-              ) {
+              const resumeSessionAt = yield* resolveClaudeRollbackResumeSessionAt(
+                rollbackInput,
+              ).pipe(Effect.provideService(Crypto.Crypto, crypto));
+              if (rollbackInput.target.type === "thread_start" && resumeSessionAt === null) {
                 const resetNativeThreadId = yield* queryRunner.allocateSessionId;
                 return {
                   providerThread: {
@@ -7956,9 +7956,6 @@ export function makeClaudeAdapterV2(
                 };
               }
 
-              const resumeSessionAt = yield* resolveClaudeRollbackResumeSessionAt(
-                rollbackInput,
-              ).pipe(Effect.provideService(Crypto.Crypto, crypto));
               return {
                 providerThread: {
                   ...rollbackInput.providerThread,

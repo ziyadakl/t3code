@@ -466,7 +466,8 @@ export type ProviderAdapterV2RollbackTarget =
       readonly appRunOrdinal: 0;
       /**
        * Claude only: an imported chat's start is where its transcript before
-       * its first recorded prompt ends, so the session resumes there.
+       * its first recorded prompt ends, so the session resumes there. Other
+       * adapters ignore it: only Claude chats are imported.
        */
       readonly nativeResumeAt?: string;
     }

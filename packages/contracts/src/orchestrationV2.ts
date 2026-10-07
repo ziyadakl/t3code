@@ -1010,11 +1010,11 @@ export const OrchestrationV2ProviderTurn = Schema.Struct({
   nativeUserMessageId: Schema.optional(TrimmedNonEmptyString),
   /**
    * Imported Claude turns only, when the prompt is not its transcript's
-   * first: the provider's id of where the transcript before the prompt ends.
-   * A rewind to before this turn resumes there, keeping that earlier
-   * transcript, instead of starting the session over.
+   * first: where the session resumes to keep the transcript before the
+   * prompt, a turn id or a user message id. A rewind to before this turn
+   * resumes there instead of starting the session over.
    */
-  nativePriorMessageId: Schema.optional(TrimmedNonEmptyString),
+  nativeResumeAt: Schema.optional(TrimmedNonEmptyString),
   ordinal: PositiveInt,
   status: Schema.Literals([
     "pending",
