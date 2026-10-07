@@ -742,7 +742,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
         ],
       });
       const settled = yield* orchestrator.getThreadEventSequence(threadId);
-      assert.equal(yield* rewind("codex"), "Rewind is only available in Claude threads.");
+      assert.equal(yield* rewind("codex"), "This provider cannot rewind to a message.");
       assert.equal(yield* orchestrator.getThreadEventSequence(threadId), settled);
       assert.isAbove(settled, before);
       assert.deepEqual(

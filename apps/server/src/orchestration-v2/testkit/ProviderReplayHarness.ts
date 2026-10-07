@@ -234,7 +234,10 @@ export function layerProviderReplay<Transcript extends ProviderReplayTranscript,
     readonly replayGate?: ProviderReplayGate;
   } = {},
 ): Layer.Layer<
-  Orchestrator.OrchestratorV2 | EffectWorker.OrchestrationEffectWorkerV2 | EventSink.EventSinkV2,
+  | Orchestrator.OrchestratorV2
+  | EffectWorker.OrchestrationEffectWorkerV2
+  | EventSink.EventSinkV2
+  | ThreadCodeRewindService.ThreadCodeRewindServiceV2,
   Error | MigrationError | PlatformError.PlatformError | SqlError
 > {
   const layerRegistry = harness.makeProviderAdapterRegistryLayer(
@@ -265,7 +268,8 @@ export function layerWithRegistry<Error>(
   | Orchestrator.OrchestratorV2
   | EffectWorker.OrchestrationEffectWorkerV2
   | EventSink.EventSinkV2
-  | ProviderSessionManager.ProviderSessionManagerV2,
+  | ProviderSessionManager.ProviderSessionManagerV2
+  | ThreadCodeRewindService.ThreadCodeRewindServiceV2,
   Error | MigrationError | PlatformError.PlatformError | SqlError
 > {
   const layerServerConfig = Layer.effect(
@@ -386,22 +390,6 @@ export function layerWithRegistry<Error>(
   const layerRuntimeRequestServiceProvided = RuntimeRequestService.layer.pipe(
     Layer.provide(Layer.merge(layerStores, layerProviderSessionManagerProvided)),
   );
-  const layerThreadCodeRewindServiceProvided = ThreadCodeRewindService.layer.pipe(
-    Layer.provide(Layer.mergeAll(layerStores, layerProviderSessionManagerProvided, layerRuntime)),
-  );
-  const layerCheckpointRollbackServiceProvided = CheckpointRollbackService.layer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        layerCheckpointServiceProvided,
-        layerEventSinkProvided,
-        IdAllocator.layer,
-        layerStores,
-        layerProviderSessionManagerProvided,
-        layerRuntime,
-        layerThreadCodeRewindServiceProvided,
-      ),
-    ),
-  );
   const layerCheckpointCaptureServiceProvided = CheckpointCaptureService.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -435,6 +423,29 @@ export function layerWithRegistry<Error>(
         layerProviderSwitchServiceProvided,
         layerRunExecutionServiceProvided,
         ThreadForkService.layer,
+      ),
+    ),
+  );
+  const layerThreadCodeRewindServiceProvided = ThreadCodeRewindService.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        layerStores,
+        layerProviderSessionManagerProvided,
+        layerRuntime,
+        layerOrchestratorProvided,
+      ),
+    ),
+  );
+  const layerCheckpointRollbackServiceProvided = CheckpointRollbackService.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        layerCheckpointServiceProvided,
+        layerEventSinkProvided,
+        IdAllocator.layer,
+        layerStores,
+        layerProviderSessionManagerProvided,
+        layerRuntime,
+        layerThreadCodeRewindServiceProvided,
       ),
     ),
   );
@@ -483,6 +494,7 @@ export function layerWithRegistry<Error>(
   const layerReplayRuntime = Layer.mergeAll(
     layerOrchestratorProvided,
     layerProviderSessionManagerProvided,
+    layerThreadCodeRewindServiceProvided,
     layerEffectWorkerProvided,
     layerEventSinkProvided,
     layerContinuationWorkerProvided,

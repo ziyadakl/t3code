@@ -207,6 +207,11 @@ export const OrchestrationV2ThreadCapabilities = Schema.Struct({
   canForkFromTurn: Schema.Boolean,
   canForkFromSubagentThread: Schema.Boolean,
   exposesNativeThreadId: Schema.Boolean,
+  /**
+   * Claude Code style rewind (`thread.rewind`) to any sent message, from the
+   * provider's own conversation and file checkpoints. Absent means no.
+   */
+  canRewindToMessage: Schema.optional(Schema.Boolean),
 });
 export type OrchestrationV2ThreadCapabilities = typeof OrchestrationV2ThreadCapabilities.Type;
 
@@ -3137,6 +3142,16 @@ const OrchestrationV2InternalCommand = Schema.Union([
     threadId: ThreadId,
     requestId: CommandId,
     message: TrimmedNonEmptyString,
+  }),
+  /**
+   * Opens a session record for an imported chat that holds only its native
+   * history, as its first turn would, so the provider can answer for it (for
+   * example a code restore preview). A no-op once the chat has one.
+   */
+  Schema.Struct({
+    type: Schema.Literal("provider-thread.imported-session.bind"),
+    commandId: CommandId,
+    threadId: ThreadId,
   }),
   /** Records that the rewind `requestId` finished, with an optional notice for the user. */
   Schema.Struct({

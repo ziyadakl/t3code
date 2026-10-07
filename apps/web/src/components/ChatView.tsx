@@ -1532,8 +1532,6 @@ function releaseChatTimelineAnchor<T extends { readonly messageId: MessageId | n
 /** Runs with a workspace preparation retry in flight, across ChatView instances. */
 const retryingWorkspacePreparationRunIds = new Set<RunId>();
 
-const CLAUDE_DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
-
 /** A git checkpoint rollback, or a Claude Code style rewind choice. */
 type RevertAction =
   | { readonly type: "checkpoint"; readonly restoreFiles: boolean }
@@ -3251,8 +3249,8 @@ export default function ChatView(props: ChatViewProps) {
   const supportsConversationRollback =
     conversationProviderStatus !== null &&
     conversationProviderStatus.supportsConversationRollback !== false;
-  // Claude threads get Claude Code's rewind menu on every sent message.
-  const supportsMessageRewind = conversationProviderStatus?.driver === CLAUDE_DRIVER_KIND;
+  // Providers that report it (Claude) get Claude Code's rewind menu on every sent message.
+  const supportsMessageRewind = conversationProviderStatus?.supportsMessageRewind === true;
   const phase = derivePhase(activeRuntime);
   const pendingRequests = useMemo(
     () =>

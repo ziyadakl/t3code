@@ -21,6 +21,7 @@ import { ClaudeOrchestratorReplayHarness } from "../Adapters/ClaudeAdapterV2.tes
 import * as EventSink from "../EventSink.ts";
 import * as IdAllocator from "../IdAllocator.ts";
 import * as Orchestrator from "../Orchestrator.ts";
+import * as ThreadCodeRewindService from "../ThreadCodeRewindService.ts";
 import { provideDeterministicTestRuntime } from "./DeterministicRuntime.ts";
 import { claudeTurnRunInT3Code } from "./ImportedThreadFixtures.ts";
 import {
@@ -87,6 +88,53 @@ function desktopTranscript(input: {
 }
 
 /**
+ * Claude answering a code restore of an imported chat from that session's own
+ * file checkpoints: a query resumed only for the call answers a dry run, then
+ * a second one restores. Frame shapes are from a live dry run on a desktop
+ * session (CLI 2.1.280).
+ */
+function codeRestoreEntries(sessionId: string, promptUuid: string) {
+  const open = (label: string) => ({
+    type: "expect_outbound" as const,
+    label,
+    frame: {
+      type: "query.open",
+      options: {
+        model: "claude-sonnet-4-6",
+        tools: { type: "preset", preset: "claude_code" },
+        // Opened for the call alone, with no prompt and no tools run.
+        permissionMode: "default",
+        resume: sessionId,
+        settings: { showThinkingSummaries: true },
+      },
+    },
+  });
+  const rewind = (dryRun: boolean, answer: Record<string, unknown>) => [
+    {
+      type: "expect_outbound" as const,
+      label: `query.rewind_files:${dryRun ? "dry-run" : "restore"}`,
+      frame: { type: "query.rewind_files", userMessageId: promptUuid, dryRun },
+    },
+    {
+      type: "emit_inbound" as const,
+      label: "files.rewound",
+      frame: { type: "files.rewound", ...answer },
+    },
+  ];
+  return [
+    open("query.open:rewind-preview"),
+    ...rewind(true, {
+      canRewind: true,
+      filesChanged: ["/workspace/desktop/notes.md"],
+      insertions: 0,
+      deletions: 16,
+    }),
+    open("query.open:rewind-restore"),
+    ...rewind(false, { canRewind: true, skippedLinks: 0 }),
+  ];
+}
+
+/**
  * Imports a desktop chat holding `imported` of the recording's prompts, adds
  * `ranInT3Code` as a turn T3 Code ran on it before rewind points existed,
  * heals it, then rewinds the message `rewound` picks and sends a prompt.
@@ -98,6 +146,11 @@ const runImportedRewind = (input: {
   readonly imported: ReadonlyArray<string>;
   readonly ranInT3Code?: { readonly prompt: string; readonly nativeReplyIndex: number };
   readonly rewound: (threadId: ThreadId) => MessageId;
+  /**
+   * Restore code instead: the menu first asks what a restore would change,
+   * then Claude restores the files; nothing is sent after.
+   */
+  readonly restoresCode?: boolean;
 }) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -113,12 +166,19 @@ const runImportedRewind = (input: {
     assert.isAbove(resumeAt, 0);
     const transcript = yield* ClaudeOrchestratorReplayHarness.decodeTranscript(
       materializeReplayTranscriptRuntimeInstructions(
-        { ...raw, entries: raw.entries.slice(resumeAt) },
+        {
+          ...raw,
+          entries:
+            input.restoresCode === true
+              ? codeRestoreEntries(sessionId, "desktop-prompt-2")
+              : raw.entries.slice(resumeAt),
+        },
         { driver: ProviderDriverKind.make("claudeAgent"), model: "claude-sonnet-4-6" },
       ),
     );
 
     const threadId = ThreadId.make(`import:${claudeInstanceId}:${sessionId}`);
+    const rewindCommandId = CommandId.make("command:imported-rewind");
     const parse = (prompts: ReadonlyArray<string>) => {
       const thread = AgentSessionScanner.parseAgentSessionTranscript({
         source: "claudeAgent",
@@ -158,27 +218,37 @@ const runImportedRewind = (input: {
           type: "dispatch" as const,
           command: {
             type: "thread.rewind" as const,
-            commandId: CommandId.make("command:imported-rewind"),
+            commandId: rewindCommandId,
             threadId,
             messageId: input.rewound(threadId),
-            choice: "conversation" as const,
+            choice: input.restoresCode === true ? ("code" as const) : ("conversation" as const),
           },
         },
-        {
-          type: "dispatch" as const,
-          command: {
-            type: "message.dispatch" as const,
-            createdBy: "user" as const,
-            creationSource: "web" as const,
-            commandId: CommandId.make("command:imported-rewind:after"),
-            threadId,
-            messageId: MessageId.make("message:imported-rewind:after"),
-            text: THREAD_ROLLBACK_AFTER_PROMPT,
-            attachments: [],
-            dispatchMode: { type: "start_immediately" as const },
-          },
-        },
-        { type: "await_thread_idle" as const, threadId },
+        ...(input.restoresCode === true
+          ? [
+              {
+                type: "await_rollback_outcome" as const,
+                threadId,
+                requestId: rewindCommandId,
+              },
+            ]
+          : [
+              {
+                type: "dispatch" as const,
+                command: {
+                  type: "message.dispatch" as const,
+                  createdBy: "user" as const,
+                  creationSource: "web" as const,
+                  commandId: CommandId.make("command:imported-rewind:after"),
+                  threadId,
+                  messageId: MessageId.make("message:imported-rewind:after"),
+                  text: THREAD_ROLLBACK_AFTER_PROMPT,
+                  attachments: [],
+                  dispatchMode: { type: "start_immediately" as const },
+                },
+              },
+              { type: "await_thread_idle" as const, threadId },
+            ]),
       ],
       projectionThreadIds: [threadId],
       runtimePolicyOverride: { cwd },
@@ -220,7 +290,14 @@ const runImportedRewind = (input: {
         });
         assert.equal(yield* importer.healImportedRewindPoints(), 1);
       }
-      return yield* runOrchestratorV2Scenario(scenario);
+      const preview =
+        input.restoresCode === true
+          ? yield* (yield* ThreadCodeRewindService.ThreadCodeRewindServiceV2).preview({
+              threadId,
+              messageId: input.rewound(threadId),
+            })
+          : null;
+      return { preview, ...(yield* runOrchestratorV2Scenario(scenario)) };
     }).pipe(
       Effect.provide(
         AgentSessionImporter.layer.pipe(
@@ -259,6 +336,10 @@ const runImportedRewind = (input: {
       projection.runs.filter((run) => run.status === "rolled_back").map((run) => run.id),
     );
     return {
+      ...(result.preview === null ? {} : { preview: result.preview }),
+      ...(input.restoresCode === true
+        ? { rollbackCompletion: projection.thread.rollbackCompletion ?? null }
+        : {}),
       runs: projection.runs
         .toSorted((left, right) => left.ordinal - right.ordinal)
         .map((run) => [run.ordinal, run.status]),
@@ -326,5 +407,28 @@ describe("imported Claude desktop chats", () => {
         shownPrompts: [THREAD_ROLLBACK_FIRST_PROMPT, THREAD_ROLLBACK_AFTER_PROMPT],
       });
     }),
+  );
+
+  it.effect(
+    "an imported chat not yet continued offers and restores code from its own file checkpoints",
+    () =>
+      Effect.gen(function* () {
+        const result = yield* runImportedRewind({
+          name: "imported-rewind-code",
+          imported: [THREAD_ROLLBACK_FIRST_PROMPT, THREAD_ROLLBACK_SECOND_PROMPT],
+          rewound: (threadId) => MessageId.make(`${threadId}:000002`),
+          restoresCode: true,
+        });
+        assert.deepEqual(result, {
+          preview: { filesChanged: ["/workspace/desktop/notes.md"], insertions: 0, deletions: 16 },
+          rollbackCompletion: { requestId: CommandId.make("command:imported-rewind") },
+          // The conversation stays as it is.
+          runs: [
+            [1, "completed"],
+            [2, "completed"],
+          ],
+          shownPrompts: [THREAD_ROLLBACK_FIRST_PROMPT, THREAD_ROLLBACK_SECOND_PROMPT],
+        });
+      }),
   );
 });

@@ -172,29 +172,6 @@ const layerProviderTurnControlServiceProvided = ProviderTurnControlService.layer
 const layerRuntimeRequestServiceProvided = RuntimeRequestService.layer.pipe(
   Layer.provide(Layer.merge(ProjectionStore.layer, layerProviderSessionManagerProvided)),
 );
-const layerThreadCodeRewindServiceProvided = ThreadCodeRewindService.layer.pipe(
-  Layer.provide(
-    Layer.mergeAll(
-      ProjectionStore.layer,
-      layerProviderSessionManagerProvided,
-      layerRuntimePolicyProvided,
-    ),
-  ),
-);
-const layerCheckpointRollbackServiceProvided = CheckpointRollbackService.layer.pipe(
-  Layer.provide(
-    Layer.mergeAll(
-      ProjectStore.layer,
-      layerCheckpointServiceProvided,
-      layerEventSinkProvided,
-      IdAllocator.layer,
-      ProjectionStore.layer,
-      layerProviderSessionManagerProvided,
-      layerRuntimePolicyProvided,
-      layerThreadCodeRewindServiceProvided,
-    ),
-  ),
-);
 const layerCheckpointCaptureServiceProvided = CheckpointCaptureService.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
@@ -234,6 +211,30 @@ const layerOrchestratorProvided = Orchestrator.layer.pipe(
   ),
 );
 
+const layerThreadCodeRewindServiceProvided = ThreadCodeRewindService.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      ProjectionStore.layer,
+      layerProviderSessionManagerProvided,
+      layerRuntimePolicyProvided,
+      layerOrchestratorProvided,
+    ),
+  ),
+);
+const layerCheckpointRollbackServiceProvided = CheckpointRollbackService.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      ProjectStore.layer,
+      layerCheckpointServiceProvided,
+      layerEventSinkProvided,
+      IdAllocator.layer,
+      ProjectionStore.layer,
+      layerProviderSessionManagerProvided,
+      layerRuntimePolicyProvided,
+      layerThreadCodeRewindServiceProvided,
+    ),
+  ),
+);
 const layerAgentSessionImporterProvided = AgentSessionImporter.layer.pipe(
   Layer.provide(
     Layer.mergeAll(

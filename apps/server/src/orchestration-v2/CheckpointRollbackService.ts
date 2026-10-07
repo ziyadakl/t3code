@@ -30,7 +30,12 @@ import * as ProjectStore from "./ProjectStore.ts";
 import type { ProviderAdapterV2RollbackTarget } from "./ProviderAdapter.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
-import { skippedFilesMessage, ThreadCodeRewindServiceV2 } from "./ThreadCodeRewindService.ts";
+import {
+  openProviderThreadSession,
+  skippedFilesMessage,
+  ThreadCodeRewindServiceV2,
+} from "./ThreadCodeRewindService.ts";
+import { compareConversationOrder, previousConversationRun } from "./ThreadRewindTargets.ts";
 
 export const ROLLBACK_FAILED_MESSAGE =
   "The provider could not roll back this conversation. Try again; if it keeps failing, check the provider and server logs.";
@@ -70,47 +75,6 @@ export class CheckpointRollbackExecutionError extends Schema.TaggedError<Checkpo
 }
 
 const isCheckpointRollbackExecutionError = Schema.is(CheckpointRollbackExecutionError);
-
-/**
- * Whether `run` replays a prompt of the transcript its thread was imported
- * from (imported message ids start with the thread id). Those turns happened
- * before any turn T3 Code ran on the thread, even when a thread that had
- * already run turns recorded them later, with higher ordinals.
- */
-export function isImportedTranscriptRun(
-  run: Pick<OrchestrationV2Run, "threadId" | "userMessageId">,
-): boolean {
-  return run.userMessageId.startsWith(`${run.threadId}:`);
-}
-
-/** Orders runs as their turns happened: imported transcript prompts first, then by ordinal. */
-export function compareConversationOrder(
-  left: Pick<OrchestrationV2Run, "threadId" | "userMessageId" | "ordinal">,
-  right: Pick<OrchestrationV2Run, "threadId" | "userMessageId" | "ordinal">,
-): number {
-  return (
-    Number(isImportedTranscriptRun(right)) - Number(isImportedTranscriptRun(left)) ||
-    left.ordinal - right.ordinal
-  );
-}
-
-/**
- * The last run before `run` still in the conversation: rewinding to the
- * message of `run` keeps the conversation up to its end. Undefined means the
- * rewind goes back to the thread start.
- */
-export function previousConversationRun(
-  runs: ReadonlyArray<OrchestrationV2Run>,
-  run: OrchestrationV2Run,
-): OrchestrationV2Run | undefined {
-  return runs
-    .filter(
-      (candidate) =>
-        compareConversationOrder(candidate, run) < 0 && candidate.status !== "rolled_back",
-    )
-    .toSorted(compareConversationOrder)
-    .at(-1);
-}
 
 /**
  * How a rewind ended. `refused`: the provider declined (for example Claude kept
@@ -213,30 +177,10 @@ export const layer: Layer.Layer<
             providerThreadId: providerThread.id,
             ...(input.checkpointId === undefined ? {} : { checkpointId: input.checkpointId }),
           });
-        const modelSelection = projection.thread.modelSelection;
-        const resolvedRuntimePolicy = yield* runtimePolicy.resolve({
-          thread: projection.thread,
-          modelSelection,
-        });
-        const existingSession = projection.providerSessions.find(
-          (candidate) => candidate.id === input.providerSessionId,
+        const { session } = yield* openProviderThreadSession(
+          { sessions, runtimePolicy },
+          { projection, providerThread, providerSessionId: input.providerSessionId },
         );
-        const session = yield* sessions.open({
-          threadId: input.threadId,
-          providerSessionId: input.providerSessionId,
-          modelSelection,
-          runtimePolicy: resolvedRuntimePolicy,
-          ...(existingSession === undefined ? {} : { resumeFromSession: existingSession }),
-          ...(providerThread.nativeThreadRef?.nativeId == null
-            ? {}
-            : { initialNativeThreadId: providerThread.nativeThreadRef.nativeId }),
-          ...(providerThread.nativeMetadata?.itemIdentityVersion === undefined
-            ? {}
-            : {
-                initialProviderItemIdentityVersion:
-                  providerThread.nativeMetadata.itemIdentityVersion,
-              }),
-        });
 
         // Stopped and failed runs after the target leave the provider
         // conversation too, so they must not stay visible.

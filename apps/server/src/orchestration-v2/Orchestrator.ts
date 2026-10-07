@@ -45,7 +45,6 @@ import {
   type OrchestrationV2TurnItem,
   latestProviderTurnForAttempt,
   orchestrationV2RunWorkStartedAt,
-  ProviderDriverKind,
   ProviderInstanceId,
   type ProviderSessionId,
   RunId,
@@ -75,8 +74,11 @@ import {
   isCheckpointRestoreIsolated,
   SHARED_WORKSPACE_RESTORE_MESSAGE,
 } from "./CheckpointRestoreSafety.ts";
-import { previousConversationRun } from "./CheckpointRollbackService.ts";
-import { NO_FILE_SNAPSHOTS_MESSAGE, runFileCheckpointTurn } from "./ThreadCodeRewindService.ts";
+import {
+  NO_FILE_SNAPSHOTS_MESSAGE,
+  previousConversationRun,
+  runFileCheckpointTurn,
+} from "./ThreadRewindTargets.ts";
 import { CheckpointServiceV2 } from "./CheckpointService.ts";
 import { CommandPolicyV2, resolveMessageDispatchIntent } from "./CommandPolicy.ts";
 import { CommandReceiptStoreV2 } from "./CommandReceiptStore.ts";
@@ -122,8 +124,6 @@ import {
   ThreadForkServiceV2,
 } from "./ThreadForkService.ts";
 import { planThreadDeletion } from "./ThreadDeletion.ts";
-
-const CLAUDE_DRIVER = ProviderDriverKind.make("claudeAgent");
 
 export class OrchestratorDispatchError extends Schema.TaggedError<OrchestratorDispatchError>()(
   "OrchestratorDispatchError",
@@ -432,6 +432,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.user-input.dismiss":
     case "checkpoint.rollback":
     case "thread.rewind":
+    case "provider-thread.imported-session.bind":
     case "checkpoint.rollback.fail":
     case "checkpoint.rollback.complete":
     case "thread.background-work.settle":
@@ -494,6 +495,21 @@ function isBlockingRun(run: OrchestrationV2Run): boolean {
 function hasLiveRun(projection: Pick<OrchestrationV2ThreadProjection, "runs">): boolean {
   return projection.runs.some(
     (run) => run.status === "preparing" || run.status === "starting" || run.status === "running",
+  );
+}
+
+/**
+ * An imported chat holds its native history before T3 Code opens a session
+ * for it; its first turn, or a rewind, opens one.
+ */
+function holdsUnboundImportedSession(
+  thread: Pick<OrchestrationV2AppThread, "historyOrigin">,
+  providerThread: OrchestrationV2ProviderThread,
+): boolean {
+  return (
+    providerThread.providerSessionId === null &&
+    thread.historyOrigin === "v1_import" &&
+    providerThread.nativeThreadRef?.nativeId != null
   );
 }
 
@@ -9228,6 +9244,79 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ]);
     });
 
+  /** Records a new provider session for an imported chat that has none yet. */
+  const bindImportedSession = (
+    command: Extract<
+      OrchestrationV2ServerCommand,
+      { readonly type: "thread.rewind" | "provider-thread.imported-session.bind" }
+    >,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    input: {
+      readonly adapter: ProviderAdapterV2Shape;
+      readonly providerThread: OrchestrationV2ProviderThread;
+      readonly now: DateTime.Utc;
+    },
+  ) =>
+    Effect.gen(function* () {
+      const providerSessionId = yield* mapDispatchError(command)(
+        providerSessionIdFor({
+          adapter: input.adapter,
+          providerInstanceId: input.providerThread.providerInstanceId,
+          threadId: command.threadId,
+        }),
+      );
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "provider-thread.updated",
+        threadId: command.threadId,
+        driver: input.providerThread.driver,
+        providerInstanceId: input.providerThread.providerInstanceId,
+        occurredAt: input.now,
+        payload: { ...input.providerThread, providerSessionId, updatedAt: input.now },
+      });
+    });
+
+  const dispatchImportedSessionBind = (
+    command: Extract<
+      OrchestrationV2InternalCommand,
+      { readonly type: "provider-thread.imported-session.bind" }
+    >,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+  ) =>
+    Effect.gen(function* () {
+      const projection = yield* projectionStore
+        .getThreadRecords(command.threadId, ["providerThreads"])
+        .pipe(
+          Effect.mapError(() => new OrchestratorProjectionError({ threadId: command.threadId })),
+        );
+      const providerThread = projection.providerThreads.find(
+        (candidate) => candidate.id === projection.thread.activeProviderThreadId,
+      );
+      if (
+        providerThread === undefined ||
+        !holdsUnboundImportedSession(projection.thread, providerThread)
+      ) {
+        return;
+      }
+      const adapter = yield* providerAdapters.get(providerThread.providerInstanceId).pipe(
+        Effect.mapError(
+          (cause) =>
+            new OrchestratorProviderAdapterError({
+              commandId: command.commandId,
+              providerInstanceId: providerThread.providerInstanceId,
+              cause,
+            }),
+        ),
+      );
+      yield* bindImportedSession(command, events, {
+        adapter,
+        providerThread,
+        now: yield* DateTime.now,
+      });
+    });
+
   /**
    * Claude Code style rewind to just before a sent user message. Refused unless
    * the thread runs on Claude, is idle, and the message started a run still in
@@ -9260,21 +9349,27 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const providerThread = projection.providerThreads.find(
         (candidate) => candidate.id === projection.thread.activeProviderThreadId,
       );
-      // An imported Claude chat holds its native history before T3 Code opens
-      // a session for it; rewinding it opens one, as its first turn would.
-      const bindsImportedSession =
-        providerThread?.providerSessionId === null &&
-        providerThread.driver === CLAUDE_DRIVER &&
-        projection.thread.historyOrigin === "v1_import" &&
-        providerThread.nativeThreadRef?.nativeId != null;
-      if (
-        providerThread === undefined ||
-        (providerThread.providerSessionId === null && !bindsImportedSession)
-      ) {
+      if (providerThread === undefined) {
         return yield* refuse("This thread has no Claude session to rewind yet.");
       }
-      if (providerThread.driver !== CLAUDE_DRIVER) {
-        return yield* refuse("Rewind is only available in Claude threads.");
+      const adapter = yield* providerAdapters.get(providerThread.providerInstanceId).pipe(
+        Effect.mapError(
+          (cause) =>
+            new OrchestratorProviderAdapterError({
+              commandId: command.commandId,
+              providerInstanceId: providerThread.providerInstanceId,
+              cause,
+            }),
+        ),
+      );
+      const capabilities = yield* adapter.getCapabilities().pipe(mapDispatchError(command));
+      if (capabilities.threads.canRewindToMessage !== true) {
+        return yield* refuse("This provider cannot rewind to a message.");
+      }
+      // Rewinding an imported chat opens its session, as its first turn would.
+      const bindsImportedSession = holdsUnboundImportedSession(projection.thread, providerThread);
+      if (providerThread.providerSessionId === null && !bindsImportedSession) {
+        return yield* refuse("This thread has no Claude session to rewind yet.");
       }
       if (
         command.choice !== "conversation" &&
@@ -9323,35 +9418,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
       const now = yield* DateTime.now;
       if (bindsImportedSession) {
-        const instanceId = projection.thread.modelSelection.instanceId;
-        const adapter = yield* providerAdapters.get(instanceId).pipe(
-          Effect.mapError(
-            (cause) =>
-              new OrchestratorProviderAdapterError({
-                commandId: command.commandId,
-                providerInstanceId: instanceId,
-                cause,
-              }),
-          ),
-        );
-        const providerSessionId = yield* mapDispatchError(command)(
-          providerSessionIdFor({
-            adapter,
-            providerInstanceId: instanceId,
-            threadId: command.threadId,
-          }),
-        );
-        yield* emit(
-          events,
-          command,
-        )({
-          type: "provider-thread.updated",
-          threadId: command.threadId,
-          driver: providerThread.driver,
-          providerInstanceId: providerThread.providerInstanceId,
-          occurredAt: now,
-          payload: { ...providerThread, providerSessionId, updatedAt: now },
-        });
+        yield* bindImportedSession(command, events, { adapter, providerThread, now });
       }
       // This rewind becomes the only one whose failure the thread records.
       yield* emit(
@@ -10528,6 +10595,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "thread.rewind":
         yield* dispatchThreadRewind(command, events, effects);
+        break;
+      case "provider-thread.imported-session.bind":
+        yield* dispatchImportedSessionBind(command, events);
         break;
       case "thread.background-work.settle":
         yield* dispatchBackgroundWorkSettle(command, events, effects);

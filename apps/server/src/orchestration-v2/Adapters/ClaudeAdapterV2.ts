@@ -192,6 +192,7 @@ export const ClaudeProviderCapabilitiesV2 = {
     canForkFromTurn: true,
     canForkFromSubagentThread: false,
     exposesNativeThreadId: true,
+    canRewindToMessage: true,
   },
   turns: {
     exposesNativeTurnId: false,

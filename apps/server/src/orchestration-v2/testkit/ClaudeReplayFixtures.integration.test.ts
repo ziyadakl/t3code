@@ -15,6 +15,7 @@ import { classifyClaudeNativeTool } from "../Adapters/ClaudeAdapterV2.ts";
 import { ClaudeOrchestratorReplayHarness } from "../Adapters/ClaudeAdapterV2.testkit.ts";
 import * as IdAllocator from "../IdAllocator.ts";
 import * as Orchestrator from "../Orchestrator.ts";
+import * as ThreadCodeRewindService from "../ThreadCodeRewindService.ts";
 import { userFacingDispatchErrorMessage } from "../UserFacingErrors.ts";
 import { provideDeterministicTestRuntime } from "./DeterministicRuntime.ts";
 import { ORCHESTRATOR_REPLAY_FIXTURES } from "./fixtures/index.ts";
@@ -273,6 +274,14 @@ describe("Claude Agent SDK replay fixtures", () => {
             "Claude kept no file snapshots for this message.",
           );
           assert.equal(yield* orchestrator.getThreadEventSequence(threadId), before);
+          // The menu asks Claude nothing: the replay fails on any SDK call.
+          const codeRewind = yield* ThreadCodeRewindService.ThreadCodeRewindServiceV2;
+          assert.deepEqual(yield* codeRewind.preview({ threadId, messageId: first!.id }), {
+            filesChanged: [],
+            insertions: 0,
+            deletions: 0,
+            unavailableReason: "Claude kept no file snapshots for this message.",
+          });
         }).pipe(
           Effect.provide(
             ProviderReplayHarness.layerProviderReplay(scenario, ClaudeOrchestratorReplayHarness),

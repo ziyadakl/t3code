@@ -12,7 +12,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
-import { previousConversationRun } from "../orchestration-v2/CheckpointRollbackService.ts";
+import { previousConversationRun } from "../orchestration-v2/ThreadRewindTargets.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as IdAllocator from "../orchestration-v2/IdAllocator.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
