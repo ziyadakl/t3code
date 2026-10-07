@@ -204,7 +204,9 @@ it.effect(
                       deletedAt: null,
                     },
                     runs,
-                    messages: Array.from({ length: messageCount }),
+                    messages: Array.from({ length: messageCount }, () => ({ runId: null })),
+                    providerThreads: [],
+                    providerTurns: [],
                   } as never),
           }),
           Layer.mock(EventSink.EventSinkV2)({
@@ -266,7 +268,7 @@ it.effect(
       ).toBe(0);
 
       // Once a turn ran in T3 Code, its copy of the session is the live one.
-      runs = [{}];
+      runs = [{ userMessageId: "message-sent-in-t3", status: "completed" }];
       expect(
         yield* importer.appendImportedMessages({
           threadId: claudeThreadId,
@@ -399,10 +401,342 @@ it.effect("imports a transcript with background tool calls as a thread at rest",
     });
     const shell = yield* (yield* ProjectionStore.ProjectionStoreV2).getThreadShell(claudeThreadId);
     expect(shell).toMatchObject({
-      latestRunId: null,
       activeRunId: null,
       status: "idle",
       pendingBackgroundTasks: [],
     });
   }).pipe(Effect.provide(Layer.provideMerge(importerLayer, storeLayer)));
+});
+
+const claudeInstanceId = ProviderInstanceId.make("claudeAgent");
+const rewindSessionId = "33333333-3333-4333-8333-333333333333";
+const rewindThreadId = ThreadId.make(`import:${claudeInstanceId}:${rewindSessionId}`);
+const rewindSource = {
+  provider: "claudeAgent" as const,
+  providerInstanceId: claudeInstanceId,
+  providerSessionId: rewindSessionId,
+  filePath: "/tmp/rewind-session.jsonl",
+  size: 100,
+  mtimeMs: 2,
+  device: 3,
+  inode: 4,
+  birthtimeMs: 1,
+};
+
+/** A Claude Code transcript as written to disk: prompt, tool call, tool result, reply. */
+function claudeTranscript(
+  turns: ReadonlyArray<{ readonly prompt: string; readonly reply?: string }>,
+): string {
+  let parentUuid: string | null = null;
+  let second = 0;
+  const records: Array<Record<string, unknown>> = [];
+  const push = (record: Record<string, unknown>) => {
+    const uuid = record.uuid as string;
+    records.push({
+      sessionId: rewindSessionId,
+      cwd: "/workspace/project",
+      isSidechain: false,
+      parentUuid,
+      timestamp: `2026-09-01T10:00:${String(second++).padStart(2, "0")}.000Z`,
+      ...record,
+    });
+    parentUuid = uuid;
+  };
+  turns.forEach(({ prompt, reply }, index) => {
+    const n = index + 1;
+    push({ type: "user", uuid: `prompt-${n}`, message: { role: "user", content: prompt } });
+    records.push({
+      type: "file-history-snapshot",
+      messageId: `prompt-${n}`,
+      snapshot: { messageId: `prompt-${n}`, trackedFileBackups: {} },
+      isSnapshotUpdate: false,
+    });
+    if (reply === undefined) return;
+    push({
+      type: "assistant",
+      uuid: `reply-${n}-tool`,
+      message: { role: "assistant", model: "claude-opus-5", content: [{ type: "tool_use" }] },
+    });
+    push({
+      type: "user",
+      uuid: `tool-result-${n}`,
+      message: { role: "user", content: [{ type: "tool_result", content: "ok" }] },
+    });
+    push({
+      type: "assistant",
+      uuid: `reply-${n}`,
+      message: {
+        role: "assistant",
+        model: "claude-opus-5",
+        content: [{ type: "text", text: reply }],
+      },
+    });
+  });
+  return records.map((record) => JSON.stringify(record)).join("\n");
+}
+
+function parseClaudeTranscript(contents: string): AgentSessionScanner.AgentSessionThread {
+  const thread = AgentSessionScanner.parseAgentSessionTranscript({
+    source: "claudeAgent",
+    providerInstanceId: claudeInstanceId,
+    fallbackSessionId: rewindSessionId,
+    lastActiveAtMs: Date.parse("2026-09-01T11:00:00.000Z"),
+    contents,
+  });
+  if (thread === null) throw new Error("transcript did not parse");
+  return thread;
+}
+
+/** The importer over a real projection store, as the server runs it. */
+const storeBackedImporter = (input?: {
+  readonly scanner?: Partial<AgentSessionScanner.AgentSessionScanner["Service"]>;
+  readonly runtimes?: Partial<ProviderSessionRuntime.ProviderSessionRuntimeRepository["Service"]>;
+}) => {
+  const storeLayer = ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory));
+  const importerLayer = Layer.unwrap(
+    Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      return AgentSessionImporter.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(AgentSessionScanner.AgentSessionScanner)(input?.scanner ?? {}),
+            Layer.mock(ProjectService.ProjectService)({
+              getById: () =>
+                Effect.succeed(
+                  Option.some({ id: projectId, workspaceRoot: "/workspace/project" } as never),
+                ),
+            }),
+            Layer.mock(Orchestrator.OrchestratorV2)({
+              getThreadRecords: (threadId, fields, filter) =>
+                store
+                  .getThreadRecords(threadId, fields, filter)
+                  .pipe(
+                    Effect.mapError(
+                      () => new Orchestrator.OrchestratorProjectionError({ threadId }),
+                    ),
+                  ),
+            }),
+            Layer.mock(EventSink.EventSinkV2)({
+              write: (write) =>
+                Effect.forEach(write.events, (event) => store.apply(event)).pipe(
+                  Effect.as([]),
+                  Effect.orDie,
+                ),
+            }),
+            Layer.mock(ProviderSessionRuntime.ProviderSessionRuntimeRepository)({
+              upsert: () => Effect.void,
+              recordImportedTranscript: () => Effect.void,
+              list: () => Effect.succeed([]),
+              ...input?.runtimes,
+            }),
+            IdAllocator.layer,
+          ),
+        ),
+      );
+    }),
+  );
+  return Layer.provideMerge(importerLayer, storeLayer);
+};
+
+/**
+ * What a rewind to just before each prompt of an imported thread would use:
+ * the Claude uuid the resumed session continues after (null: the thread start)
+ * and the prompt uuid Claude restores files by.
+ */
+const rewindPoints = Effect.fn("rewindPoints")(function* (threadId: ThreadId) {
+  const store = yield* ProjectionStore.ProjectionStoreV2;
+  const records = yield* store.getThreadRecords(threadId, [
+    "messages",
+    "runs",
+    "attempts",
+    "providerTurns",
+  ]);
+  const turnOf = (ordinal: number) => {
+    const run = records.runs.find((candidate) => candidate.ordinal === ordinal);
+    const attempt = records.attempts.find((candidate) => candidate.id === run?.activeAttemptId);
+    return records.providerTurns.find((turn) => turn.runAttemptId === attempt?.id);
+  };
+  return records.messages
+    .filter((message) => message.role === "user")
+    .map((message) => {
+      const run = records.runs.find((candidate) => candidate.userMessageId === message.id);
+      if (run === undefined) return { prompt: message.text, rewind: "none" as const };
+      return {
+        prompt: message.text,
+        resumeAfter:
+          run.ordinal === 1
+            ? null
+            : (turnOf(run.ordinal - 1)?.nativeTurnRef?.nativeId ?? "missing"),
+        restoreFilesBy: turnOf(run.ordinal)?.nativeUserMessageId ?? "missing",
+        hiddenWithIt: records.messages
+          .filter((candidate) => candidate.runId === run.id)
+          .map((candidate) => candidate.text),
+      };
+    });
+});
+
+it.effect("gives every prompt of a new Claude import a rewind point", () =>
+  Effect.gen(function* () {
+    const importer = yield* AgentSessionImporter.AgentSessionImporter;
+    yield* importer.importThread({
+      projectId,
+      workspaceRoot: "/workspace/project",
+      threadId: rewindThreadId,
+      thread: parseClaudeTranscript(
+        claudeTranscript([
+          { prompt: "Create notes.md", reply: "Created notes.md." },
+          { prompt: "Add a title", reply: "Added the title." },
+        ]),
+      ),
+      source: rewindSource,
+    });
+
+    expect(yield* rewindPoints(rewindThreadId)).toEqual([
+      {
+        prompt: "Create notes.md",
+        resumeAfter: null,
+        restoreFilesBy: "prompt-1",
+        hiddenWithIt: ["Create notes.md", "Created notes.md."],
+      },
+      {
+        prompt: "Add a title",
+        resumeAfter: "reply-1",
+        restoreFilesBy: "prompt-2",
+        hiddenWithIt: ["Add a title", "Added the title."],
+      },
+    ]);
+    const shell = yield* (yield* ProjectionStore.ProjectionStoreV2).getThreadShell(rewindThreadId);
+    // At rest like a native thread whose last turn finished, so it reads as ready.
+    expect(shell).toMatchObject({ activeRunId: null, status: "completed" });
+  }).pipe(Effect.provide(storeBackedImporter())),
+);
+
+it.effect("keeps rewind points current as the desktop app's transcript grows", () =>
+  Effect.gen(function* () {
+    const importer = yield* AgentSessionImporter.AgentSessionImporter;
+    yield* importer.importThread({
+      projectId,
+      workspaceRoot: "/workspace/project",
+      threadId: rewindThreadId,
+      // Imported while Claude was still on the first prompt.
+      thread: parseClaudeTranscript(claudeTranscript([{ prompt: "Create notes.md" }])),
+      source: rewindSource,
+    });
+    const grown = parseClaudeTranscript(
+      claudeTranscript([
+        { prompt: "Create notes.md", reply: "Created notes.md." },
+        { prompt: "Add a title", reply: "Added the title." },
+      ]),
+    );
+
+    expect(
+      yield* importer.appendImportedMessages({
+        threadId: rewindThreadId,
+        thread: grown,
+        source: rewindSource,
+      }),
+    ).toBe(3);
+    expect(
+      yield* importer.appendImportedMessages({
+        threadId: rewindThreadId,
+        thread: grown,
+        source: rewindSource,
+      }),
+    ).toBe(0);
+
+    expect(yield* rewindPoints(rewindThreadId)).toEqual([
+      expect.objectContaining({ prompt: "Create notes.md", resumeAfter: null }),
+      {
+        prompt: "Add a title",
+        resumeAfter: "reply-1",
+        restoreFilesBy: "prompt-2",
+        hiddenWithIt: ["Add a title", "Added the title."],
+      },
+    ]);
+    expect(yield* importer.isUntouchedImport(rewindThreadId)).toBe(true);
+  }).pipe(Effect.provide(storeBackedImporter())),
+);
+
+it.effect("heals chats imported before rewind points, once, from their transcripts", () => {
+  const transcript = parseClaudeTranscript(
+    claudeTranscript([
+      { prompt: "Create notes.md", reply: "Created notes.md." },
+      { prompt: "Add a title", reply: "Added the title." },
+    ]),
+  );
+  // What the importer wrote before it kept transcript uuids.
+  const beforeRewindPoints = {
+    ...transcript,
+    messages: transcript.messages.map(
+      ({ nativeUserMessageId: _id, nativeTurnId: _turn, ...message }) => message,
+    ),
+  };
+  const nativeThreadId = ThreadId.make("thread-started-in-t3");
+  const reads: Array<string> = [];
+  return Effect.gen(function* () {
+    const importer = yield* AgentSessionImporter.AgentSessionImporter;
+    yield* importer.importThread({
+      projectId,
+      workspaceRoot: "/workspace/project",
+      threadId: rewindThreadId,
+      thread: beforeRewindPoints,
+      source: rewindSource,
+    });
+    expect(yield* rewindPoints(rewindThreadId)).toEqual([
+      { prompt: "Create notes.md", rewind: "none" },
+      { prompt: "Add a title", rewind: "none" },
+    ]);
+
+    expect(yield* importer.healImportedRewindPoints()).toBe(1);
+    expect(yield* rewindPoints(rewindThreadId)).toEqual([
+      {
+        prompt: "Create notes.md",
+        resumeAfter: null,
+        restoreFilesBy: "prompt-1",
+        hiddenWithIt: ["Create notes.md", "Created notes.md."],
+      },
+      {
+        prompt: "Add a title",
+        resumeAfter: "reply-1",
+        restoreFilesBy: "prompt-2",
+        hiddenWithIt: ["Add a title", "Added the title."],
+      },
+    ]);
+
+    const store = yield* ProjectionStore.ProjectionStoreV2;
+    const before = yield* store.getThreadRecords(rewindThreadId, ["messages", "runs"]);
+    expect(yield* importer.healImportedRewindPoints()).toBe(0);
+    const after = yield* store.getThreadRecords(rewindThreadId, ["messages", "runs"]);
+    expect(after.messages).toEqual(before.messages);
+    expect(after.runs).toEqual(before.runs);
+    // A thread started in T3 Code is never read, and a healed one is not read again.
+    expect(reads).toEqual([rewindSource.filePath]);
+  }).pipe(
+    Effect.provide(
+      storeBackedImporter({
+        runtimes: {
+          list: () =>
+            Effect.succeed([
+              {
+                threadId: nativeThreadId,
+                providerName: "claudeAgent",
+                runtimePayload: { importedTranscripts: [{ ...rewindSource, filePath: "/native" }] },
+              },
+              {
+                threadId: rewindThreadId,
+                providerName: "claudeAgent",
+                runtimePayload: { cwd: "/workspace/project", importedTranscripts: [rewindSource] },
+              },
+            ] as never),
+        },
+        scanner: {
+          readThread: (input) =>
+            Effect.sync(() => {
+              reads.push(input.filePath);
+              return Option.some({ thread: transcript, source: rewindSource });
+            }),
+        },
+      }),
+    ),
+  );
 });

@@ -9,6 +9,7 @@ import {
 } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -17,6 +18,7 @@ import * as Path from "effect/Path";
 
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
+import * as AgentSessionImporter from "./AgentSessionImporter.ts";
 import * as AgentSessionResume from "./AgentSessionResume.ts";
 import { encodeClaudeProjectDir, type DesktopSession } from "./ClaudeSessionSources.ts";
 import * as DesktopMirror from "./DesktopMirror.ts";
@@ -134,7 +136,10 @@ const writeFixtures = Effect.fn("writeFixtures")(function* (root: string) {
 });
 
 /** In-memory stand-ins for the project store, the importer and the orchestrator. */
-function makeFakes(existingProjects: Array<{ id: ProjectId; workspaceRoot: string }>) {
+function makeFakes(
+  existingProjects: Array<{ id: ProjectId; workspaceRoot: string }>,
+  healImportedRewindPoints: () => Effect.Effect<number> = () => Effect.succeed(0),
+) {
   const projects = [...existingProjects];
   const threads = new Map<ThreadId, OrchestrationV2AppThread>();
   const bootstrapped: string[] = [];
@@ -160,6 +165,7 @@ function makeFakes(existingProjects: Array<{ id: ProjectId; workspaceRoot: strin
           Option.fromUndefinedOr(projects.find((project) => project.id === projectId) as never),
         ),
     }),
+    Layer.mock(AgentSessionImporter.AgentSessionImporter)({ healImportedRewindPoints }),
     Layer.mock(AgentSessionResume.AgentSessionResume)({
       continueSession: (input) =>
         Effect.sync(() => {
@@ -392,6 +398,33 @@ describe("DesktopMirror.syncOnce", () => {
           ),
         ),
       );
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.effect("gives imported chats their rewind points at server start, mirror on or off", () =>
+    Effect.gen(function* () {
+      const healed = yield* Deferred.make<void>();
+      const fakes = makeFakes([], () => Deferred.succeed(healed, undefined).pipe(Effect.as(1)));
+      yield* Effect.gen(function* () {
+        yield* (yield* DesktopMirror.DesktopMirror).start();
+        yield* Deferred.await(healed);
+      }).pipe(
+        Effect.provide(
+          DesktopMirror.layer.pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                fakes.layer,
+                ServerSettingsService.layerTest(),
+                NodeSqliteClient.layer({ filename: ":memory:" }),
+                NodeCrypto.layer,
+                // The mirror is off by default off macOS.
+                Layer.succeed(HostProcessPlatform, "linux"),
+              ),
+            ),
+          ),
+        ),
+      );
+      expect(fakes.continued).toEqual([]);
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 });
