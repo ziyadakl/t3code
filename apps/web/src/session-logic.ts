@@ -1031,6 +1031,26 @@ export function deriveRevertTurnCountByUserMessageId(input: {
   return byUserMessageId;
 }
 
+/**
+ * Claude threads rewind to any sent message that started a turn, with or
+ * without a file checkpoint; the server refuses what it cannot do. The value
+ * is how many earlier turns the rewind keeps.
+ */
+export function deriveRewindTurnCountByUserMessageId(
+  timelineEntries: ReadonlyArray<TimelineEntry>,
+): Map<ChatMessage["id"], number> {
+  const byUserMessageId = new Map<ChatMessage["id"], number>();
+  for (const entry of timelineEntries) {
+    if (entry.kind !== "message" || entry.message.role !== "user") continue;
+    if (entry.message.inputIntent !== "turn_start" && entry.message.inputIntent !== "queued_turn") {
+      continue;
+    }
+    if (entry.message.runId === null) continue;
+    byUserMessageId.set(entry.message.id, byUserMessageId.size);
+  }
+  return byUserMessageId;
+}
+
 export function derivePhase(runtime: ThreadRuntimeSummary | null): SessionPhase {
   if (runtime === null) return "disconnected";
   if (
