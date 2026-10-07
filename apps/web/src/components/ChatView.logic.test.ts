@@ -2180,10 +2180,61 @@ describe("waitForRevertedMessage", () => {
     );
   });
 
+  it("waits for a rewind's notice though its run is rolled back first", async () => {
+    const { state, projection } = projectionAtom();
+    const waiting = waitForRevertedMessage(threadRef, messageId, requestId, async () => {}, {
+      awaitsRecordedOutcome: true,
+    });
+    // The server accepted the command before its run rolled back.
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
+    const rolledBack = {
+      ...projection,
+      thread: { ...projection.thread, rollbackRequestId: requestId },
+      runs: [{ id: RunId.make("run-2"), ordinal: 2, status: "rolled_back" }],
+    } as never as typeof projection;
+    appAtomRegistry.set(state, { data: Option.some(rolledBack) });
+    appAtomRegistry.set(state, {
+      data: Option.some({
+        ...rolledBack,
+        thread: {
+          ...rolledBack.thread,
+          rollbackCompletion: {
+            requestId,
+            notice: "Code restored, but 1 file was left as it is: a link made it unsafe to write.",
+          },
+        },
+      }),
+    });
+
+    await expect(waiting).resolves.toBe(
+      "Code restored, but 1 file was left as it is: a link made it unsafe to write.",
+    );
+  });
+
+  it("resolves a rewind that a later rewind of the same message overtook", async () => {
+    const { state, projection } = projectionAtom();
+    const waiting = waitForRevertedMessage(threadRef, messageId, requestId, async () => {}, {
+      awaitsRecordedOutcome: true,
+    });
+    // The server accepted the command before its run rolled back.
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
+    appAtomRegistry.set(state, {
+      data: Option.some({
+        ...projection,
+        thread: { ...projection.thread, rollbackRequestId: CommandId.make("rollback-2") },
+        runs: [{ id: RunId.make("run-2"), ordinal: 2, status: "rolled_back" }],
+      } as never),
+    });
+
+    await expect(waiting).resolves.toBeNull();
+  });
+
   it("ignores a failure recorded for an earlier rollback", async () => {
     vi.useFakeTimers();
     const { state, projection } = projectionAtom();
-    const waiting = waitForRevertedMessage(threadRef, messageId, requestId, async () => {}, 50);
+    const waiting = waitForRevertedMessage(threadRef, messageId, requestId, async () => {}, {
+      timeoutMs: 50,
+    });
     const settled = expect(waiting).rejects.toThrow("Timed out waiting for the thread to rewind.");
     appAtomRegistry.set(state, {
       data: Option.some({

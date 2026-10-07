@@ -2641,6 +2641,25 @@ export const ThreadRewindChoice = Schema.Literals([
 export type ThreadRewindChoice = typeof ThreadRewindChoice.Type;
 export const THREAD_REWIND_CHOICES = ThreadRewindChoice.literals;
 
+const THREAD_REWIND_RESTORES: Record<
+  ThreadRewindChoice,
+  { readonly code: boolean; readonly conversation: boolean } | null
+> = {
+  "code-and-conversation": { code: true, conversation: true },
+  conversation: { code: false, conversation: true },
+  code: { code: true, conversation: false },
+  // Summarizing waits on a supported Claude mechanism (ticket #41).
+  "summarize-from": null,
+  "summarize-up-to": null,
+};
+
+/** What `choice` puts back, or null when T3 Code cannot carry it out yet. */
+export function threadRewindRestores(
+  choice: ThreadRewindChoice,
+): { readonly code: boolean; readonly conversation: boolean } | null {
+  return THREAD_REWIND_RESTORES[choice];
+}
+
 /** Whether the rewound message's prompt goes back into the composer after `choice`. */
 export function threadRewindRestoresPrompt(choice: ThreadRewindChoice): boolean {
   return (

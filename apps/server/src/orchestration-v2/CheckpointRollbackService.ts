@@ -9,6 +9,7 @@ import {
   type RunId,
   ThreadId,
   type ThreadRewindChoice,
+  threadRewindRestores,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -75,6 +76,11 @@ export class CheckpointRollbackExecutionError extends Schema.TaggedError<Checkpo
 }
 
 const isCheckpointRollbackExecutionError = Schema.is(CheckpointRollbackExecutionError);
+
+const ALREADY_REWOUND_MESSAGE = "This message was already rewound.";
+
+const CODE_ONLY_RESTORED_MESSAGE =
+  "Your code was restored, but the conversation could not be rewound. Choose Restore conversation to try again.";
 
 /**
  * How a rewind ended. `refused`: the provider declined (for example Claude kept
@@ -416,14 +422,12 @@ export const layer: Layer.Layer<
         (candidate) => candidate.id === input.providerThreadId,
       );
       const run = projection.runs.find((candidate) => candidate.id === input.runId);
+      const restores = threadRewindRestores(input.choice);
       if (
         providerThread === undefined ||
         providerThread.providerSessionId === null ||
         run === undefined ||
-        run.status === "rolled_back" ||
-        (input.choice !== "conversation" &&
-          input.choice !== "code" &&
-          input.choice !== "code-and-conversation")
+        restores === null
       ) {
         return yield* new CheckpointRollbackExecutionError({
           reason: "rollback-target-invalid",
@@ -441,31 +445,45 @@ export const layer: Layer.Layer<
           providerThreadId: input.providerThreadId,
         });
       }
+      // Two clients can rewind the same message at once; the later rewind
+      // finds it done and changes nothing.
+      if (run.status === "rolled_back") {
+        return { type: "completed" as const, notice: ALREADY_REWOUND_MESSAGE };
+      }
+      const rewindConversation = rollbackConversation({
+        threadId: input.threadId,
+        projection,
+        providerThread,
+        providerSessionId: providerThread.providerSessionId,
+        targetOrdinal: previousConversationRun(projection.runs, run)?.ordinal ?? 0,
+        checkpointId: undefined,
+        scopeId: undefined,
+        restoreFiles: Effect.void,
+      });
+      if (!restores.code) {
+        yield* rewindConversation;
+        return { type: "completed" as const };
+      }
       // Files go back first, from the live session that knows the later
       // turns; a refusal leaves the conversation as it was.
-      let notice: string | null = null;
-      if (input.choice !== "conversation") {
-        const restored = yield* codeRewind.restore({ threadId: input.threadId, runId: run.id });
-        if (!restored.restored) {
-          return { type: "refused" as const, message: restored.reason };
-        }
-        notice = skippedFilesMessage(restored.skippedLinks);
+      const restored = yield* codeRewind.restore({ threadId: input.threadId, runId: run.id });
+      if (!restored.restored) {
+        return { type: "refused" as const, message: restored.reason };
       }
-      if (input.choice !== "code") {
-        yield* rollbackConversation({
-          threadId: input.threadId,
-          projection,
-          providerThread,
-          providerSessionId: providerThread.providerSessionId,
-          targetOrdinal: previousConversationRun(projection.runs, run)?.ordinal ?? 0,
-          checkpointId: undefined,
-          scopeId: undefined,
-          restoreFiles: Effect.void,
-        });
-      }
-      return notice === null
-        ? { type: "completed" as const }
-        : { type: "completed" as const, notice };
+      const notice = skippedFilesMessage(restored.skippedLinks);
+      const completed =
+        notice === null ? { type: "completed" as const } : { type: "completed" as const, notice };
+      if (!restores.conversation) return completed;
+      // Retrying the whole rewind would find the files already back and
+      // refuse, so a failure here ends the rewind and says what changed.
+      return yield* rewindConversation.pipe(
+        Effect.as(completed),
+        Effect.catch((cause) =>
+          Effect.logWarning("Rewind restored code but not the conversation", { cause }).pipe(
+            Effect.as({ type: "refused" as const, message: CODE_ONLY_RESTORED_MESSAGE }),
+          ),
+        ),
+      );
     });
 
     const asExecutionError =

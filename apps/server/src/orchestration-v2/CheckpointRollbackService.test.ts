@@ -638,3 +638,135 @@ it.effect("a Codex rollback marks stale only the ready later checkpoints of its 
     assert.deepEqual(deletedRefs, [`${restoredScopeId}:restored-2`]);
   }).pipe(Effect.provide(layerTest));
 });
+
+/** A Claude thread whose second message is rewound; `secondRun` is its run's status. */
+const rewindLayer = (input: {
+  readonly secondRun: "completed" | "rolled_back";
+  readonly rollbackThread: () => Effect.Effect<unknown, unknown>;
+  readonly calls: Array<string>;
+}) => {
+  const threadId = ThreadId.make("rewind-thread");
+  const providerThreadId = ProviderThreadId.make("rewind-thread-provider");
+  const instanceId = ProviderInstanceId.make("claudeAgent");
+  const providerThread = {
+    id: providerThreadId,
+    providerSessionId: ProviderSessionId.make("rewind-thread-session"),
+    providerInstanceId: instanceId,
+  };
+  const projection = {
+    thread: {
+      id: threadId,
+      activeProviderThreadId: providerThreadId,
+      modelSelection: { instanceId, model: "claude-sonnet-4-6" },
+    },
+    providerThreads: [providerThread],
+    providerSessions: [],
+    providerTurns: [1, 2].map((ordinal) => ({
+      id: `turn-${ordinal}`,
+      providerThreadId,
+      runAttemptId: `attempt-${ordinal}`,
+      ordinal,
+      status: "completed",
+    })),
+    nodes: [],
+    attempts: [1, 2].map((ordinal) => ({ id: `attempt-${ordinal}`, runId: `run-${ordinal}` })),
+    checkpoints: [],
+    checkpointScopes: [],
+    runs: [1, 2].map((ordinal) => ({
+      id: `run-${ordinal}`,
+      threadId,
+      userMessageId: `message-${ordinal}`,
+      ordinal,
+      status: ordinal === 2 ? input.secondRun : "completed",
+      rootNodeId: null,
+      activeAttemptId: `attempt-${ordinal}`,
+    })),
+  } as unknown as OrchestrationV2ThreadProjection;
+  const layer = CheckpointRollbackService.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        NodeServices.layer,
+        Layer.mock(ThreadCodeRewindServiceV2)({
+          restore: () =>
+            Effect.sync(() => {
+              input.calls.push("code");
+              return { restored: true as const, skippedLinks: 0 };
+            }),
+        }),
+        Layer.mock(ProjectStore.ProjectStoreV2)({ get: () => Effect.succeed(unrelatedProject) }),
+        Layer.mock(CheckpointService.CheckpointServiceV2)({}),
+        Layer.mock(EventSink.EventSinkV2)({
+          write: () =>
+            Effect.sync(() => {
+              input.calls.push("projection");
+              return [];
+            }),
+        }),
+        IdAllocator.layer,
+        Layer.mock(ProjectionStore.ProjectionStoreV2)({
+          getThreadRecords: () => Effect.succeed(projection),
+        }),
+        Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
+          open: () =>
+            Effect.succeed({
+              rollbackThread: () => input.rollbackThread().pipe(Effect.as({ providerThread })),
+            } as never),
+        }),
+        Layer.mock(RuntimePolicy.RuntimePolicyV2)({ resolve: () => Effect.succeed({} as never) }),
+      ),
+    ),
+  );
+  return { layer, threadId, providerThreadId };
+};
+
+it.effect("a rewind of a message another rewind already undid completes, changing nothing", () => {
+  const calls: Array<string> = [];
+  const { layer, threadId, providerThreadId } = rewindLayer({
+    secondRun: "rolled_back",
+    rollbackThread: () => Effect.sync(() => calls.push("provider")),
+    calls,
+  });
+  return Effect.gen(function* () {
+    const service = yield* CheckpointRollbackService.CheckpointRollbackServiceV2;
+    const outcome = yield* service.rewind({
+      threadId,
+      providerThreadId,
+      runId: "run-2" as never,
+      choice: "code-and-conversation",
+    });
+
+    assert.deepEqual(outcome, {
+      type: "completed",
+      notice: "This message was already rewound.",
+    });
+    assert.deepEqual(calls, []);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect(
+  "restore code and conversation says the code was restored when the conversation could not be",
+  () => {
+    const calls: Array<string> = [];
+    const { layer, threadId, providerThreadId } = rewindLayer({
+      secondRun: "completed",
+      rollbackThread: () => Effect.fail("Claude could not resume the session."),
+      calls,
+    });
+    return Effect.gen(function* () {
+      const service = yield* CheckpointRollbackService.CheckpointRollbackServiceV2;
+      const outcome = yield* service.rewind({
+        threadId,
+        providerThreadId,
+        runId: "run-2" as never,
+        choice: "code-and-conversation",
+      });
+
+      assert.deepEqual(outcome, {
+        type: "refused",
+        message:
+          "Your code was restored, but the conversation could not be rewound. Choose Restore conversation to try again.",
+      });
+      assert.deepEqual(calls, ["code"]);
+    }).pipe(Effect.provide(layer));
+  },
+);

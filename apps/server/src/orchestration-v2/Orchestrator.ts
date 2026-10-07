@@ -45,6 +45,7 @@ import {
   type OrchestrationV2TurnItem,
   latestProviderTurnForAttempt,
   orchestrationV2RunWorkStartedAt,
+  threadRewindRestores,
   ProviderInstanceId,
   type ProviderSessionId,
   RunId,
@@ -9371,11 +9372,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (providerThread.providerSessionId === null && !bindsImportedSession) {
         return yield* refuse("This thread has no Claude session to rewind yet.");
       }
-      if (
-        command.choice !== "conversation" &&
-        command.choice !== "code" &&
-        command.choice !== "code-and-conversation"
-      ) {
+      const restores = threadRewindRestores(command.choice);
+      if (restores === null) {
         return yield* refuse("This rewind choice is not available yet.");
       }
       const message = projection.messages.find((candidate) => candidate.id === command.messageId);
@@ -9397,17 +9395,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ) {
         return yield* refuse("This message's turn has not finished yet.");
       }
-      if (
-        command.choice !== "conversation" &&
-        runFileCheckpointTurn(projection, run.id) === undefined
-      ) {
+      if (restores.code && runFileCheckpointTurn(projection, run.id) === undefined) {
         return yield* refuse(NO_FILE_SNAPSHOTS_MESSAGE);
       }
       const previousRun = previousConversationRun(projection.runs, run);
       const previousTurn =
         previousRun === undefined ? undefined : providerTurnForRun(projection, previousRun);
       if (
-        command.choice !== "code" &&
+        restores.conversation &&
         previousRun !== undefined &&
         (previousTurn === undefined || previousTurn.providerThreadId !== providerThread.id)
       ) {

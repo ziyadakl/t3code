@@ -8320,6 +8320,7 @@ export default function ChatView(props: ChatViewProps) {
                   });
             if (result._tag === "Failure") throw squashAtomCommandFailure(result);
           },
+          { awaitsRecordedOutcome: action.type === "rewind" },
         );
         if (notice !== null) {
           toastManager.add({ type: "warning", title: "Rewind finished", description: notice });

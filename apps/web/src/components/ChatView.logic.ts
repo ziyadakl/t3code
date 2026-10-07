@@ -12,6 +12,7 @@ import {
   type MessageId,
   type ModelSelection,
   type OrchestrationV2ProjectedTurnItem,
+  type OrchestrationV2Run,
   type OrchestrationV2ThreadRewindPreview,
   type PreviewAnnotationPayload,
   type ProviderInteractionMode,
@@ -1110,7 +1111,7 @@ export async function waitForStartedServerThread(
  * Stop held, would be sent into the rewound chat; the server refuses it too.
  */
 export function messageRewindBlockedReason(
-  runs: ReadonlyArray<{ readonly status: string }>,
+  runs: ReadonlyArray<Pick<OrchestrationV2Run, "status" | "queueHeld">>,
 ): string | null {
   return runs.some((run) => run.status === "queued")
     ? "Send or remove your queued messages before rewinding."
@@ -1156,14 +1157,19 @@ export function deriveMessageRewindMenu(input: {
  * finished (a code restore rolls back no run). Resolves with the server's
  * notice about the rewind, if any. Rejects with the server's reason as soon as
  * the thread records that this rollback failed.
+ *
+ * `awaitsRecordedOutcome`: a rewind, whose outcome the server always records.
+ * Its run rolls back before the outcome, with any notice, arrives, so only the
+ * outcome ends the wait, unless a later rewind took over the thread.
  */
 export async function waitForRevertedMessage(
   threadRef: ScopedThreadRef,
   messageId: MessageId,
   requestId: CommandId,
   revert: () => Promise<void>,
-  timeoutMs = 120_000,
+  options: { readonly awaitsRecordedOutcome?: boolean; readonly timeoutMs?: number } = {},
 ): Promise<string | null> {
+  const timeoutMs = options.timeoutMs ?? 120_000;
   const threadAtom = environmentThreadDetails.stateAtom(threadRef);
   const readProjection = () => Option.getOrNull(appAtomRegistry.get(threadAtom).data);
   const initial = readProjection();
@@ -1199,6 +1205,7 @@ export async function waitForRevertedMessage(
       }
       if (
         accepted &&
+        (options.awaitsRecordedOutcome !== true || thread.thread.rollbackRequestId !== requestId) &&
         thread.runs.some((run) => run.id === messageRunId && run.status === "rolled_back")
       )
         finish();
