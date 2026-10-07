@@ -29,6 +29,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import * as AgentSessionImporter from "./AgentSessionImporter.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
@@ -39,6 +40,7 @@ const make = Effect.gen(function* () {
   const projects = yield* ProjectService.ProjectService;
   const scanner = yield* AgentSessionScanner.AgentSessionScanner;
   const importer = yield* AgentSessionImporter.AgentSessionImporter;
+  const threadCommands = yield* ThreadCommandExecutor.ThreadCommandExecutor;
   const sql = yield* SqlClient.SqlClient;
   const settingsService = yield* ServerSettingsService;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -253,19 +255,27 @@ const make = Effect.gen(function* () {
    * copy it into T3 Code's Claude home again and append the new messages.
    * A thread that already ran a turn in T3 Code is left alone, because its
    * copy in T3 Code's home now holds that turn. Returns the messages added.
+   * Runs under the thread's command lock, so a turn started meanwhile waits
+   * and takes the run ordinal after the appended ones instead of sharing a
+   * run id with one, and the copy never overwrites a turn's transcript.
    */
   const refreshSession = Effect.fn("AgentSessionResume.refreshSession")(function* (input: {
     readonly project: { readonly id: ProjectId; readonly workspaceRoot: string };
     readonly session: ClaudeSessionSources.ResumableClaudeSession;
     readonly threadId: ThreadId;
   }) {
-    if (!(yield* importer.isUntouchedImport(input.threadId))) return 0;
-    const { read } = yield* handOffAndRead(input.project, input.session, true);
-    return yield* importer.appendImportedMessages({
-      threadId: input.threadId,
-      thread: read.thread,
-      source: read.source,
-    });
+    return yield* threadCommands.withLock(
+      input.threadId,
+      Effect.gen(function* () {
+        if (!(yield* importer.isUntouchedImport(input.threadId))) return 0;
+        const { read } = yield* handOffAndRead(input.project, input.session, true);
+        return yield* importer.appendImportedMessages({
+          threadId: input.threadId,
+          thread: read.thread,
+          source: read.source,
+        });
+      }),
+    );
   });
 
   return { listResumable, resume, continueSession, refreshSession };
@@ -278,4 +288,6 @@ export class AgentSessionResume extends Context.Service<
   AgentSessionResumeShape
 >()("t3/project/AgentSessionResume") {}
 
-export const layer = Layer.effect(AgentSessionResume, make);
+export const layer = Layer.effect(AgentSessionResume, make).pipe(
+  Layer.provide(ThreadCommandExecutor.layer),
+);
