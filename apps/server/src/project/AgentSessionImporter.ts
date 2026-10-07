@@ -10,8 +10,11 @@ import {
   AgentSessionSource,
   EventId,
   MessageId,
+  type NodeId,
   ProjectId,
   ProviderDriverKind,
+  type ProviderThreadId,
+  type RunId,
   ThreadId,
   TurnItemId,
   type AgentSessionImportInput,
@@ -20,6 +23,8 @@ import {
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ProviderThread,
+  type OrchestrationV2ProviderTurn,
+  type OrchestrationV2Run,
   type OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
 import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
@@ -86,14 +91,65 @@ function dateTime(value: string): DateTime.Utc {
   return DateTime.makeUnsafe(value);
 }
 
+function importedMessageId(threadId: ThreadId, index: number): MessageId {
+  return MessageId.make(`${threadId}:${String(index).padStart(6, "0")}`);
+}
+
+/** Whether the importer wrote `run` for a transcript prompt, as opposed to a turn run in T3 Code. */
+function isImportedRun(threadId: ThreadId, run: OrchestrationV2Run): boolean {
+  return run.userMessageId.startsWith(`${threadId}:`) && run.status === "completed";
+}
+
+/** One imported Claude prompt and the messages of its turn, by message index. */
+interface ImportedTurn {
+  readonly ordinal: number;
+  readonly userIndex: number;
+  readonly lastIndex: number;
+  readonly nativeUserMessageId: string;
+  readonly nativeTurnId: string;
+}
+
+/**
+ * Splits a Claude transcript into prompt turns, each to be recorded as a
+ * completed run whose provider turn holds the uuids a rewind needs. Empty
+ * when any prompt lacks them, since a partial set would rewind to the wrong
+ * point.
+ */
+function importedTurns(
+  thread: AgentSessionScanner.AgentSessionThread,
+): ReadonlyArray<ImportedTurn> {
+  if (thread.source !== "claudeAgent" || thread.messages[0]?.role !== "user") return [];
+  const turns: Array<ImportedTurn> = [];
+  for (const [index, message] of thread.messages.entries()) {
+    if (message.role === "assistant") {
+      const current = turns.at(-1);
+      if (current !== undefined) turns[turns.length - 1] = { ...current, lastIndex: index };
+      continue;
+    }
+    if (message.nativeUserMessageId === undefined || message.nativeTurnId === undefined) return [];
+    turns.push({
+      ordinal: turns.length + 1,
+      userIndex: index,
+      lastIndex: index,
+      nativeUserMessageId: message.nativeUserMessageId,
+      nativeTurnId: message.nativeTurnId,
+    });
+  }
+  return turns;
+}
+
 function messageEvents(input: {
   readonly threadId: ThreadId;
   readonly index: number;
   readonly message: AgentSessionScanner.AgentSessionThreadMessage;
+  readonly run?: { readonly runId: RunId; readonly nodeId: NodeId };
+  /** Distinguishes the rewrite that moves an already imported message into its run. */
+  readonly eventSuffix?: string;
 }): ReadonlyArray<OrchestrationV2DomainEvent> {
   const ordinal = input.index + 1;
   const suffix = String(input.index).padStart(6, "0");
-  const messageId = MessageId.make(`${input.threadId}:${suffix}`);
+  const eventSuffix = input.eventSuffix ?? "";
+  const messageId = importedMessageId(input.threadId, input.index);
   const turnItemId = TurnItemId.make(
     `${IMPORT_EVENT_PREFIX}:turn-item:${input.threadId}:${suffix}`,
   );
@@ -103,8 +159,8 @@ function messageEvents(input: {
     creationSource: "server",
     id: messageId,
     threadId: input.threadId,
-    runId: null,
-    nodeId: null,
+    runId: input.run?.runId ?? null,
+    nodeId: input.run?.nodeId ?? null,
     role: input.message.role,
     text: input.message.text,
     attachments: [],
@@ -115,8 +171,8 @@ function messageEvents(input: {
   const common = {
     id: turnItemId,
     threadId: input.threadId,
-    runId: null,
-    nodeId: null,
+    runId: input.run?.runId ?? null,
+    nodeId: input.run?.nodeId ?? null,
     providerThreadId: null,
     providerTurnId: null,
     nativeItemRef: null,
@@ -149,14 +205,16 @@ function messageEvents(input: {
         };
   return [
     {
-      id: EventId.make(`${IMPORT_EVENT_PREFIX}:message:${input.threadId}:${suffix}`),
+      id: EventId.make(`${IMPORT_EVENT_PREFIX}:message:${input.threadId}:${suffix}${eventSuffix}`),
       type: "message.updated",
       threadId: input.threadId,
       occurredAt: at,
       payload: message,
     },
     {
-      id: EventId.make(`${IMPORT_EVENT_PREFIX}:turn-item:${input.threadId}:${suffix}`),
+      id: EventId.make(
+        `${IMPORT_EVENT_PREFIX}:turn-item:${input.threadId}:${suffix}${eventSuffix}`,
+      ),
       type: "turn-item.updated",
       threadId: input.threadId,
       occurredAt: at,
@@ -172,6 +230,185 @@ const make = Effect.gen(function* () {
   const eventSink = yield* EventSink.EventSinkV2;
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
   const runtimes = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+
+  /**
+   * Events that bring an imported thread's conversation up to `thread`: the
+   * messages it does not hold yet and, for a Claude transcript, one completed
+   * run per prompt whose provider turn holds the prompt's uuid and the uuid
+   * its turn ended at. Records that already match are left alone, so the
+   * result is empty once the thread is current.
+   */
+  const conversationEvents = (input: {
+    readonly threadId: ThreadId;
+    readonly thread: AgentSessionScanner.AgentSessionThread;
+    readonly providerThreadId: ProviderThreadId;
+    readonly existing: {
+      readonly messageRunIds: ReadonlyMap<MessageId, RunId | null>;
+      readonly providerTurns: ReadonlyArray<OrchestrationV2ProviderTurn>;
+    };
+  }): Array<OrchestrationV2DomainEvent> => {
+    const { threadId, thread } = input;
+    const driver = ProviderDriverKind.make(thread.source);
+    const turns = importedTurns(thread);
+    const runIdFor = (ordinal: number) => idAllocator.derive.run({ threadId, ordinal });
+    const runOfMessage = new Map<number, { runId: RunId; nodeId: NodeId }>();
+    for (const turn of turns) {
+      const runId = runIdFor(turn.ordinal);
+      const nodeId = idAllocator.derive.rootNode({ runId });
+      for (let index = turn.userIndex; index <= turn.lastIndex; index++) {
+        runOfMessage.set(index, { runId, nodeId });
+      }
+    }
+
+    const events: Array<OrchestrationV2DomainEvent> = [];
+    for (const [index, message] of thread.messages.entries()) {
+      const messageId = importedMessageId(threadId, index);
+      const run = runOfMessage.get(index);
+      if (!input.existing.messageRunIds.has(messageId)) {
+        events.push(...messageEvents({ threadId, index, message, ...(run ? { run } : {}) }));
+      } else if (run !== undefined && input.existing.messageRunIds.get(messageId) === null) {
+        events.push(...messageEvents({ threadId, index, message, run, eventSuffix: ":run" }));
+      }
+    }
+
+    const eventId = (...parts: ReadonlyArray<string>) =>
+      EventId.make([IMPORT_EVENT_PREFIX, ...parts].join(":"));
+    for (const turn of turns) {
+      const runId = runIdFor(turn.ordinal);
+      const rootNodeId = idAllocator.derive.rootNode({ runId });
+      const attemptId = idAllocator.derive.runAttempt({ runId, attemptOrdinal: 1 });
+      const providerTurnId = idAllocator.derive.providerTurn({
+        driver,
+        nativeTurnId: `import:${runId}`,
+      });
+      const existingTurn = input.existing.providerTurns.find(
+        (candidate) => candidate.id === providerTurnId,
+      );
+      if (
+        existingTurn?.nativeTurnRef?.nativeId === turn.nativeTurnId &&
+        existingTurn.nativeUserMessageId === turn.nativeUserMessageId
+      ) {
+        continue;
+      }
+      const startedAt = dateTime(thread.messages[turn.userIndex]!.createdAt);
+      const completedAt = dateTime(thread.messages[turn.lastIndex]!.createdAt);
+      const providerTurn: OrchestrationV2ProviderTurn = {
+        id: providerTurnId,
+        providerThreadId: input.providerThreadId,
+        nodeId: rootNodeId,
+        runAttemptId: attemptId,
+        nativeTurnRef: { driver, nativeId: turn.nativeTurnId, strength: "strong" },
+        nativeUserMessageId: turn.nativeUserMessageId,
+        ordinal: turn.ordinal,
+        status: "completed",
+        startedAt,
+        completedAt,
+      };
+      const run: OrchestrationV2Run = {
+        id: runId,
+        threadId,
+        ordinal: turn.ordinal,
+        providerInstanceId: thread.providerInstanceId,
+        modelSelection: {
+          instanceId: thread.providerInstanceId,
+          model: thread.model ?? DEFAULT_MODEL_BY_PROVIDER[driver] ?? DEFAULT_MODEL,
+        },
+        providerThreadId: input.providerThreadId,
+        userMessageId: importedMessageId(threadId, turn.userIndex),
+        rootNodeId,
+        activeAttemptId: attemptId,
+        status: "completed",
+        requestedAt: startedAt,
+        startedAt,
+        completedAt,
+        checkpointId: null,
+        contextHandoffId: null,
+      };
+      const providerTurnEvent = {
+        id: eventId("provider-turn", runId, turn.nativeTurnId),
+        type: "provider-turn.updated",
+        threadId,
+        runId,
+        driver,
+        occurredAt: completedAt,
+        payload: providerTurn,
+      } as const;
+      // The transcript grew the last turn: only its end moves.
+      if (existingTurn !== undefined) {
+        events.push(
+          {
+            id: eventId("run", runId, turn.nativeTurnId),
+            type: "run.updated",
+            threadId,
+            runId,
+            occurredAt: completedAt,
+            payload: run,
+          },
+          providerTurnEvent,
+        );
+        continue;
+      }
+      events.push(
+        {
+          id: eventId("run", runId),
+          type: "run.created",
+          threadId,
+          runId,
+          occurredAt: startedAt,
+          payload: run,
+        },
+        {
+          id: eventId("run-attempt", runId),
+          type: "run-attempt.created",
+          threadId,
+          runId,
+          occurredAt: startedAt,
+          payload: {
+            id: attemptId,
+            nativeThreadId: thread.providerSessionId,
+            runId,
+            attemptOrdinal: 1,
+            rootNodeId,
+            providerInstanceId: thread.providerInstanceId,
+            providerThreadId: input.providerThreadId,
+            providerTurnId,
+            reason: "initial",
+            status: "completed",
+            startedAt,
+            completedAt,
+          },
+        },
+        {
+          id: eventId("node", runId),
+          type: "node.updated",
+          threadId,
+          runId,
+          nodeId: rootNodeId,
+          occurredAt: startedAt,
+          payload: {
+            id: rootNodeId,
+            threadId,
+            runId,
+            parentNodeId: null,
+            rootNodeId,
+            kind: "root_turn",
+            status: "completed",
+            countsForRun: true,
+            providerThreadId: input.providerThreadId,
+            providerTurnId,
+            nativeItemRef: null,
+            runtimeRequestId: null,
+            checkpointScopeId: null,
+            startedAt,
+            completedAt,
+          },
+        },
+        providerTurnEvent,
+      );
+    }
+    return events;
+  };
+
   /**
    * Write one transcript's conversation as a settled T3 Code thread bound to the
    * provider's native session, so the next turn resumes it. Returns false when the
@@ -225,6 +462,7 @@ const make = Effect.gen(function* () {
     });
     const createdAt = dateTime(thread.createdAt);
     const updatedAt = dateTime(thread.updatedAt);
+    const turnCount = importedTurns(thread).length;
     const appThread: OrchestrationV2AppThread = {
       createdBy: "system",
       creationSource: "server",
@@ -275,8 +513,8 @@ const make = Effect.gen(function* () {
       },
       nativeConversationHeadRef: null,
       status: "idle",
-      firstRunOrdinal: null,
-      lastRunOrdinal: null,
+      firstRunOrdinal: turnCount === 0 ? null : 1,
+      lastRunOrdinal: turnCount === 0 ? null : turnCount,
       handoffIds: [],
       forkedFrom: null,
       pendingBackgroundTasks: [],
@@ -311,7 +549,12 @@ const make = Effect.gen(function* () {
           occurredAt: createdAt,
           payload: appThread,
         },
-        ...thread.messages.flatMap((message, index) => messageEvents({ threadId, index, message })),
+        ...conversationEvents({
+          threadId,
+          thread,
+          providerThreadId,
+          existing: { messageRunIds: new Map(), providerTurns: [] },
+        }),
         {
           id: EventId.make(`${IMPORT_EVENT_PREFIX}:provider-thread:${providerThreadId}`),
           type: "provider-thread.updated",
@@ -327,18 +570,77 @@ const make = Effect.gen(function* () {
     return true;
   });
 
-  /** An imported thread's records, while no turn has run on it in T3 Code. */
+  /**
+   * An imported thread's records, while no turn has run on it in T3 Code and
+   * none of its imported prompts was rewound.
+   */
   const untouchedImport = Effect.fn("untouchedAgentImportV2")(function* (threadId: ThreadId) {
     const existing = yield* Effect.option(
-      orchestrator.getThreadRecords(threadId, ["runs", "messages"]),
+      orchestrator.getThreadRecords(threadId, [
+        "runs",
+        "messages",
+        "providerThreads",
+        "providerTurns",
+      ]),
     );
     return Option.filter(
       existing,
       (records) =>
         records.thread.historyOrigin === "v1_import" &&
         records.thread.deletedAt === null &&
-        records.runs.length === 0,
+        records.runs.every((run) => isImportedRun(threadId, run)),
     );
+  });
+
+  /** Brings an untouched import up to `thread`. Returns the number of messages added. */
+  const syncImport = Effect.fn("syncAgentImportV2")(function* (input: {
+    readonly threadId: ThreadId;
+    readonly thread: AgentSessionScanner.AgentSessionThread;
+    readonly records: Option.Option.Value<Effect.Success<ReturnType<typeof untouchedImport>>>;
+  }) {
+    const { threadId, thread, records } = input;
+    const known = records.messages.length;
+    const providerThread = records.providerThreads.find(
+      (candidate) => candidate.id === records.thread.activeProviderThreadId,
+    );
+    const events =
+      providerThread === undefined
+        ? thread.messages
+            .slice(known)
+            .flatMap((message, offset) =>
+              messageEvents({ threadId, index: known + offset, message }),
+            )
+        : conversationEvents({
+            threadId,
+            thread,
+            providerThreadId: providerThread.id,
+            existing: {
+              messageRunIds: new Map(
+                records.messages.map((message) => [message.id, message.runId]),
+              ),
+              providerTurns: records.providerTurns,
+            },
+          });
+    const turnCount = importedTurns(thread).length;
+    if (
+      providerThread !== undefined &&
+      turnCount > 0 &&
+      providerThread.lastRunOrdinal !== turnCount
+    ) {
+      events.push({
+        id: EventId.make(
+          `${IMPORT_EVENT_PREFIX}:provider-thread:${providerThread.id}:runs:${turnCount}`,
+        ),
+        type: "provider-thread.updated",
+        threadId,
+        driver: providerThread.driver,
+        providerInstanceId: providerThread.providerInstanceId,
+        occurredAt: dateTime(thread.updatedAt),
+        payload: { ...providerThread, firstRunOrdinal: 1, lastRunOrdinal: turnCount },
+      });
+    }
+    if (events.length > 0) yield* eventSink.write({ events });
+    return Math.max(0, thread.messages.length - known);
   });
 
   /**
@@ -355,17 +657,9 @@ const make = Effect.gen(function* () {
     const { threadId } = input;
     const existing = yield* untouchedImport(threadId);
     if (Option.isNone(existing)) return 0;
-    const known = existing.value.messages.length;
-    const added = input.thread.messages.slice(known);
-    if (added.length > 0) {
-      yield* eventSink.write({
-        events: added.flatMap((message, offset) =>
-          messageEvents({ threadId, index: known + offset, message }),
-        ),
-      });
-    }
+    const added = yield* syncImport({ threadId, thread: input.thread, records: existing.value });
     yield* runtimes.recordImportedTranscript({ threadId, source: input.source });
-    return added.length;
+    return added;
   });
 
   const importRecentAgentThreads = Effect.fn("importRecentAgentThreadsV2")(function* (
