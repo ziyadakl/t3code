@@ -1106,6 +1106,18 @@ export async function waitForStartedServerThread(
 }
 
 /**
+ * Why a message rewind cannot start now, or null. A queued message, even one
+ * Stop held, would be sent into the rewound chat; the server refuses it too.
+ */
+export function messageRewindBlockedReason(
+  runs: ReadonlyArray<{ readonly status: string }>,
+): string | null {
+  return runs.some((run) => run.status === "queued")
+    ? "Send or remove your queued messages before rewinding."
+    : null;
+}
+
+/**
  * The rewind menu for one message in a Claude thread: the code choices show
  * only when Claude's dry run says restoring would change a file. `note` tells
  * the user what a code restore would do, or why there is none.

@@ -86,6 +86,7 @@ import {
   waitForRevertedMessage,
   prepareRevertedMessageAttachments,
   deriveMessageRewindMenu,
+  messageRewindBlockedReason,
 } from "./ChatView.logic";
 
 const environmentId = EnvironmentId.make("environment-local");
@@ -2196,6 +2197,23 @@ describe("waitForRevertedMessage", () => {
     await vi.advanceTimersByTimeAsync(50);
     await settled;
     vi.useRealTimers();
+  });
+});
+
+describe("messageRewindBlockedReason", () => {
+  it("refuses while a message waits in the queue, even one Stop held", () => {
+    expect(
+      messageRewindBlockedReason([
+        { status: "interrupted" },
+        { status: "queued", queueHeld: true },
+      ]),
+    ).toBe("Send or remove your queued messages before rewinding.");
+  });
+
+  it("allows a rewind once nothing waits in the queue", () => {
+    expect(
+      messageRewindBlockedReason([{ status: "completed" }, { status: "rolled_back" }]),
+    ).toBeNull();
   });
 });
 

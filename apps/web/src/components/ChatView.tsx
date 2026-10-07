@@ -530,6 +530,7 @@ import {
   prepareRevertedMessageAttachments,
   waitForRevertedMessage,
   deriveMessageRewindMenu,
+  messageRewindBlockedReason,
   reconcileMountedTerminalThreadIds,
   resolveComposerInteractionMode,
   resolveComposerProviderSelection,
@@ -8246,6 +8247,13 @@ export default function ChatView(props: ChatViewProps) {
       }
       if (phase === "running" || isSendBusy || isConnecting) {
         setThreadError(activeThread.id, "Interrupt the current turn before reverting checkpoints.");
+        return;
+      }
+      const rewindBlockedReason = supportsMessageRewind
+        ? messageRewindBlockedReason(serverProjection?.runs ?? [])
+        : null;
+      if (rewindBlockedReason !== null) {
+        setThreadError(activeThread.id, rewindBlockedReason);
         return;
       }
       if (action === undefined) {

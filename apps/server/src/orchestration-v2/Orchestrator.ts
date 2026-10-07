@@ -9253,6 +9253,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (hasLiveRun(projection)) {
         return yield* refuse("Stop the current turn before rewinding.");
       }
+      // A queued message, held or not, would be sent into the rewound chat.
+      if (projection.runs.some((run) => run.status === "queued")) {
+        return yield* refuse("Send or remove your queued messages before rewinding.");
+      }
       const providerThread = projection.providerThreads.find(
         (candidate) => candidate.id === projection.thread.activeProviderThreadId,
       );
