@@ -29,6 +29,7 @@ import {
   TrimmedNonEmptyString,
   type UploadChatAttachment,
 } from "@t3tools/contracts";
+import { newestCheckpointAtOrBefore } from "@t3tools/shared/checkpointOrdinal";
 import { modelSelectionCommandType } from "@t3tools/shared/model";
 import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
@@ -881,26 +882,13 @@ export const dismissThreadUserInput = Effect.fn("EnvironmentCommands.dismissThre
   },
 );
 
-/**
- * The checkpoint holding the workspace as it stood after run `runOrdinal`. A
- * run that never started (cancelled while queued, or steered into an earlier
- * run) captures no checkpoint, so the newest checkpoint at or before the
- * ordinal stands for it, and the thread-start checkpoint when there is none.
- */
+/** Resolves a run ordinal to its checkpoint, or the thread-start one before any. */
 function checkpointAtRunOrdinal(
   checkpoints: ReadonlyArray<OrchestrationV2Checkpoint>,
   runOrdinal: number,
 ) {
-  let newest: OrchestrationV2Checkpoint | undefined;
-  let newestOrdinal = 0;
-  for (const candidate of checkpoints) {
-    const ordinal = candidate.appRunOrdinal;
-    if (ordinal === null || ordinal > runOrdinal || ordinal < newestOrdinal) continue;
-    newest = candidate;
-    newestOrdinal = ordinal;
-  }
   return (
-    newest ??
+    newestCheckpointAtOrBefore(checkpoints, runOrdinal) ??
     checkpoints.findLast(
       (candidate) => candidate.ordinalWithinScope === 0 && candidate.appRunOrdinal === null,
     )

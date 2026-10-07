@@ -195,3 +195,53 @@ it.effect("preserves the typed missing-baseline-ref error contract", () => {
     );
   }).pipe(Effect.provide(layer));
 });
+
+it.effect("diffs a run against the newest earlier checkpoint past a run that never started", () => {
+  const thirdRunId = RunId.make("run:checkpoint-diff-v2:3");
+  const firstRef = CheckpointRef.make("refs/t3/test/first");
+  const thirdRef = CheckpointRef.make("refs/t3/test/third");
+  const diffCheckpoints = vi.fn((_input: CheckpointStore.DiffCheckpointsInput) =>
+    Effect.succeed("diff --git a/file b/file"),
+  );
+  // Run 2 was cancelled before it started, so it has no checkpoint.
+  const layer = layerFor({
+    projection: Effect.succeed({
+      runs: [
+        { id: firstRunId, ordinal: 1, status: "completed" },
+        { id: secondRunId, ordinal: 2, status: "cancelled" },
+        { id: thirdRunId, ordinal: 3, status: "completed" },
+      ],
+      checkpointScopes: [{ id: firstScopeId, runId: thirdRunId, kind: "root_run", cwd: "/repo" }],
+      checkpoints: [
+        {
+          scopeId: firstScopeId,
+          runId: firstRunId,
+          appRunOrdinal: 1,
+          status: "ready",
+          ref: firstRef,
+        },
+        {
+          scopeId: firstScopeId,
+          runId: thirdRunId,
+          appRunOrdinal: 3,
+          status: "ready",
+          ref: thirdRef,
+        },
+      ],
+    }),
+    diffCheckpoints,
+  });
+
+  return Effect.gen(function* () {
+    const query = yield* CheckpointDiffQuery.CheckpointDiffQuery;
+    yield* query.getTurnDiff({ threadId, fromTurnCount: 2, toTurnCount: 3 });
+
+    assert.deepEqual(
+      {
+        from: diffCheckpoints.mock.calls[0]?.[0].fromCheckpointRef,
+        to: diffCheckpoints.mock.calls[0]?.[0].toCheckpointRef,
+      },
+      { from: firstRef, to: thirdRef },
+    );
+  }).pipe(Effect.provide(layer));
+});
