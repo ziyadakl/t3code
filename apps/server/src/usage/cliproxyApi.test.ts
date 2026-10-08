@@ -213,6 +213,57 @@ describe("CLIProxyAPI built-in management API", () => {
     }),
   );
 
+  it.effect("falls back to the hub's saved Claude headers when the usage read is refused", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(1791400000000);
+      const test = fixture({
+        accounts: [
+          {
+            ...accounts[0]!,
+            provider: "claude",
+            quota: {
+              observed_at: "2026-10-08T00:00:00Z",
+              signals: {
+                "Anthropic-Ratelimit-Unified-5h-Utilization": "0.07",
+                "Anthropic-Ratelimit-Unified-5h-Reset": "1791436800",
+                // Already past: the weekly window has rolled over since.
+                "Anthropic-Ratelimit-Unified-7d-Utilization": "0.9",
+                "Anthropic-Ratelimit-Unified-7d-Reset": "1791000000",
+              },
+            },
+          } as (typeof accounts)[number],
+        ],
+        upstream: () => ({ status: 429, body: { error: "rate_limited" } }),
+      });
+      const api = yield* test.api;
+      const result = yield* api.readAccounts(config);
+      expect(result[0]?.usageLimits.unavailable).toBeUndefined();
+      const [session, weekly] = result[0]?.usageLimits.windows ?? [];
+      expect(session).toMatchObject({ id: "five_hour", resetsAt: "2026-10-08T05:20:00.000Z" });
+      expect(session?.usedPercent).toBeCloseTo(7);
+      expect(weekly).toMatchObject({ id: "seven_day", usedPercent: 0 });
+      expect(weekly?.resetsAt).toBeUndefined();
+    }),
+  );
+
+  it.effect("reports a Claude account as unreadable when the hub saved no headers", () =>
+    Effect.gen(function* () {
+      const test = fixture({
+        accounts: [
+          {
+            ...accounts[0]!,
+            provider: "claude",
+            quota: { signals: {} },
+          } as (typeof accounts)[number],
+        ],
+        upstream: () => ({ status: 429, body: {} }),
+      });
+      const api = yield* test.api;
+      const result = yield* api.readAccounts(config);
+      expect(result[0]?.usageLimits.unavailable?.reason).toBe("probeFailed");
+    }),
+  );
+
   it.effect("pins redemption to the displayed credit and clears only that account's cooldown", () =>
     Effect.gen(function* () {
       const test = fixture();

@@ -312,6 +312,14 @@ export function collectLimitNotices(presentations: LimitPresentations): readonly
       } else if (source.accounts.length === 0) {
         notices.push(`${label(environmentLabel, source.label)}: No accounts reported.`);
       }
+      // The pooled views skip a hub account they cannot draw; say so here.
+      for (const account of source.accounts) {
+        if (account.usageLimits.unavailable?.reason !== "probeFailed") continue;
+        const name = account.email ?? account.id;
+        notices.push(
+          `${label(environmentLabel, source.label)}: ${name}: ${limitsNotice(account.usageLimits)}`,
+        );
+      }
     }
   }
   return notices;
