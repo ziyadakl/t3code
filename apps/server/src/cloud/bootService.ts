@@ -774,15 +774,29 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
           .pipe(Effect.andThen(fs.copy(runtimePaths.versionDir, launcher.stagingDir))),
   ).pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
   // Renames, never overwrites: a launcher that is still running keeps its
-  // open executable, and the fixed path always names a complete copy.
+  // open executable. The fixed path holds a complete copy except for the
+  // moment between the two renames; a failed swap puts the previous copy
+  // back. Once the new copy is in place, a retired copy that cannot be
+  // removed is left for the next install to clear.
   const publishLauncher = Effect.suspend(() =>
     launcher === undefined
       ? Effect.void
       : Effect.gen(function* () {
           yield* fs.remove(launcher.retiredDir, { recursive: true, force: true });
-          if (yield* fs.exists(launcher.dir)) yield* fs.rename(launcher.dir, launcher.retiredDir);
-          yield* fs.rename(launcher.stagingDir, launcher.dir);
-          yield* fs.remove(launcher.retiredDir, { recursive: true, force: true });
+          const retired = yield* fs.exists(launcher.dir);
+          if (retired) yield* fs.rename(launcher.dir, launcher.retiredDir);
+          yield* fs
+            .rename(launcher.stagingDir, launcher.dir)
+            .pipe(
+              Effect.tapError(() =>
+                retired
+                  ? fs.rename(launcher.retiredDir, launcher.dir).pipe(Effect.ignore)
+                  : Effect.void,
+              ),
+            );
+          yield* fs
+            .remove(launcher.retiredDir, { recursive: true, force: true })
+            .pipe(Effect.ignore);
         }),
   );
   const discardStagedLauncher = Effect.suspend(() =>

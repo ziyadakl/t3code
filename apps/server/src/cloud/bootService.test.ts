@@ -11,6 +11,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import { HttpClient } from "effect/http";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
@@ -791,6 +792,80 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
         }),
       );
       expect(yield* fs.readFileString(launcherEntry)).toBe("#!/bin/sh\n");
+    }),
+  );
+
+  it.effect("puts the previous launcher copy back when the swap fails on macOS", () =>
+    Effect.gen(function* () {
+      const { service, makeService, fs, baseDir } = yield* makeHarness("darwin");
+      const path = yield* Path.Path;
+      const launcherDir = path.join(baseDir, "runtime", "launcher");
+      yield* service.install();
+      // The staged copy cannot take the fixed path after the old copy left it.
+      const failingFs = FileSystem.FileSystem.of({
+        ...fs,
+        rename: (from, to) =>
+          to === launcherDir && from === `${launcherDir}.next`
+            ? Effect.fail(
+                PlatformError.systemError({
+                  _tag: "PermissionDenied",
+                  module: "FileSystem",
+                  method: "rename",
+                  pathOrDescriptor: from,
+                }),
+              )
+            : fs.rename(from, to),
+      });
+      const updated = yield* makeService(undefined, "1.2.4").pipe(
+        Effect.provideService(FileSystem.FileSystem, failingFs),
+      );
+
+      const error = yield* updated.install().pipe(Effect.flip);
+      expect(error._tag).toBe("BootServiceInstallError");
+      expect(yield* fs.readFileString(path.join(launcherDir, ".install-complete"))).toBe("1.2.3\n");
+      expect(yield* fs.exists(path.join(launcherDir, "t3"))).toBe(true);
+      expect(yield* fs.exists(`${launcherDir}.prev`)).toBe(false);
+    }),
+  );
+
+  it.effect("finishes the install when the retired launcher copy cannot be removed", () =>
+    Effect.gen(function* () {
+      const { service, makeService, fs, baseDir } = yield* makeHarness("darwin");
+      const path = yield* Path.Path;
+      const launcherDir = path.join(baseDir, "runtime", "launcher");
+      const retiredDir = `${launcherDir}.prev`;
+      yield* service.install();
+      // Only the cleanup after the swap meets a retired copy to remove.
+      const failingFs = FileSystem.FileSystem.of({
+        ...fs,
+        remove: (target, options) =>
+          fs.exists(target).pipe(
+            Effect.flatMap((exists) =>
+              target === retiredDir && exists
+                ? Effect.fail(
+                    PlatformError.systemError({
+                      _tag: "PermissionDenied",
+                      module: "FileSystem",
+                      method: "remove",
+                      pathOrDescriptor: target,
+                    }),
+                  )
+                : fs.remove(target, options),
+            ),
+          ),
+      });
+      const updated = yield* makeService(undefined, "1.2.4").pipe(
+        Effect.provideService(FileSystem.FileSystem, failingFs),
+      );
+
+      const plan = yield* updated.install();
+      const launcherEntry = path.join(launcherDir, "t3");
+      expect(plan.program[0]).toBe(launcherEntry);
+      expect(yield* fs.readFileString(plan.unitPath)).toContain(
+        `    <string>${launcherEntry}</string>`,
+      );
+      expect(yield* fs.readFileString(path.join(launcherDir, ".install-complete"))).toBe("1.2.4\n");
+      expect(yield* updated.status).toMatchObject({ current: true, installedVersion: "1.2.4" });
     }),
   );
 
