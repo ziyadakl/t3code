@@ -858,6 +858,69 @@ describe("collectLimitNotices", () => {
     });
     expect(collectLimitNotices(one)[0]).toBe("Laptop · Claude Max: Could not read limits.");
   });
+
+  it("names each hub account whose limits could not be read", () => {
+    const pool = new Map([
+      [
+        EnvironmentId.make("env-a"),
+        {
+          ...laptop,
+          serverConfig: {
+            providers: [],
+            usageLimitSources: [
+              {
+                ...hub,
+                label: "Pool",
+                accounts: [
+                  {
+                    id: "claude-a.json",
+                    driver: claude,
+                    email: "a@example.com",
+                    usageLimits: {
+                      checkedAt,
+                      windows: [],
+                      unavailable: { reason: "probeFailed" as const },
+                    },
+                  },
+                  {
+                    id: "claude-b.json",
+                    driver: claude,
+                    usageLimits: {
+                      checkedAt,
+                      windows: [],
+                      unavailable: {
+                        reason: "probeFailed" as const,
+                        message: "The hub could not read this account's usage.",
+                      },
+                    },
+                  },
+                  {
+                    id: "claude-c.json",
+                    driver: claude,
+                    usageLimits: {
+                      checkedAt,
+                      windows: [
+                        {
+                          id: "five_hour",
+                          kind: "session" as const,
+                          label: "Session",
+                          usedPercent: 5,
+                        },
+                      ],
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    ]);
+    expect(collectLimitNotices(pool)).toEqual([
+      "Pool: a@example.com: Could not read limits.",
+      "Pool: claude-b.json: The hub could not read this account's usage.",
+    ]);
+  });
 });
 
 describe("/usage-limits", () => {

@@ -9,6 +9,7 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
@@ -29,7 +30,11 @@ const AuthFile = Schema.Struct({
       chatgpt_plan_type: Schema.optional(Schema.String),
     }),
   ),
+  /** The hub's passive record of the account's last real request; read leniently below. */
+  quota: Schema.optional(Schema.Unknown),
 });
+const QuotaSignals = Schema.Struct({ signals: Schema.Record(Schema.String, Schema.Unknown) });
+const decodeQuotaSignals = Schema.decodeUnknownOption(QuotaSignals);
 const AuthFiles = Schema.Struct({ files: Schema.Array(AuthFile) });
 const ApiResponse = Schema.Struct({ status_code: Schema.Number, body: Schema.String });
 const CodexWindow = Schema.Struct({
@@ -95,6 +100,46 @@ const decodeConsumeResponse = Schema.decodeUnknownEffect(
     }),
   ),
 );
+
+/**
+ * Claude windows from the rate-limit headers the hub saved off the account's
+ * last real request (`anthropic-ratelimit-unified-5h-utilization: "0.07"`,
+ * `...-5h-reset: "<epoch seconds>"`). Used when the live usage read fails.
+ * A window whose reset has passed has rolled over since, so it reads 0% with
+ * no reset. Null when the hub holds no usable signal.
+ */
+function claudePassiveWindows(
+  quota: unknown,
+  now: number,
+): {
+  five_hour: typeof ClaudeWindow.Type | null;
+  seven_day: typeof ClaudeWindow.Type | null;
+} | null {
+  const decoded = decodeQuotaSignals(quota);
+  if (Option.isNone(decoded)) return null;
+  const signals = new Map(
+    Object.entries(decoded.value.signals).map(([key, value]) => [key.toLowerCase(), value]),
+  );
+  const number = (key: string) => {
+    const raw = signals.get(`anthropic-ratelimit-unified-${key}`);
+    const value = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
+    return raw === "" || !Number.isFinite(value) ? undefined : value;
+  };
+  const window = (name: "5h" | "7d"): typeof ClaudeWindow.Type | null => {
+    const used = number(`${name}-utilization`);
+    if (used === undefined) return null;
+    const reset = number(`${name}-reset`);
+    if (reset !== undefined && reset * 1000 <= now) return { utilization: 0, resets_at: null };
+    const resetAt = reset === undefined ? Option.none() : DateTime.make(reset * 1000);
+    return {
+      utilization: used * 100,
+      resets_at: Option.isSome(resetAt) ? DateTime.formatIso(resetAt.value) : null,
+    };
+  };
+  const five_hour = window("5h");
+  const seven_day = window("7d");
+  return five_hour || seven_day ? { five_hour, seven_day } : null;
+}
 
 const CODEX_BASE = "https://chatgpt.com/backend-api/wham";
 const CREDIT_URL = `${CODEX_BASE}/rate-limit-reset-credits`;
@@ -210,7 +255,8 @@ export const makeCliproxyApi = Effect.gen(function* () {
     config: UsageLimitSourceConfig,
     account: typeof AuthFile.Type,
   ) {
-    const checkedAt = DateTime.formatIso(yield* DateTime.now);
+    const now = yield* DateTime.now;
+    const checkedAt = DateTime.formatIso(now);
     const base = {
       id: account.id,
       driver: ProviderDriverKind.make(account.provider === "codex" ? "codex" : "claudeAgent"),
@@ -291,14 +337,32 @@ export const makeCliproxyApi = Effect.gen(function* () {
       };
     });
     return yield* read.pipe(
-      Effect.orElseSucceed(() => ({
-        ...base,
-        usageLimits: makeUnavailableUsageLimits({
-          checkedAt,
-          reason: "probeFailed",
-          message: "The hub could not read this account's usage.",
-        }),
-      })),
+      Effect.orElseSucceed(() => {
+        // Anthropic rate-limits the usage endpoint often; the hub's saved
+        // headers from the last real request are the next best numbers.
+        const passive =
+          account.provider === "claude"
+            ? claudePassiveWindows(account.quota, DateTime.toEpochMillis(now))
+            : null;
+        if (passive) {
+          return {
+            ...base,
+            plan: "Claude Subscription",
+            usageLimits: claudeUsageResponseToLimits({
+              checkedAt,
+              response: { rate_limits_available: true, rate_limits: passive },
+            }).limits,
+          };
+        }
+        return {
+          ...base,
+          usageLimits: makeUnavailableUsageLimits({
+            checkedAt,
+            reason: "probeFailed",
+            message: "The hub could not read this account's usage.",
+          }),
+        };
+      }),
     );
   });
 
