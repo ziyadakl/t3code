@@ -10,6 +10,7 @@ import {
   type ChatAttachment,
   type MessageId,
   type ModelSelection,
+  type OrchestrationV2Checkpoint,
   type OrchestrationV2Command,
   type OrchestrationV2CreationSource,
   type PlanId,
@@ -28,6 +29,7 @@ import {
   TrimmedNonEmptyString,
   type UploadChatAttachment,
 } from "@t3tools/contracts";
+import { newestCheckpointAtOrBefore } from "@t3tools/shared/checkpointOrdinal";
 import { modelSelectionCommandType } from "@t3tools/shared/model";
 import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
@@ -880,6 +882,19 @@ export const dismissThreadUserInput = Effect.fn("EnvironmentCommands.dismissThre
   },
 );
 
+/** Resolves a run ordinal to its checkpoint, or the thread-start one before any. */
+function checkpointAtRunOrdinal(
+  checkpoints: ReadonlyArray<OrchestrationV2Checkpoint>,
+  runOrdinal: number,
+) {
+  return (
+    newestCheckpointAtOrBefore(checkpoints, runOrdinal) ??
+    checkpoints.findLast(
+      (candidate) => candidate.ordinalWithinScope === 0 && candidate.appRunOrdinal === null,
+    )
+  );
+}
+
 export const revertThreadCheckpoint = Effect.fn("EnvironmentCommands.revertThreadCheckpoint")(
   function* (input: RevertThreadCheckpointInput) {
     if (
@@ -901,11 +916,9 @@ export const revertThreadCheckpoint = Effect.fn("EnvironmentCommands.revertThrea
       projection.checkpoints.find(
         (candidate) => candidate.id === input.checkpointId && candidate.scopeId === input.scopeId,
       ) ??
-      projection.checkpoints.findLast((candidate) =>
-        input.turnCount === 0
-          ? candidate.ordinalWithinScope === 0 && candidate.appRunOrdinal === null
-          : candidate.appRunOrdinal === input.turnCount,
-      );
+      (input.turnCount === undefined
+        ? undefined
+        : checkpointAtRunOrdinal(projection.checkpoints, input.turnCount));
     if (checkpoint === undefined || checkpoint.status !== "ready") {
       const target =
         input.checkpointId === undefined

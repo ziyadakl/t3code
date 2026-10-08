@@ -1032,6 +1032,24 @@ export function deriveRevertTurnCountByUserMessageId(input: {
 }
 
 /**
+ * Whether reverting to `turnCount` earlier turns could change files: a later
+ * run recorded file changes, or its checkpoint is missing so its changes are
+ * unknown. Rolled-back (stale) checkpoints no longer count. When this is false
+ * the revert keeps the workspace without asking about files.
+ */
+export function revertTouchesFiles(
+  checkpoints: ReadonlyArray<ThreadCheckpointSummary>,
+  turnCount: number,
+): boolean {
+  return checkpoints.some(
+    (checkpoint) =>
+      checkpoint.checkpointTurnCount > turnCount &&
+      checkpoint.status !== "stale" &&
+      (checkpoint.status !== "ready" || checkpoint.files.length > 0),
+  );
+}
+
+/**
  * Claude threads rewind to any sent message that started a turn, with or
  * without a file checkpoint; the server refuses what it cannot do. The value
  * is how many earlier turns the rewind keeps.

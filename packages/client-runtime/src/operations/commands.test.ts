@@ -277,6 +277,60 @@ describe("V2 environment commands", () => {
     }).pipe(Effect.provide(layerTestCrypto)),
   );
 
+  it.effect("rewinds past a run that never started to the newest earlier checkpoint", () =>
+    Effect.gen(function* () {
+      const scopeId = CheckpointScopeId.make("checkpoint-scope-root");
+      const checkpoint = (
+        id: string,
+        ordinalWithinScope: number,
+        appRunOrdinal: number | null,
+      ) => ({
+        id: CheckpointId.make(id),
+        threadId: v2ThreadId,
+        scopeId,
+        runId: appRunOrdinal === null ? null : RunId.make(`run-${appRunOrdinal}`),
+        nodeId: NodeId.make("node-run-1"),
+        parentCheckpointId: null,
+        ordinalWithinScope,
+        appRunOrdinal,
+        ref: CheckpointRef.make(`refs/t3/${id}`),
+        status: "ready" as const,
+        files: [],
+        capturedAt: v2Now,
+      });
+      // Run 2 was cancelled before it started, so it has no checkpoint.
+      const runOneAndThree: OrchestrationV2ThreadProjection = {
+        ...v2Projection,
+        checkpoints: [
+          checkpoint("checkpoint-thread-start", 0, null),
+          checkpoint("checkpoint-run-1", 1, 1),
+          checkpoint("checkpoint-run-3", 2, 3),
+        ],
+      };
+      const onlyRunThree: OrchestrationV2ThreadProjection = {
+        ...v2Projection,
+        checkpoints: [
+          checkpoint("checkpoint-thread-start", 0, null),
+          checkpoint("checkpoint-run-3", 1, 3),
+        ],
+      };
+      const commands: OrchestrationV2Command[] = [];
+      for (const projection of [runOneAndThree, onlyRunThree]) {
+        const supervisor = yield* makeSupervisor({ commands, projects: [], projection });
+        yield* revertThreadCheckpoint({
+          commandId: CommandId.make(`rollback-${commands.length}`),
+          threadId: v2ThreadId,
+          turnCount: 2,
+        }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+      }
+
+      expect(commands.map((command) => "checkpointId" in command && command.checkpointId)).toEqual([
+        "checkpoint-run-1",
+        "checkpoint-thread-start",
+      ]);
+    }).pipe(Effect.provide(layerTestCrypto)),
+  );
+
   it.effect("preserves plan implementation provenance on V2 runs", () =>
     Effect.gen(function* () {
       const commands: OrchestrationV2Command[] = [];

@@ -14,6 +14,7 @@ import {
   type OrchestrationGetTurnDiffResult as OrchestrationGetTurnDiffResultType,
   type ThreadId,
 } from "@t3tools/contracts";
+import { newestCheckpointAtOrBefore } from "@t3tools/shared/checkpointOrdinal";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -157,22 +158,22 @@ export const make = Effect.gen(function* () {
         });
       }
 
-      // The root scope is shared by every run in this thread. Its runId
-      // tracks the latest owner, while ordinal zero stays the baseline.
+      // A run that never started has no checkpoint, so the newest earlier one
+      // stands for it. Before any, the baseline is the root scope's ordinal
+      // zero: that scope is shared by every run, its runId the latest owner.
+      const fromCheckpoint = newestCheckpointAtOrBefore(readyCheckpoints, input.fromTurnCount);
       const firstScope =
-        input.fromTurnCount === 0
+        fromCheckpoint === undefined
           ? projection.checkpointScopes.find((scope) => scope.kind === "root_run")
           : undefined;
       const fromCheckpointRef =
-        input.fromTurnCount === 0
-          ? firstScope === undefined
-            ? undefined
-            : yield* checkpointRefForScopeOrdinal({
-                scopeId: firstScope.id,
-                ordinalWithinScope: 0,
-              }).pipe(Effect.provideService(Crypto.Crypto, crypto))
-          : readyCheckpoints.find((checkpoint) => checkpoint.appRunOrdinal === input.fromTurnCount)
-              ?.ref;
+        fromCheckpoint?.ref ??
+        (firstScope === undefined
+          ? undefined
+          : yield* checkpointRefForScopeOrdinal({
+              scopeId: firstScope.id,
+              ordinalWithinScope: 0,
+            }).pipe(Effect.provideService(Crypto.Crypto, crypto)));
       if (fromCheckpointRef === undefined) {
         return yield* new CheckpointRefUnavailableError({
           operation,

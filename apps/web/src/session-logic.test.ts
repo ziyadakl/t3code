@@ -36,6 +36,7 @@ import {
   selectMessageImageResources,
   createMessageAttachmentPreviewProjector,
   providerErrorPresentation,
+  revertTouchesFiles,
   type TimelineEntry,
   workEntryIndicatesToolFailure,
   workEntryDisplayIndicatesToolFailure,
@@ -342,6 +343,30 @@ describe("V2 session presentation", () => {
 
     expect([...targets]).toEqual([[turnStartMessageId, 0]]);
     expect(targets.has(steerMessageId)).toBe(false);
+  });
+
+  it("asks about files only when a run after the revert point changed or lost them", () => {
+    const checkpoint = (
+      turnCount: number,
+      status: "ready" | "missing" | "stale",
+      files: ReadonlyArray<string>,
+    ) => ({
+      runId: RunId.make(`run-${turnCount}`),
+      checkpointTurnCount: turnCount,
+      checkpointRef: `checkpoint-run-${turnCount}` as never,
+      status,
+      files: files.map((path) => ({ path, kind: "modified", additions: 1, deletions: 0 })),
+      assistantMessageId: null,
+      completedAt: "2026-06-20T00:00:03.000Z",
+    });
+    // Runs 1 and 3 changed nothing; run 2 never started.
+    const noFileChanges = [checkpoint(1, "ready", []), checkpoint(3, "ready", [])];
+
+    expect(revertTouchesFiles(noFileChanges, 2)).toBe(false);
+    expect(revertTouchesFiles([checkpoint(1, "ready", ["a.ts"]), ...noFileChanges], 1)).toBe(false);
+    expect(revertTouchesFiles([...noFileChanges, checkpoint(4, "ready", ["a.ts"])], 2)).toBe(true);
+    expect(revertTouchesFiles([...noFileChanges, checkpoint(4, "missing", [])], 2)).toBe(true);
+    expect(revertTouchesFiles([...noFileChanges, checkpoint(4, "stale", ["a.ts"])], 2)).toBe(false);
   });
 
   it("uses visible turn item order and keeps provider errors in the work log", () => {
