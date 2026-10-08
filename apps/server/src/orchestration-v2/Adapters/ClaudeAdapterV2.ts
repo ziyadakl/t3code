@@ -617,6 +617,7 @@ export function makeClaudeAgentSdkProtocolLogger(input: {
   };
 }
 
+const encodeHistoryOptions = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const decodeHistoryFork = Schema.decodeSync(
   Schema.fromJsonString(Schema.Struct({ sessionId: Schema.String })),
 );
@@ -670,7 +671,7 @@ export const layerQueryRunner: Layer.Layer<
           process.execPath,
           ChildProcess.make(
             process.execPath,
-            [...workerArguments, method, sessionId, JSON.stringify(options)],
+            [...workerArguments, method, sessionId, encodeHistoryOptions(options)],
             { env: { ...environment, ELECTRON_RUN_AS_NODE: "1" } },
           ),
         ).pipe(
@@ -678,8 +679,9 @@ export const layerQueryRunner: Layer.Layer<
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         );
         if (result.code !== 0) {
-          return yield* Effect.fail(
-            new Error(result.stderr.trim() || `Claude history worker exited with ${result.code}.`),
+          return yield* queryRunnerError(
+            result.stderr.trim() || `Claude history worker exited with ${result.code}.`,
+            method,
           );
         }
         return result.stdout;
