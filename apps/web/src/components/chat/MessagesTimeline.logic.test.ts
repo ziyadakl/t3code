@@ -1244,7 +1244,7 @@ describe("deriveMessagesTimelineRows", () => {
     expect(assistantRow?.assistantTurnDiffSummary).toBe(assistantTurnDiffSummary);
   });
 
-  it("folds the first assistant message and settled work before the terminal response", () => {
+  it("folds settled work but keeps a multi-line first assistant message visible", () => {
     const timelineEntries = [
       {
         id: "user-entry",
@@ -1321,6 +1321,7 @@ describe("deriveMessagesTimelineRows", () => {
     expect(collapsedRows.map((row) => row.id)).toEqual([
       "user-entry",
       "turn-fold:turn-1",
+      "assistant-first-entry",
       "assistant-final-entry",
     ]);
 
@@ -1446,7 +1447,7 @@ describe("deriveMessagesTimelineRows", () => {
     ).toBe(true);
   });
 
-  it("folds all assistant messages before the terminal message", () => {
+  it("folds short progress notes before the terminal message in a prose-only turn", () => {
     const timelineEntries = [
       {
         id: "assistant-first-entry",
@@ -1501,6 +1502,122 @@ describe("deriveMessagesTimelineRows", () => {
     });
 
     expect(rows.map((row) => row.id)).toEqual(["turn-fold:turn-1", "assistant-final-entry"]);
+  });
+
+  it("keeps a plan and the terminal message visible and folds tools, thinking and short notes", () => {
+    const runId = RunId.make("turn-1");
+    const workEntry = (id: string, createdAt: string, kind: "tool" | "thinking" = "tool") => ({
+      id: `${id}-entry`,
+      kind: "work" as const,
+      createdAt,
+      entry:
+        kind === "tool"
+          ? {
+              id,
+              createdAt,
+              runId,
+              label: "Ran command",
+              tone: "tool" as const,
+              itemType: "command_execution" as const,
+              toolLifecycleStatus: "completed" as const,
+            }
+          : {
+              id,
+              createdAt,
+              runId,
+              label: "Thinking",
+              tone: "thinking" as const,
+              itemType: "reasoning" as const,
+              detail: "Weighing which file to check first",
+              toolLifecycleStatus: "completed" as const,
+            },
+    });
+    const assistantEntry = (id: string, text: string, createdAt: string) => ({
+      id: `${id}-entry`,
+      kind: "message" as const,
+      createdAt,
+      message: {
+        id: id as never,
+        role: "assistant" as const,
+        text,
+        runId,
+        createdAt,
+        updatedAt: createdAt,
+        streaming: false,
+      },
+    });
+    const timelineEntries = [
+      {
+        id: "user-entry",
+        kind: "message" as const,
+        createdAt: "2026-01-01T00:00:00Z",
+        message: {
+          id: "user-1" as never,
+          role: "user" as const,
+          text: "Fix the bug",
+          runId: null,
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:00Z",
+          streaming: false,
+        },
+      },
+      workEntry("thinking-1", "2026-01-01T00:00:01Z", "thinking"),
+      assistantEntry(
+        "assistant-plan",
+        "The goal: fix the bug.\nThe parts:\n1. Find the cause.\n2. Patch it.",
+        "2026-01-01T00:00:02Z",
+      ),
+      workEntry("work-1", "2026-01-01T00:00:03Z"),
+      assistantEntry("assistant-note", "Let me check X.", "2026-01-01T00:00:05Z"),
+      workEntry("work-2", "2026-01-01T00:00:07Z"),
+      assistantEntry("assistant-final", "I'm waiting on the helper.", "2026-01-01T00:00:09Z"),
+    ];
+    const input = {
+      timelineEntries,
+      latestRun: {
+        runId,
+        status: "completed" as const,
+        startedAt: "2026-01-01T00:00:00Z",
+        completedAt: "2026-01-01T00:00:10Z",
+      },
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+    };
+
+    const rows = deriveMessagesTimelineRows(input);
+
+    expect(rows.map((row) => row.id)).toEqual([
+      "user-entry",
+      "turn-fold:turn-1",
+      "assistant-plan-entry",
+      "assistant-final-entry",
+    ]);
+    const foldRow = rows.find((row) => row.kind === "turn-fold");
+    expect(foldRow?.kind === "turn-fold" && foldRow.label).toBe("Worked for 10s");
+    // Only the run's last assistant message carries the footer and copy button.
+    const metaByMessageId = Object.fromEntries(
+      rows.flatMap((row) =>
+        row.kind === "message" && row.message.role === "assistant"
+          ? [[row.id, [row.showAssistantMeta, row.showAssistantCopyButton]]]
+          : [],
+      ),
+    );
+    expect(metaByMessageId).toEqual({
+      "assistant-plan-entry": [false, false],
+      "assistant-final-entry": [true, true],
+    });
+
+    const expandedIds = deriveMessagesTimelineRows({
+      ...input,
+      expandedRunIds: new Set([runId]),
+    })
+      .map((row) => row.id)
+      .join(" ");
+    for (const id of ["thinking-1", "work-1", "assistant-note-entry", "work-2"]) {
+      expect(expandedIds).toContain(id);
+    }
   });
 
   it("derives a sane duration for a steer-superseded turn with one instant commentary message", () => {
