@@ -9,10 +9,8 @@ import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
 import { normalizeClaudeTurnTokenUsage } from "../../provider/ClaudeTurnTokenUsage.ts";
 import {
   type CanUseTool,
-  forkSession as forkClaudeSession,
   type ForkSessionOptions,
   type ForkSessionResult,
-  getSubagentMessages,
   query,
   type Options as ClaudeQueryOptions,
   type PermissionMode,
@@ -33,7 +31,7 @@ import type {
   WebSearchOutput,
 } from "@anthropic-ai/claude-agent-sdk/sdk-tools";
 import { parseCliArgs } from "@t3tools/shared/cliArgs";
-import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import { HostProcessEnvironment, HostProcessIsExecutable } from "@t3tools/shared/hostProcess";
 import { applyClaudePromptEffortPrefix } from "@t3tools/shared/model";
 import {
   CLAUDE_RESUME_COMPACTION_NEVER_ANSWER,
@@ -86,8 +84,10 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
+import { spawnAndCollect } from "../../provider/providerSnapshot.ts";
 import { resolveClaudeSdkExecutablePath } from "../../provider/Drivers/ClaudeExecutable.ts";
 import { planClaudeSkillDispatch } from "../../provider/Drivers/ClaudeSkillDispatch.ts";
 import { discoverClaudeSkills } from "../../provider/Drivers/ClaudeSkills.ts";
@@ -389,6 +389,8 @@ export class ClaudeAgentSdkQueryRunner extends Context.Service<
 export interface ClaudeAgentSdkSessionForkInput {
   readonly sessionId: string;
   readonly options: ForkSessionOptions;
+  /** The provider instance's environment; its CLAUDE_CONFIG_DIR locates the transcript. */
+  readonly environment: NodeJS.ProcessEnv;
   readonly threadId: ThreadId;
   readonly providerSessionId: OrchestrationV2ProviderSession["id"];
 }
@@ -397,6 +399,8 @@ export interface ClaudeAgentSdkSubagentLookupInput {
   readonly sessionId: string;
   readonly agentId: string;
   readonly dir: string | null;
+  /** The provider instance's environment; its CLAUDE_CONFIG_DIR locates the transcript. */
+  readonly environment: NodeJS.ProcessEnv;
   readonly threadId: ThreadId;
   readonly providerSessionId: OrchestrationV2ProviderSession["id"];
 }
@@ -614,15 +618,75 @@ export function makeClaudeAgentSdkProtocolLogger(input: {
   };
 }
 
+const encodeHistoryOptions = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const decodeHistoryFork = Schema.decodeSync(
+  Schema.fromJsonString(Schema.Struct({ sessionId: Schema.String })),
+);
+const decodeHistorySubagentMessages = Schema.decodeSync(
+  Schema.fromJsonString(
+    Schema.Array(Schema.Struct({ parent_tool_use_id: Schema.NullOr(Schema.String) })),
+  ),
+);
+
 export const layerQueryRunner: Layer.Layer<
   ClaudeAgentSdkQueryRunner,
   never,
-  Crypto.Crypto | ProviderEventLoggers.ProviderEventLoggers
+  | Crypto.Crypto
+  | ProviderEventLoggers.ProviderEventLoggers
+  | ChildProcessSpawner.ChildProcessSpawner
+  | Path.Path
 > = Layer.effect(
   ClaudeAgentSdkQueryRunner,
   Effect.gen(function* () {
     const crypto = yield* Crypto.Crypto;
     const { native: nativeEventLogger } = yield* ProviderEventLoggers.ProviderEventLoggers;
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const path = yield* Path.Path;
+    const hostIsExecutable = yield* HostProcessIsExecutable;
+
+    // The SDK's session helpers resolve the Claude home from process.env and
+    // cache it, so in the server they would read the server's home, not the
+    // provider instance's. They run in a child given the instance's
+    // environment instead. The single-executable has no sibling script and no
+    // Node to run one with, so it hosts the worker as a hidden subcommand.
+    const runHistoryWorker = (
+      method: "forkSession" | "getSubagentMessages",
+      sessionId: string,
+      options: object,
+      environment: NodeJS.ProcessEnv,
+    ) =>
+      Effect.gen(function* () {
+        const workerArguments = hostIsExecutable
+          ? ["__claude-history"]
+          : [
+              yield* path.fromFileUrl(
+                new URL(
+                  import.meta.url.endsWith(".ts")
+                    ? "../../claude-history-worker.ts"
+                    : "./claude-history-worker.mjs",
+                  import.meta.url,
+                ),
+              ),
+            ];
+        const result = yield* spawnAndCollect(
+          process.execPath,
+          ChildProcess.make(
+            process.execPath,
+            [...workerArguments, method, sessionId, encodeHistoryOptions(options)],
+            { env: { ...environment, ELECTRON_RUN_AS_NODE: "1" } },
+          ),
+        ).pipe(
+          Effect.timeout("30 seconds"),
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        );
+        if (result.code !== 0) {
+          return yield* queryRunnerError(
+            result.stderr.trim() || `Claude history worker exited with ${result.code}.`,
+            method,
+          );
+        }
+        return result.stdout;
+      }).pipe(Effect.mapError((cause) => queryRunnerError(cause, method)));
 
     return ClaudeAgentSdkQueryRunner.of({
       allocateSessionId: crypto.randomUUIDv4.pipe(
@@ -801,8 +865,14 @@ export const layerQueryRunner: Layer.Layer<
             options: input.options,
           },
         });
-        const result = yield* Effect.tryPromise({
-          try: () => forkClaudeSession(input.sessionId, input.options),
+        const stdout = yield* runHistoryWorker(
+          "forkSession",
+          input.sessionId,
+          input.options,
+          input.environment,
+        );
+        const result = yield* Effect.try({
+          try: () => decodeHistoryFork(stdout),
           catch: (cause) => queryRunnerError(cause, "forkSession"),
         });
         yield* logProtocolEvent({
@@ -835,12 +905,18 @@ export const layerQueryRunner: Layer.Layer<
           });
           // The CLI stamps every message of a subagent's transcript with the
           // tool call that launched it; one message is enough.
-          const messages = yield* Effect.tryPromise({
-            try: () =>
-              getSubagentMessages(input.sessionId, input.agentId, {
-                ...(input.dir === null ? {} : { dir: input.dir }),
-                limit: 1,
-              }),
+          const stdout = yield* runHistoryWorker(
+            "getSubagentMessages",
+            input.sessionId,
+            {
+              agentId: input.agentId,
+              ...(input.dir === null ? {} : { dir: input.dir }),
+              limit: 1,
+            },
+            input.environment,
+          );
+          const messages = yield* Effect.try({
+            try: () => decodeHistorySubagentMessages(stdout),
             catch: (cause) => queryRunnerError(cause, "getSubagentMessages"),
           });
           const toolUseId = messages[0]?.parent_tool_use_id ?? null;
@@ -4107,6 +4183,7 @@ export function makeClaudeAdapterV2(
               sessionId: resume.nativeThreadId,
               agentId: resume.taskId,
               dir: resume.context.input.runtimePolicy.cwd,
+              environment: adapterOptions.environment,
               threadId: resume.context.input.threadId,
               providerSessionId: input.providerSessionId,
             })
@@ -8010,6 +8087,7 @@ export function makeClaudeAdapterV2(
               const forked = yield* queryRunner.forkSession({
                 sessionId: sourceNativeThreadId,
                 options: forkOptions,
+                environment: adapterOptions.environment,
                 threadId: forkInput.targetThreadId,
                 providerSessionId: input.providerSessionId,
               });
