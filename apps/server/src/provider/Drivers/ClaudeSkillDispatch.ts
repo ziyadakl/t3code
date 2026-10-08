@@ -27,29 +27,15 @@
  * @module provider/Drivers/ClaudeSkillDispatch
  */
 
-/**
- * Same token shape the composer and timeline chips recognise
- * (`packages/shared/src/composerInlineTokens.ts`), so a rendered chip and a
- * dispatched skill are always the same set.
- */
-const SKILL_MENTION_PATTERN =
-  /(^|\s)\p{Sc}(?![0-9][0-9_]*(?:[kKmMbBtT]|[eE][0-9]+)?(?:\s|$))(?=[a-zA-Z0-9:_-]*[a-zA-Z])([a-zA-Z0-9][a-zA-Z0-9:_-]*)(?=\s|$)/gu;
+import { SKILL_MENTION_PATTERN, SKILL_NAME_SOURCE } from "@t3tools/shared/composerInlineTokens";
 
 /**
- * A typed `/name`. `/etc/hosts` and `src/x` never match: the name must stand
- * alone between whitespace. Sentence punctuation after it ("try /review.") is
- * consumed and dropped, so it never becomes part of the command.
+ * A typed `/name`, with the same name characters as a `$name` chip.
+ * `/etc/hosts` and `src/x` never match: the name must stand alone between
+ * whitespace. Sentence punctuation after it ("try /review.") is consumed and
+ * dropped, so it never becomes part of the command.
  */
-const TYPED_SLASH_PATTERN = /(^|\s)\/([a-zA-Z0-9][a-zA-Z0-9:_-]*)[.,;?!]*(?=\s|$)/gu;
-
-/**
- * Plugin skills run as `/plugin:skill`. Skill discovery only scans the user
- * and project skill roots, so a typed plugin command is trusted by its shape.
- * Callers pass only the message text, never attachment notes or captured
- * window data; an unknown name still reaches the model as plain text.
- */
-const PLUGIN_COMMAND_NAME =
-  /^[a-zA-Z0-9_-]*[a-zA-Z][a-zA-Z0-9_-]*:[a-zA-Z0-9_-]*[a-zA-Z][a-zA-Z0-9_-]*$/u;
+const TYPED_SLASH_PATTERN = new RegExp(`(^|\\s)\\/(${SKILL_NAME_SOURCE})[.,;?!]*(?=\\s|$)`, "gu");
 
 export interface ClaudeSkillDispatch {
   /** Text before the dispatched mention, or `undefined` when it opens the prompt. */
@@ -61,28 +47,26 @@ export interface ClaudeSkillDispatch {
 
 /**
  * Split `prompt` around the last `$skill` or typed `/skill` mention that
- * names a known skill (or, for `/`, a plugin skill).
- * Returns `undefined` when there is nothing to dispatch, in which case the
- * prompt should go out unchanged. Mentions that do not match a discovered
- * skill stay literal: a `$HOME` in prose must not become a command.
+ * names a known skill. Returns `undefined` when there is nothing to dispatch,
+ * in which case the prompt should go out unchanged. Mentions that do not
+ * match a discovered skill stay literal: a `$HOME` or a `/16:9` in prose must
+ * not become a command.
  */
 export function planClaudeSkillDispatch(
   prompt: string,
   skillNames: ReadonlySet<string>,
 ): ClaudeSkillDispatch | undefined {
-  const toMention = (match: RegExpMatchArray) => ({
-    name: match[2] ?? "",
-    start: (match.index ?? 0) + (match[1]?.length ?? 0),
-    end: (match.index ?? 0) + match[0].length,
-  });
-  const mentions = [
-    ...[...prompt.matchAll(SKILL_MENTION_PATTERN)]
-      .map(toMention)
-      .filter((mention) => skillNames.has(mention.name)),
-    ...[...prompt.matchAll(TYPED_SLASH_PATTERN)]
-      .map(toMention)
-      .filter((mention) => skillNames.has(mention.name) || PLUGIN_COMMAND_NAME.test(mention.name)),
-  ].sort((left, right) => left.start - right.start);
+  // `$name` uses the composer's own pattern, so a rendered chip and a
+  // dispatched skill are always the same set.
+  const mentions = [SKILL_MENTION_PATTERN, TYPED_SLASH_PATTERN]
+    .flatMap((pattern) => [...prompt.matchAll(pattern)])
+    .map((match) => ({
+      name: match[2] ?? "",
+      start: (match.index ?? 0) + (match[1]?.length ?? 0),
+      end: (match.index ?? 0) + match[0].length,
+    }))
+    .filter((mention) => skillNames.has(mention.name))
+    .sort((left, right) => left.start - right.start);
   const last = mentions.at(-1);
   if (!last) {
     return undefined;

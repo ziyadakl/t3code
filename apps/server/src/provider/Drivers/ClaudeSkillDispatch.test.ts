@@ -2,7 +2,13 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { planClaudeSkillDispatch } from "./ClaudeSkillDispatch.ts";
 
-const SKILLS = new Set(["2spec", "implement", "review", "re-release-version"]);
+const SKILLS = new Set([
+  "2spec",
+  "implement",
+  "review",
+  "re-release-version",
+  "mattpocock-skills:ask-matt",
+]);
 
 describe("planClaudeSkillDispatch", () => {
   it("leaves a prompt without a known skill untouched", () => {
@@ -72,7 +78,7 @@ describe("planClaudeSkillDispatch", () => {
     });
   });
 
-  it("dispatches a typed plugin slash command, which skill discovery does not list", () => {
+  it("dispatches a typed plugin slash command that discovery lists", () => {
     expect(
       planClaudeSkillDispatch("see what checks we have\n\n/mattpocock-skills:ask-matt", SKILLS),
     ).toEqual({
@@ -106,6 +112,11 @@ describe("planClaudeSkillDispatch", () => {
       commandText: "/implement it",
       skillName: "implement",
     });
+  });
+
+  it("leaves an unknown plugin-shaped slash command as prose", () => {
+    expect(planClaudeSkillDispatch("compare /foo:bar and /a:b", SKILLS)).toBeUndefined();
+    expect(planClaudeSkillDispatch("ratio is /16:9 here", SKILLS)).toBeUndefined();
   });
 
   it("leaves typed slashes that are not commands as prose", () => {
