@@ -1557,10 +1557,42 @@ describe("ClaudeAdapterV2 attachments", () => {
         const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
           prefix: "t3-claude-v2-typed-command-",
         });
+        // A plugin of its own, so the run does not depend on what the host
+        // machine has installed.
+        const configDir = path.join(attachmentsDir, "claude-home");
+        const pluginRoot = path.join(attachmentsDir, "plugin");
+        yield* fileSystem.makeDirectory(path.join(pluginRoot, ".claude-plugin"), {
+          recursive: true,
+        });
+        yield* fileSystem.makeDirectory(path.join(pluginRoot, "skills", "ask-matt"), {
+          recursive: true,
+        });
+        yield* fileSystem.makeDirectory(path.join(configDir, "plugins"), { recursive: true });
+        yield* fileSystem.writeFileString(
+          path.join(pluginRoot, ".claude-plugin", "plugin.json"),
+          JSON.stringify({ name: "mattpocock-skills" }),
+        );
+        yield* fileSystem.writeFileString(
+          path.join(pluginRoot, "skills", "ask-matt", "SKILL.md"),
+          "---\ndisable-model-invocation: true\n---\n# Ask Matt",
+        );
+        yield* fileSystem.writeFileString(
+          path.join(configDir, "plugins", "installed_plugins.json"),
+          JSON.stringify({
+            version: 2,
+            plugins: {
+              "mattpocock-skills@mattpocock": [{ scope: "user", installPath: pluginRoot }],
+            },
+          }),
+        );
+        yield* fileSystem.writeFileString(
+          path.join(configDir, "settings.json"),
+          JSON.stringify({ enabledPlugins: { "mattpocock-skills@mattpocock": true } }),
+        );
         const offeredMessages: Array<SDKUserMessage> = [];
         const adapter = ClaudeAdapterV2.makeClaudeAdapterV2({
           instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
-          settings: DEFAULT_CLAUDE_SETTINGS,
+          settings: Schema.decodeSync(ClaudeSettings)({ homePath: configDir }),
           environment: {},
           attachmentsDir,
           fileSystem,
