@@ -378,6 +378,7 @@ function parseAgentSessionRecords(
   const messages: Array<ParsedMessage> = [];
   let firstUserMessage: ParsedMessage | undefined;
   let lastClaudeReply: ClaudeRecordPosition["replyBefore"];
+  const seenClaudeUuids = new Set<string>();
   // A Codex response item can include generated setup text beside the real
   // prompt. Suppress response-user records only when the shared turn ID and a
   // verbatim event copy prove which prompt the user submitted.
@@ -480,6 +481,11 @@ function parseAgentSessionRecords(
       }
 
       const uuid = record.uuid?.trim() || undefined;
+      // The desktop app writes blocks of history again; the first copy is where it happened.
+      if (uuid !== undefined) {
+        if (seenClaudeUuids.has(uuid)) continue;
+        seenClaudeUuids.add(uuid);
+      }
       const position = { uuid, recordIndex, replyBefore: lastClaudeReply };
       // Replies without text, such as tool calls, still end a turn.
       if (record.type === "assistant" && uuid !== undefined) {

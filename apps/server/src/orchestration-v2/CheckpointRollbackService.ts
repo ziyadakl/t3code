@@ -36,7 +36,11 @@ import {
   skippedFilesMessage,
   ThreadCodeRewindServiceV2,
 } from "./ThreadCodeRewindService.ts";
-import { compareConversationOrder, previousConversationRun } from "./ThreadRewindTargets.ts";
+import {
+  compareConversationOrder,
+  previousConversationRun,
+  threadStartResumeAt,
+} from "./ThreadRewindTargets.ts";
 
 export const ROLLBACK_FAILED_MESSAGE =
   "The provider could not roll back this conversation. Try again; if it keeps failing, check the provider and server logs.";
@@ -216,12 +220,14 @@ export const layer: Layer.Layer<
             turn.providerThreadId === providerThread.id &&
             (turn.runAttemptId === null || !rolledBackAttemptIds.has(turn.runAttemptId)),
         );
+        const nativeResumeAt = threadStartResumeAt(projection.providerTurns, providerThread.id);
         const rollbackTarget: ProviderAdapterV2RollbackTarget =
           targetOrdinal === 0
             ? {
                 type: "thread_start",
                 ...(input.checkpointId === undefined ? {} : { checkpointId: input.checkpointId }),
                 appRunOrdinal: 0,
+                ...(nativeResumeAt === undefined ? {} : { nativeResumeAt }),
               }
             : yield* Effect.gen(function* () {
                 const targetRun = projection.runs.find((run) => run.ordinal === targetOrdinal);

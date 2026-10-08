@@ -3235,6 +3235,49 @@ describe("parseAgentSessionTranscript", () => {
     ]);
   });
 
+  it("keeps the first copy of Claude records the desktop app wrote again", () => {
+    const record = (type: "user" | "assistant", uuid: string, extra?: object) =>
+      encodeTranscriptRecord({
+        type,
+        uuid,
+        sessionId: "claude-session",
+        timestamp: "2026-08-24T10:00:00.000Z",
+        message: { role: type, content: uuid },
+        ...extra,
+      });
+    const again = { slug: "rewritten", gitBranch: "main", promptId: "again" };
+    const transcript = [
+      record("user", "prompt-1"),
+      record("assistant", "reply-1"),
+      record("user", "prompt-2"),
+      record("assistant", "reply-2"),
+      record("assistant", "reply-1", again),
+      record("user", "prompt-1", again),
+      record("user", "prompt-3"),
+      record("assistant", "reply-3"),
+    ].join("\n");
+    const thread = AgentSessionScanner.parseAgentSessionTranscript({
+      contents: transcript,
+      source: "claudeAgent",
+      providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+      fallbackSessionId: "fallback",
+      lastActiveAtMs: Date.parse("2026-08-24T12:00:00.000Z"),
+      allMessages: true,
+    });
+    expect(thread?.messages.map((message) => message.text)).toEqual([
+      "prompt-1",
+      "reply-1",
+      "prompt-2",
+      "reply-2",
+      "prompt-3",
+      "reply-3",
+    ]);
+    // The second turn ends at its own reply, not at the copy written after it.
+    expect(thread?.messages[2]).toMatchObject({
+      nativeUserMessageId: "prompt-2",
+      nativeTurnId: "reply-2",
+    });
+  });
   it("ends the first Claude turn where the span dropped by the message limit ends", () => {
     const record = (type: "user" | "assistant", uuid: string) =>
       encodeTranscriptRecord({

@@ -141,6 +141,8 @@ interface ImportedTurn {
   readonly lastIndex: number;
   readonly nativeUserMessageId: string;
   readonly nativeTurnId: string;
+  /** Where a rewind to before the first turn resumes, when its prompt is not the transcript's first. */
+  readonly nativeResumeAt?: string;
 }
 
 /**
@@ -248,8 +250,10 @@ function placeStoredMessages(
  * next placed prompt, so messages the thread never showed or could not place
  * stay with the turn Claude's session has them in, and it ends at the
  * transcript's last reply before that prompt, or before line `endBefore` for
- * the last turn. Empty unless the first message is the transcript's first
- * prompt, since a rewind to it starts the session over.
+ * the last turn. Placed messages before the first placed prompt get no turn.
+ * When that prompt is not the transcript's first, its turn keeps where the
+ * transcript before it ends, so a rewind to it resumes there instead of
+ * starting the session over.
  */
 function placedTurns(
   placed: ReadonlyArray<PlacedMessage>,
@@ -260,9 +264,17 @@ function placedTurns(
     index !== undefined &&
     transcript[index]?.role === "user" &&
     transcript[index].nativeUserMessageId !== undefined;
+  // Where a session resumed just after the turn of the prompt at `index` continues.
+  const resumeIdAt = (index: number) =>
+    transcript[index]!.nativeTurnId ?? transcript[index]!.nativeUserMessageId!;
   const firstPrompt = transcript.findIndex((message) => message.role === "user");
-  if (!isPrompt(firstPrompt) || placed[0]?.transcriptIndex !== firstPrompt) return [];
+  if (!isPrompt(firstPrompt)) return [];
   const starts = placed.flatMap((entry, index) => (isPrompt(entry.transcriptIndex) ? [index] : []));
+  if (starts.length === 0) return [];
+  // The transcript's turn before the first placed prompt ends where its session resumes.
+  let prior = placed[starts[0]!]!.transcriptIndex! - 1;
+  while (prior >= 0 && !isPrompt(prior)) prior -= 1;
+  const nativeResumeAt = prior < 0 ? undefined : resumeIdAt(prior);
   return starts.map((userIndex, turn) => {
     const next = starts[turn + 1];
     let end = (next === undefined ? endBefore : placed[next]!.transcriptIndex!) - 1;
@@ -272,7 +284,8 @@ function placedTurns(
       userIndex,
       lastIndex: next === undefined ? placed.length - 1 : next - 1,
       nativeUserMessageId: prompt.nativeUserMessageId!,
-      nativeTurnId: transcript[end]!.nativeTurnId ?? transcript[end]!.nativeUserMessageId!,
+      nativeTurnId: resumeIdAt(end),
+      ...(turn === 0 && nativeResumeAt !== undefined ? { nativeResumeAt } : {}),
     };
   });
 }
@@ -433,7 +446,8 @@ const make = Effect.gen(function* () {
       );
       if (
         existingTurn?.nativeTurnRef?.nativeId === turn.nativeTurnId &&
-        existingTurn.nativeUserMessageId === turn.nativeUserMessageId
+        existingTurn.nativeUserMessageId === turn.nativeUserMessageId &&
+        existingTurn.nativeResumeAt === turn.nativeResumeAt
       ) {
         continue;
       }
@@ -446,6 +460,7 @@ const make = Effect.gen(function* () {
         runAttemptId: attemptId,
         nativeTurnRef: { driver, nativeId: turn.nativeTurnId, strength: "strong" },
         nativeUserMessageId: turn.nativeUserMessageId,
+        ...(turn.nativeResumeAt === undefined ? {} : { nativeResumeAt: turn.nativeResumeAt }),
         ordinal: turn.providerTurnOrdinal,
         status: "completed",
         startedAt,
@@ -892,7 +907,7 @@ const make = Effect.gen(function* () {
       recordsTurns && endBefore === undefined
         ? "the transcript does not show where T3 Code's first turn starts"
         : recordsTurns && turns.length === 0
-          ? "its first message is not the transcript's first prompt"
+          ? "none of its prompts is placed in the transcript"
           : undefined;
     if ((unplaced.length > 0 || skipped !== undefined) && (events.length > 0 || !input.append)) {
       yield* Effect.logWarning("Some messages of an imported chat get no rewind point", {

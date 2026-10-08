@@ -1290,7 +1290,7 @@ export const resolveClaudeRollbackResumeSessionAt = Effect.fn(
 )(function* (input: ProviderAdapter.ProviderAdapterV2RollbackThreadInput) {
   switch (input.target.type) {
     case "thread_start":
-      return null;
+      return input.target.nativeResumeAt ?? null;
     case "provider_turn": {
       const target = input.target;
       if (target.providerTurn.providerThreadId !== input.providerThread.id) {
@@ -7927,7 +7927,10 @@ export function makeClaudeAdapterV2(
               yield* closeLiveQueryForNativeThread(nativeThreadId);
               const now = yield* DateTime.now;
 
-              if (rollbackInput.target.type === "thread_start") {
+              const resumeSessionAt = yield* resolveClaudeRollbackResumeSessionAt(
+                rollbackInput,
+              ).pipe(Effect.provideService(Crypto.Crypto, crypto));
+              if (rollbackInput.target.type === "thread_start" && resumeSessionAt === null) {
                 const resetNativeThreadId = yield* queryRunner.allocateSessionId;
                 return {
                   providerThread: {
@@ -7953,9 +7956,6 @@ export function makeClaudeAdapterV2(
                 };
               }
 
-              const resumeSessionAt = yield* resolveClaudeRollbackResumeSessionAt(
-                rollbackInput,
-              ).pipe(Effect.provideService(Crypto.Crypto, crypto));
               return {
                 providerThread: {
                   ...rollbackInput.providerThread,

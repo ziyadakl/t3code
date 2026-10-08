@@ -150,6 +150,8 @@ const runImportedRewind = (input: {
   readonly name: string;
   readonly imported: ReadonlyArray<string>;
   readonly ranInT3Code?: { readonly prompt: string; readonly nativeReplyIndex: number };
+  /** Imported before imports kept transcript uuids, showing the transcript from this message on. */
+  readonly importedFrom?: number;
   readonly rewound: (threadId: ThreadId) => MessageId;
   /**
    * Restore code instead: the menu first asks what a restore would change,
@@ -278,14 +280,14 @@ const runImportedRewind = (input: {
         workspaceRoot: cwd,
         threadId,
         thread:
-          input.ranInT3Code === undefined
+          input.ranInT3Code === undefined && input.importedFrom === undefined
             ? imported
             : {
                 // Imported before imports kept transcript uuids.
                 ...imported,
-                messages: imported.messages.map(
-                  ({ nativeUserMessageId: _id, nativeTurnId: _turn, ...message }) => message,
-                ),
+                messages: imported.messages
+                  .slice(input.importedFrom ?? 0)
+                  .map(({ nativeUserMessageId: _id, nativeTurnId: _turn, ...message }) => message),
               },
         source,
       });
@@ -305,6 +307,8 @@ const runImportedRewind = (input: {
             at: "2026-09-02T09:00:00.000Z",
           }),
         });
+      }
+      if (input.ranInT3Code !== undefined || input.importedFrom !== undefined) {
         assert.equal(yield* (yield* ImportedRewindHeal.ImportedRewindHeal).run(), 1);
       }
       const preview =
@@ -374,6 +378,27 @@ describe("imported Claude desktop chats", () => {
         shownPrompts: [THREAD_ROLLBACK_FIRST_PROMPT, THREAD_ROLLBACK_AFTER_PROMPT],
       });
     }),
+  );
+
+  it.effect(
+    "rewinding the first prompt of a chat imported mid-transcript keeps the turns before it",
+    () =>
+      Effect.gen(function* () {
+        const result = yield* runImportedRewind({
+          name: "imported-rewind-mid-transcript",
+          imported: [THREAD_ROLLBACK_FIRST_PROMPT, THREAD_ROLLBACK_SECOND_PROMPT],
+          // The chat shows the first turn's reply, then the second prompt.
+          importedFrom: 1,
+          rewound: (threadId) => MessageId.make(`${threadId}:000001`),
+        });
+        assert.deepEqual(result, {
+          runs: [
+            [1, "rolled_back"],
+            [2, "completed"],
+          ],
+          shownPrompts: [THREAD_ROLLBACK_AFTER_PROMPT],
+        });
+      }),
   );
 
   it.effect("rewinding T3 Code's first turn in a healed chat resumes after the import", () =>
