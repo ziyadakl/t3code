@@ -74,6 +74,7 @@ import * as ClaudeAdapterV2 from "./ClaudeAdapterV2.ts";
 import * as IdAllocator from "../IdAllocator.ts";
 
 const DEFAULT_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({});
+const decodeClaudeSettings = Schema.decodeEffect(ClaudeSettings);
 const AUTO_COMPACT_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({
   autoCompactWindow: "300000",
 });
@@ -1592,7 +1593,7 @@ describe("ClaudeAdapterV2 attachments", () => {
         const offeredMessages: Array<SDKUserMessage> = [];
         const adapter = ClaudeAdapterV2.makeClaudeAdapterV2({
           instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
-          settings: yield* Schema.decodeEffect(ClaudeSettings)({ homePath: configDir }),
+          settings: yield* decodeClaudeSettings({ homePath: configDir }),
           environment: {},
           attachmentsDir,
           fileSystem,
