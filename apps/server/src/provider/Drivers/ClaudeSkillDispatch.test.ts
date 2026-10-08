@@ -82,6 +82,32 @@ describe("planClaudeSkillDispatch", () => {
     });
   });
 
+  it("drops sentence punctuation after a typed command", () => {
+    expect(planClaudeSkillDispatch("try /mattpocock-skills:ask-matt? thanks", SKILLS)).toEqual({
+      leadingText: "try",
+      commandText: "/mattpocock-skills:ask-matt thanks",
+      skillName: "mattpocock-skills:ask-matt",
+    });
+    expect(planClaudeSkillDispatch("then run /review.", SKILLS)).toEqual({
+      leadingText: "then run",
+      commandText: "/review",
+      skillName: "review",
+    });
+  });
+
+  it("orders typed and chip mentions by position, dispatching the last", () => {
+    expect(planClaudeSkillDispatch("/review first, then $implement it", SKILLS)).toEqual({
+      leadingText: "/review first, then",
+      commandText: "/implement it",
+      skillName: "implement",
+    });
+    expect(planClaudeSkillDispatch("$review first, then /implement it", SKILLS)).toEqual({
+      leadingText: "/review first, then",
+      commandText: "/implement it",
+      skillName: "implement",
+    });
+  });
+
   it("leaves typed slashes that are not commands as prose", () => {
     expect(planClaudeSkillDispatch("read /etc/hosts and /unknown", SKILLS)).toBeUndefined();
     expect(planClaudeSkillDispatch("open src/review now", SKILLS)).toBeUndefined();

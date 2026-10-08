@@ -1,10 +1,13 @@
 /**
- * ClaudeSkillDispatch — turns `$skill` mentions in a composer prompt into the
- * slash invocation Claude Code actually runs.
+ * ClaudeSkillDispatch — turns a skill mention anywhere in a composer prompt,
+ * a `$skill` chip or a typed `/skill`, into the slash invocation Claude Code
+ * actually runs.
  *
  * The composer inserts `$name` for every provider. Codex parses that natively;
- * Claude Code does not, and treats it as prose. Claude Code's only user-side
- * invocation is a text block whose first character is `/`: the harness
+ * Claude Code does not, and treats it as prose. The Claude Code CLI and
+ * desktop input boxes do run a typed `/name` from anywhere in the message,
+ * but T3 talks to the CLI over stream-json, which has no input box. There the
+ * only user-side invocation is a text block whose first character is `/`: the harness
  * expands `/name args` into the SKILL.md body, and every character after the
  * name (newlines included) arrives as `ARGUMENTS`. Verified against the CLI in
  * stream-json mode, which is what the Agent SDK uses:
@@ -17,9 +20,6 @@
  *    (anthropics/claude-code#87113). The model still starts the rest through
  *    its Skill tool when it reads `/name` in the prompt, so earlier mentions
  *    are rewritten to `/name` inline.
- *
- * A `/name` typed mid-prompt is treated the same way, since the CLI and
- * desktop input boxes run it from anywhere in the message.
  *
  * So one mention anywhere in the prompt becomes a guaranteed invocation, and
  * the user's text on either side is kept in order.
@@ -36,16 +36,17 @@ const SKILL_MENTION_PATTERN =
   /(^|\s)\p{Sc}(?![0-9][0-9_]*(?:[kKmMbBtT]|[eE][0-9]+)?(?:\s|$))(?=[a-zA-Z0-9:_-]*[a-zA-Z])([a-zA-Z0-9][a-zA-Z0-9:_-]*)(?=\s|$)/gu;
 
 /**
- * A `/name` typed anywhere in the prompt, as the Claude Code CLI and desktop
- * app accept it. Their input box handles that; stream-json does not, so it
- * goes through the same move as a `$` mention. `/etc/hosts` and `src/x` never
- * match: the name must stand alone between whitespace.
+ * A typed `/name`. `/etc/hosts` and `src/x` never match: the name must stand
+ * alone between whitespace. Sentence punctuation after it ("try /review.") is
+ * consumed and dropped, so it never becomes part of the command.
  */
-const TYPED_SLASH_PATTERN = /(^|\s)\/([a-zA-Z0-9][a-zA-Z0-9:_-]*)(?=\s|$)/gu;
+const TYPED_SLASH_PATTERN = /(^|\s)\/([a-zA-Z0-9][a-zA-Z0-9:_-]*)[.,;?!]*(?=\s|$)/gu;
 
 /**
  * Plugin skills run as `/plugin:skill`. Skill discovery only scans the user
  * and project skill roots, so a typed plugin command is trusted by its shape.
+ * Callers pass only the message text, never attachment notes or captured
+ * window data; an unknown name still reaches the model as plain text.
  */
 const PLUGIN_COMMAND_NAME =
   /^[a-zA-Z0-9_-]*[a-zA-Z][a-zA-Z0-9_-]*:[a-zA-Z0-9_-]*[a-zA-Z][a-zA-Z0-9_-]*$/u;
