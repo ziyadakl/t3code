@@ -1570,7 +1570,7 @@ describe("ClaudeAdapterV2 attachments", () => {
         yield* fileSystem.makeDirectory(path.join(configDir, "plugins"), { recursive: true });
         yield* fileSystem.writeFileString(
           path.join(pluginRoot, ".claude-plugin", "plugin.json"),
-          JSON.stringify({ name: "mattpocock-skills" }),
+          encodeJsonString({ name: "mattpocock-skills" }),
         );
         yield* fileSystem.writeFileString(
           path.join(pluginRoot, "skills", "ask-matt", "SKILL.md"),
@@ -1578,7 +1578,7 @@ describe("ClaudeAdapterV2 attachments", () => {
         );
         yield* fileSystem.writeFileString(
           path.join(configDir, "plugins", "installed_plugins.json"),
-          JSON.stringify({
+          encodeJsonString({
             version: 2,
             plugins: {
               "mattpocock-skills@mattpocock": [{ scope: "user", installPath: pluginRoot }],
@@ -1587,12 +1587,12 @@ describe("ClaudeAdapterV2 attachments", () => {
         );
         yield* fileSystem.writeFileString(
           path.join(configDir, "settings.json"),
-          JSON.stringify({ enabledPlugins: { "mattpocock-skills@mattpocock": true } }),
+          encodeJsonString({ enabledPlugins: { "mattpocock-skills@mattpocock": true } }),
         );
         const offeredMessages: Array<SDKUserMessage> = [];
         const adapter = ClaudeAdapterV2.makeClaudeAdapterV2({
           instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
-          settings: Schema.decodeSync(ClaudeSettings)({ homePath: configDir }),
+          settings: yield* Schema.decodeEffect(ClaudeSettings)({ homePath: configDir }),
           environment: {},
           attachmentsDir,
           fileSystem,
