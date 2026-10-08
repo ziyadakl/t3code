@@ -64,6 +64,29 @@ describe("planClaudeSkillDispatch", () => {
     }
   });
 
+  it("dispatches a typed slash command that ends the prompt", () => {
+    expect(planClaudeSkillDispatch("hey there. audit the checks\n\n/review", SKILLS)).toEqual({
+      leadingText: "hey there. audit the checks",
+      commandText: "/review",
+      skillName: "review",
+    });
+  });
+
+  it("dispatches a typed plugin slash command, which skill discovery does not list", () => {
+    expect(
+      planClaudeSkillDispatch("see what checks we have\n\n/mattpocock-skills:ask-matt", SKILLS),
+    ).toEqual({
+      leadingText: "see what checks we have",
+      commandText: "/mattpocock-skills:ask-matt",
+      skillName: "mattpocock-skills:ask-matt",
+    });
+  });
+
+  it("leaves typed slashes that are not commands as prose", () => {
+    expect(planClaudeSkillDispatch("read /etc/hosts and /unknown", SKILLS)).toBeUndefined();
+    expect(planClaudeSkillDispatch("open src/review now", SKILLS)).toBeUndefined();
+  });
+
   it("ignores a dollar token glued to other text", () => {
     expect(planClaudeSkillDispatch("cost is 5$implement", SKILLS)).toBeUndefined();
   });
