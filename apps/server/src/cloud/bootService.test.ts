@@ -247,7 +247,7 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
       ),
     );
   const service = yield* makeService();
-  return { service, makeService, fs, statePath, commands, timeouts, control, runtime };
+  return { service, makeService, fs, statePath, commands, timeouts, control, runtime, baseDir };
 });
 
 it.layer(NodeServices.layer)("boot service install", (it) => {
@@ -344,7 +344,8 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
 
   it.effect("installs, reports current state, and uninstalls", () =>
     Effect.gen(function* () {
-      const { service, fs, statePath, timeouts, runtime } = yield* makeHarness();
+      const { service, fs, statePath, timeouts, runtime, baseDir } = yield* makeHarness();
+      const path = yield* Path.Path;
       const plan = yield* service.install();
 
       expect(parseServiceState(yield* fs.readFileString(statePath))).toEqual({
@@ -355,6 +356,8 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
       expect(yield* fs.readFileString(plan.unitPath)).toContain(
         `ExecStart=${runtime.entryPath} __service-launcher`,
       );
+      // Only macOS keys permissions to the executable's path.
+      expect(yield* fs.exists(path.join(baseDir, "runtime", "launcher"))).toBe(false);
       expect(yield* service.status).toMatchObject({
         current: true,
         installedVersion: "1.2.3",
@@ -688,8 +691,15 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
 
   it.effect("installs, reports current state, and uninstalls on macOS", () =>
     Effect.gen(function* () {
-      const { service, fs, statePath, commands, timeouts, runtime } = yield* makeHarness("darwin");
+      const { service, fs, statePath, commands, timeouts, runtime, baseDir } =
+        yield* makeHarness("darwin");
       const path = yield* Path.Path;
+      yield* fs.chmod(runtime.entryPath, 0o755);
+      yield* fs.makeDirectory(path.join(runtime.versionDir, "node_modules"));
+      yield* fs.writeFileString(
+        path.join(runtime.versionDir, "node_modules", "native.node"),
+        "native\n",
+      );
       const plan = yield* service.install();
 
       expect(
@@ -704,8 +714,20 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
         protocol: SERVICE_LAUNCHER_PROTOCOL,
         activeVersion: "1.2.3",
       });
+      // TCC keys a non-bundled executable's grants to its path, so the launch
+      // agent runs a copy of the runtime at a path no update changes.
+      const launcherDir = path.join(baseDir, "runtime", "launcher");
+      const launcherEntry = path.join(launcherDir, "t3");
+      expect(plan.program).toEqual([launcherEntry, "__service-launcher"]);
       expect(yield* fs.readFileString(plan.unitPath)).toContain(
-        `    <string>${runtime.entryPath}</string>\n    <string>__service-launcher</string>`,
+        `    <string>${launcherEntry}</string>\n    <string>__service-launcher</string>`,
+      );
+      expect(yield* fs.readFileString(launcherEntry)).toBe(
+        yield* fs.readFileString(runtime.entryPath),
+      );
+      expect((yield* fs.stat(launcherEntry)).mode & 0o777).toBe(0o755);
+      expect(yield* fs.readFileString(path.join(launcherDir, "node_modules", "native.node"))).toBe(
+        "native\n",
       );
       expect(yield* service.status).toMatchObject({
         current: true,
@@ -713,12 +735,94 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
       });
       expect(yield* service.uninstall).toBe(true);
       expect((yield* service.status).installed).toBe(false);
+      expect(yield* fs.exists(launcherDir)).toBe(false);
       expect(commands.some((command) => command.startsWith("systemctl "))).toBe(false);
       // A bootout can block up to the plist's 90s ExitTimeOut; the runner's
       // 60s default would cancel it and let bootstrap race a loaded job.
       expect(timeouts.get("launchctl bootout --wait gui/501/com.t3tools.t3code.service")).toEqual(
         Duration.seconds(120),
       );
+    }),
+  );
+
+  it.effect("keeps the launch agent on one launcher path across versions on macOS", () =>
+    Effect.gen(function* () {
+      const { service, makeService, fs, baseDir } = yield* makeHarness("darwin");
+      const path = yield* Path.Path;
+      const runtimeDir = path.join(baseDir, "runtime");
+      const launcherDir = path.join(runtimeDir, "launcher");
+      const first = yield* service.install();
+      // Leftovers of an install that died mid-swap must not block the next one.
+      yield* fs.makeDirectory(path.join(runtimeDir, "launcher.next"));
+      yield* fs.writeFileString(path.join(runtimeDir, "launcher.next", "stale"), "");
+      yield* fs.makeDirectory(path.join(runtimeDir, "launcher.prev"));
+
+      const updated = yield* makeService(undefined, "1.2.4");
+      const second = yield* updated.install();
+
+      expect(second.program).toEqual(first.program);
+      expect(second.program[0]).toBe(path.join(launcherDir, "t3"));
+      expect(yield* fs.readFileString(path.join(launcherDir, ".install-complete"))).toBe("1.2.4\n");
+      expect(yield* fs.exists(path.join(launcherDir, "stale"))).toBe(false);
+      expect(yield* fs.exists(path.join(runtimeDir, "launcher.next"))).toBe(false);
+      expect(yield* fs.exists(path.join(runtimeDir, "launcher.prev"))).toBe(false);
+      expect(yield* updated.status).toMatchObject({ current: true, installedVersion: "1.2.4" });
+      expect((yield* service.status).current).toBe(false);
+    }),
+  );
+
+  it.effect("keeps a running launcher's executable readable while its copy is replaced", () =>
+    Effect.gen(function* () {
+      const { service, makeService, fs, baseDir } = yield* makeHarness("darwin");
+      const path = yield* Path.Path;
+      const launcherEntry = path.join(baseDir, "runtime", "launcher", "t3");
+      yield* service.install();
+      yield* fs.writeFileString(launcherEntry, "running launcher\n");
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const running = yield* fs.open(launcherEntry, { flag: "r" });
+          yield* (yield* makeService(undefined, "1.2.4")).install({ start: false });
+          const buffer = new Uint8Array(64);
+          const read = yield* running.read(buffer);
+          expect(new TextDecoder().decode(buffer.subarray(0, Number(read)))).toBe(
+            "running launcher\n",
+          );
+        }),
+      );
+      expect(yield* fs.readFileString(launcherEntry)).toBe("#!/bin/sh\n");
+    }),
+  );
+
+  it.effect("reports the launch agent stale when its launcher copy is missing", () =>
+    Effect.gen(function* () {
+      const { service, fs, baseDir } = yield* makeHarness("darwin");
+      const path = yield* Path.Path;
+      yield* service.install();
+      expect((yield* service.status).current).toBe(true);
+
+      yield* fs.remove(path.join(baseDir, "runtime", "launcher"), { recursive: true });
+      expect((yield* service.status).current).toBe(false);
+
+      yield* service.install();
+      expect((yield* service.status).current).toBe(true);
+    }),
+  );
+
+  it.effect("keeps the launcher copy when an install refuses a downgrade on macOS", () =>
+    Effect.gen(function* () {
+      const { makeService, fs, baseDir } = yield* makeHarness("darwin");
+      const path = yield* Path.Path;
+      yield* (yield* makeService(undefined, "1.2.4")).install();
+
+      const older = yield* makeService(undefined, "1.2.3");
+      expect((yield* older.install().pipe(Effect.flip))._tag).toBe(
+        "BootServiceDowngradeRefusedError",
+      );
+      expect(
+        yield* fs.readFileString(path.join(baseDir, "runtime", "launcher", ".install-complete")),
+      ).toBe("1.2.4\n");
+      expect(yield* fs.exists(path.join(baseDir, "runtime", "launcher.next"))).toBe(false);
     }),
   );
 
