@@ -1,10 +1,13 @@
 /**
- * ClaudeSkillDispatch — turns `$skill` mentions in a composer prompt into the
- * slash invocation Claude Code actually runs.
+ * ClaudeSkillDispatch — turns a skill mention anywhere in a composer prompt,
+ * a `$skill` chip or a typed `/skill`, into the slash invocation Claude Code
+ * actually runs.
  *
  * The composer inserts `$name` for every provider. Codex parses that natively;
- * Claude Code does not, and treats it as prose. Claude Code's only user-side
- * invocation is a text block whose first character is `/`: the harness
+ * Claude Code does not, and treats it as prose. The Claude Code CLI and
+ * desktop input boxes do run a typed `/name` from anywhere in the message,
+ * but T3 talks to the CLI over stream-json, which has no input box. There the
+ * only user-side invocation is a text block whose first character is `/`: the harness
  * expands `/name args` into the SKILL.md body, and every character after the
  * name (newlines included) arrives as `ARGUMENTS`. Verified against the CLI in
  * stream-json mode, which is what the Agent SDK uses:
@@ -24,13 +27,15 @@
  * @module provider/Drivers/ClaudeSkillDispatch
  */
 
+import { SKILL_MENTION_PATTERN, SKILL_NAME_SOURCE } from "@t3tools/shared/composerInlineTokens";
+
 /**
- * Same token shape the composer and timeline chips recognise
- * (`packages/shared/src/composerInlineTokens.ts`), so a rendered chip and a
- * dispatched skill are always the same set.
+ * A typed `/name`, with the same name characters as a `$name` chip.
+ * `/etc/hosts` and `src/x` never match: the name must stand alone between
+ * whitespace. Sentence punctuation after it ("try /review.") is consumed and
+ * dropped, so it never becomes part of the command.
  */
-const SKILL_MENTION_PATTERN =
-  /(^|\s)\p{Sc}(?![0-9][0-9_]*(?:[kKmMbBtT]|[eE][0-9]+)?(?:\s|$))(?=[a-zA-Z0-9:_-]*[a-zA-Z])([a-zA-Z0-9][a-zA-Z0-9:_-]*)(?=\s|$)/gu;
+const TYPED_SLASH_PATTERN = new RegExp(`(^|\\s)\\/(${SKILL_NAME_SOURCE})[.,;?!]*(?=\\s|$)`, "gu");
 
 export interface ClaudeSkillDispatch {
   /** Text before the dispatched mention, or `undefined` when it opens the prompt. */
@@ -41,21 +46,27 @@ export interface ClaudeSkillDispatch {
 }
 
 /**
- * Split `prompt` around the last `$skill` mention that names a known skill.
- * Returns `undefined` when there is nothing to dispatch, in which case the
- * prompt should go out unchanged. Mentions that do not match a discovered
- * skill stay literal: a `$HOME` in prose must not become a command.
+ * Split `prompt` around the last `$skill` or typed `/skill` mention that
+ * names a known skill. Returns `undefined` when there is nothing to dispatch,
+ * in which case the prompt should go out unchanged. Mentions that do not
+ * match a discovered skill stay literal: a `$HOME` or a `/16:9` in prose must
+ * not become a command.
  */
 export function planClaudeSkillDispatch(
   prompt: string,
   skillNames: ReadonlySet<string>,
 ): ClaudeSkillDispatch | undefined {
-  const mentions = [...prompt.matchAll(SKILL_MENTION_PATTERN)].flatMap((match) => {
-    const name = match[2] ?? "";
-    if (!skillNames.has(name)) return [];
-    const start = (match.index ?? 0) + (match[1]?.length ?? 0);
-    return [{ name, start, end: (match.index ?? 0) + match[0].length }];
-  });
+  // `$name` uses the composer's own pattern, so a rendered chip and a
+  // dispatched skill are always the same set.
+  const mentions = [SKILL_MENTION_PATTERN, TYPED_SLASH_PATTERN]
+    .flatMap((pattern) => [...prompt.matchAll(pattern)])
+    .map((match) => ({
+      name: match[2] ?? "",
+      start: (match.index ?? 0) + (match[1]?.length ?? 0),
+      end: (match.index ?? 0) + match[0].length,
+    }))
+    .filter((mention) => skillNames.has(mention.name))
+    .sort((left, right) => left.start - right.start);
   const last = mentions.at(-1);
   if (!last) {
     return undefined;

@@ -79,9 +79,17 @@ timestamp shows when the displayed wait started.
 
 Claude skills come from the config directory's `skills` folder and the project's
 `.claude/skills` folder. If both define the same name, the config-directory copy
-wins. Skills disabled in Claude's settings do not appear in the composer.
+wins. Skills of enabled plugins are included as `plugin:skill`, and so are
+custom commands: the `.md` files directly inside the config directory's
+`commands` folder and the project's `.claude/commands` folder, plus each enabled
+plugin's commands. Commands in subfolders are not listed. A skill wins over a
+command of the same name. Skills disabled in Claude's settings, and plugins
+switched off there, do not appear in the composer.
 
-Use `$` in the composer to select a skill. Skills marked `disable-model-invocation`
+Use `$` in the composer to select a skill, or type `/name` anywhere in the
+message, including a plugin skill as `/plugin:skill`. A `/name` that matches
+none of these stays plain text. Text after the skill is
+passed to it as its arguments. Skills marked `disable-model-invocation`
 can still be started by you. Invoke those one per message: Claude directly runs
 only the last named skill and may try to start earlier ones through its Skill
 tool, which refuses skills reserved for manual invocation.

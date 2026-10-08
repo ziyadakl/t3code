@@ -1488,13 +1488,21 @@ const makeClaudeUserMessageWithAttachments = Effect.fnUntraced(function* (input:
     attachmentsDir: input.attachmentsDir,
   });
 
+  // Only what the user typed can name a command. The appended attachment
+  // context (paths, untrusted captured-window JSON) rides in the leading block,
+  // so it can neither trigger a skill nor become the skill's ARGUMENTS.
+  // providerMessageTextWithAttachmentPaths only ever appends to input.text.
   const dispatch =
     input.skillNames === undefined
       ? undefined
-      : planClaudeSkillDispatch(textWithAttachmentPaths, input.skillNames);
+      : planClaudeSkillDispatch(input.text, input.skillNames);
+  const attachmentContext = textWithAttachmentPaths.slice(input.text.length).trim();
+  const leadingText = [dispatch?.leadingText, attachmentContext]
+    .filter((text) => text !== undefined && text.length > 0)
+    .join("\n\n");
   const content: Array<ClaudeUserContentBlock> = [];
-  if (dispatch?.leadingText !== undefined) {
-    content.push({ type: "text", text: dispatch.leadingText });
+  if (dispatch && leadingText.length > 0) {
+    content.push({ type: "text", text: leadingText });
   }
 
   for (const attachment of input.attachments) {
