@@ -1,3 +1,4 @@
+import { isCompactCommand } from "@t3tools/shared/compactCommand";
 import { ChatCanvas } from "./chat/ChatCanvas";
 import { RewindDialog } from "./chat/RewindDialog";
 import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
@@ -811,8 +812,7 @@ const SCRIPT_TERMINAL_COLS = 120;
 const SCRIPT_TERMINAL_ROWS = 30;
 
 function isCompactCommandMessage(message: ChatMessage): boolean {
-  const text = message.text.trim().toLowerCase();
-  return message.role === "user" && text === "/compact" && !message.attachments?.length;
+  return message.role === "user" && isCompactCommand(message.text) && !message.attachments?.length;
 }
 
 type ChatViewProps =
@@ -3551,7 +3551,7 @@ export default function ChatView(props: ChatViewProps) {
       optimisticCompactionMessage !== undefined &&
       isCompactCommandMessage(optimisticCompactionMessage)) ||
     (latestServerUserItem?.type === "user_message" &&
-      latestServerUserItem.text.trim().toLowerCase() === "/compact" &&
+      isCompactCommand(latestServerUserItem.text) &&
       latestServerUserItem.attachments.length === 0 &&
       latestServerUserItem.runId === activeActivityRun?.runId &&
       !isLatestRunSettled(activeActivityRun, activeRuntime));
@@ -7518,8 +7518,7 @@ export default function ChatView(props: ChatViewProps) {
       : null;
   const activeThreadHasCompactableConversation = serverVisibleTurnItems.some(
     ({ item }) =>
-      item.type === "user_message" &&
-      (item.text.trim().toLowerCase() !== "/compact" || item.attachments.length > 0),
+      item.type === "user_message" && (!isCompactCommand(item.text) || item.attachments.length > 0),
   );
   const compactThreadUnavailable =
     !activeThread ||

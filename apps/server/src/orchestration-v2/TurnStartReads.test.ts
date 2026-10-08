@@ -321,7 +321,24 @@ it.effect.each(["sqlite", "memory"] as const)(
         yield* sql`UPDATE orchestration_v2_projection_turn_items
           SET payload_json = ${original[0]!.payload_json} WHERE turn_item_id = ${item.id}`;
       }
-      for (const text of ["/compact", " \t/COMPACT\n", "\u00a0/compact\u3000"]) {
+      for (const text of ["/compacting", "/compactx keep"]) {
+        yield* store.apply({
+          id: EventId.make("compact-input"),
+          type: "message.updated",
+          threadId,
+          runId,
+          occurredAt: now,
+          payload: { ...message, text },
+        });
+        assert.isTrue((yield* store.getTurnStartContext(threadId, runId)).hasConversation);
+      }
+      for (const text of [
+        "/compact keep the tests",
+        "\u00a0/Compact\u3000focus on\nauth",
+        "/compact",
+        " \t/COMPACT\n",
+        "\u00a0/compact\u3000",
+      ]) {
         yield* store.apply({
           id: EventId.make("compact-input"),
           type: "message.updated",
@@ -336,7 +353,7 @@ it.effect.each(["sqlite", "memory"] as const)(
         ...message,
         id: MessageId.make("old-compact"),
         runId: oldRunId,
-        text: "\t/COMPACT\n",
+        text: "\t/COMPACT keep the tests\n",
       };
       yield* store.apply({
         id: EventId.make("old-compact-input"),

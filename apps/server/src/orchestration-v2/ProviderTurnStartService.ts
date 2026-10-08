@@ -1,3 +1,4 @@
+import { isCompactCommand } from "@t3tools/shared/compactCommand";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import {
@@ -254,7 +255,7 @@ export const layer: Layer.Layer<
                         (message) =>
                           message.id === source.userMessageId &&
                           message.attachments.length === 0 &&
-                          message.text.trim().toLowerCase() === "/compact",
+                          isCompactCommand(message.text),
                       ))),
               ))),
       );
@@ -370,8 +371,7 @@ export const layer: Layer.Layer<
         },
       );
       if (message.attachments.length === 0 && message.text.trimStart().startsWith("/")) {
-        const isEmptyCompaction =
-          message.text.trim().toLowerCase() === "/compact" && !projection.hasConversation;
+        const isEmptyCompaction = isCompactCommand(message.text) && !projection.hasConversation;
         // Preparing a run may already point the thread at a newly selected
         // provider. Account commands still belong to its last native session.
         const nativeThreads = new Map(
@@ -962,9 +962,7 @@ export const layer: Layer.Layer<
         compactionMessageIds: new Set(
           projection.messages
             .filter(
-              (candidate) =>
-                candidate.attachments.length === 0 &&
-                candidate.text.trim().toLowerCase() === "/compact",
+              (candidate) => candidate.attachments.length === 0 && isCompactCommand(candidate.text),
             )
             .map((candidate) => candidate.id),
         ),

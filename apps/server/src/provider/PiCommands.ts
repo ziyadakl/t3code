@@ -1,4 +1,5 @@
 import { type ServerProviderSkill, type ServerProviderSlashCommand } from "@t3tools/contracts";
+import { parseCompactCommand } from "@t3tools/shared/compactCommand";
 import * as Predicate from "effect/Predicate";
 
 // Pi RPC get_commands omits TUI builtins. Advertise /compact so T3 can map it to RPC compact.
@@ -13,14 +14,9 @@ export interface PiCompactCommand {
 }
 
 export function parsePiCompactCommand(text: string): PiCompactCommand | null {
-  const trimmed = text.trim();
-  if (trimmed === "/compact") return {};
-  if (!trimmed.startsWith("/compact")) return null;
-  const rest = trimmed.slice("/compact".length);
-  if (rest.length === 0) return {};
-  if (!/^\s/.test(rest)) return null;
-  const customInstructions = rest.trim();
-  return customInstructions.length === 0 ? {} : { customInstructions };
+  const customInstructions = parseCompactCommand(text);
+  if (customInstructions === null) return null;
+  return customInstructions === "" ? {} : { customInstructions };
 }
 
 export function withPiBuiltinSlashCommands(

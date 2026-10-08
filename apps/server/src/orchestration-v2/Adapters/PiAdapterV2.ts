@@ -25,6 +25,7 @@
  */
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
+import { normalizeCompactCommand } from "@t3tools/shared/compactCommand";
 import {
   defaultInstanceIdForDriver,
   PiSettings,
@@ -2258,12 +2259,16 @@ export function makePiAdapterV2(
                 }),
             ),
           ),
-        // The run executor routes a bare `/compact` here instead of startTurn.
-        // Pi's start path already turns that text into the RPC compact call.
+        // The run executor routes `/compact [instructions]` here instead of
+        // startTurn. Pi's start path turns that text into the RPC compact call,
+        // with any instructions as its customInstructions.
         compactThread: (turnInput) =>
           runtime.startTurn({
             ...turnInput,
-            message: { ...turnInput.message, text: "/compact" },
+            message: {
+              ...turnInput.message,
+              text: normalizeCompactCommand(turnInput.message.text),
+            },
           }),
         startTurn: (turnInput) =>
           Effect.gen(function* () {

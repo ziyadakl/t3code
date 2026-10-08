@@ -351,6 +351,10 @@
       "types": "./src/thirdPartyLicenses.ts",
       "import": "./src/thirdPartyLicenses.ts"
     },
+    "./compactCommand": {
+      "types": "./src/compactCommand.ts",
+      "import": "./src/compactCommand.ts"
+    },
     "./claudeCompaction": {
       "types": "./src/claudeCompaction.ts",
       "import": "./src/claudeCompaction.ts"

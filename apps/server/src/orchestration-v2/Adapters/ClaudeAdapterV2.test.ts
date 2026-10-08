@@ -3151,6 +3151,39 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, IdAllocator.layer))),
   );
 
+  it.effect("sends /compact instructions to Claude as the focus of its summary", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeWakeHarness;
+      const now = yield* DateTime.now;
+      const compact = harness.runtime.compactThread;
+      assert.isDefined(compact);
+      if (compact === undefined) return;
+      yield* compact(
+        makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now,
+          attemptId: RunAttemptId.make("claude-native-compact-instructions-attempt"),
+          text: " /Compact  keep the auth rewrite ",
+          attachments: [],
+        }),
+      );
+      yield* Queue.offer(
+        harness.sdkMessages,
+        makeResultFrame({
+          uuid: "00000000-0000-4000-8000-000000000203",
+          result: "Compacted conversation.",
+        }),
+      );
+      yield* Queue.take(harness.terminalReceipts);
+
+      assert.deepEqual(
+        harness.offeredMessages[0]?.message.content,
+        "/compact keep the auth rewrite",
+      );
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, IdAllocator.layer))),
+  );
+
   it.effect("titles Claude reads, searches, and skills on tool completion", () =>
     Effect.gen(function* () {
       const harness = yield* makeWakeHarness;

@@ -24,7 +24,7 @@ import {
   probeClaudeCapabilities,
   probeClaudeWorkspaceSnapshot,
 } from "./ClaudeProvider.ts";
-import { COMPACT_SLASH_COMMAND } from "./providerSnapshot.ts";
+import { COMPACT_WITH_INSTRUCTIONS_SLASH_COMMAND } from "./providerSnapshot.ts";
 
 vi.mock("@anthropic-ai/claude-agent-sdk", { spy: true });
 
@@ -127,7 +127,7 @@ it.layer(NodeServices.layer)("Claude capability probe SDK boundary", (it) => {
             ...machineSnapshot,
             slashCommandsPending: false,
             slashCommands: [
-              COMPACT_SLASH_COMMAND,
+              COMPACT_WITH_INSTRUCTIONS_SLASH_COMMAND,
               {
                 name: index === 0 ? "start-session" : "other-project",
                 description: "Project command",
@@ -197,7 +197,7 @@ it.layer(NodeServices.layer)("Claude capability probe SDK boundary", (it) => {
       const failed = yield* probeClaudeWorkspaceSnapshot(settings, machineSnapshot, cwd);
       assert.deepEqual(failed, {
         ...machineSnapshot,
-        slashCommands: [COMPACT_SLASH_COMMAND],
+        slashCommands: [COMPACT_WITH_INSTRUCTIONS_SLASH_COMMAND],
         slashCommandsPending: true,
         skills: [
           {
@@ -222,7 +222,10 @@ it.layer(NodeServices.layer)("Claude capability probe SDK boundary", (it) => {
           }) as ReturnType<typeof ClaudeSdk.query>,
       );
       const recovered = yield* probeClaudeWorkspaceSnapshot(settings, machineSnapshot, cwd);
-      assert.deepEqual(recovered.slashCommands, [COMPACT_SLASH_COMMAND, { name: "recovered" }]);
+      assert.deepEqual(recovered.slashCommands, [
+        COMPACT_WITH_INSTRUCTIONS_SLASH_COMMAND,
+        { name: "recovered" },
+      ]);
       assert.equal(recovered.status, "ready");
       assert.equal(recovered.slashCommandsPending, false);
       assert.deepEqual(recovered.skills, failed.skills);

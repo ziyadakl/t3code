@@ -1,3 +1,4 @@
+import { isCompactCommand } from "@t3tools/shared/compactCommand";
 import { useAtomValue } from "@effect/atom-react";
 import { useThreadReportedModelSelection } from "../../state/entities";
 import { UsageLimitRecoveryCard } from "./UsageLimitRecoveryCard";
@@ -542,8 +543,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
       (entry) =>
         entry.type === "message" &&
         entry.message.role === "user" &&
-        ((entry.message.attachments?.length ?? 0) > 0 ||
-          entry.message.text.trim().toLowerCase() !== "/compact"),
+        ((entry.message.attachments?.length ?? 0) > 0 || !isCompactCommand(entry.message.text)),
     ) ||
     (props.historyControls?.hasMoreHistory === true &&
       props.selectedThread.latestUserMessageAt !== null);

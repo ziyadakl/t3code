@@ -1,3 +1,4 @@
+import { isCompactCommand } from "@t3tools/shared/compactCommand";
 import type { ComposerTextPaste } from "../native/T3ComposerEditor.types";
 import { useAtomValue } from "@effect/atom-react";
 import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/shell";
@@ -369,7 +370,7 @@ export function useThreadComposerState() {
     const queuedCompact = selectedThreadQueuedMessages.some(
       (message) =>
         message.messageId === dispatchingQueuedMessageId &&
-        message.text.trim().toLowerCase() === "/compact" &&
+        isCompactCommand(message.text) &&
         message.attachments.length === 0,
     );
     if (queuedCompact) return true;
@@ -379,7 +380,7 @@ export function useThreadComposerState() {
       ({ item }) =>
         item.runId === activeRunId &&
         item.type === "user_message" &&
-        item.text.trim().toLowerCase() === "/compact" &&
+        isCompactCommand(item.text) &&
         item.attachments.length === 0,
     );
     if (!compactMessage) return false;
