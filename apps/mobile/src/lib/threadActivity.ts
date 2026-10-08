@@ -6,6 +6,7 @@ import type {
 import { turnItemIsWorkspacePreparation } from "@t3tools/client-runtime/state/turn-item-presentation";
 import { formatSubagentDisplayTitle } from "@t3tools/client-runtime/state/subagent-display";
 import { extractToolActivityPresentation } from "@t3tools/client-runtime/work-log/tool-presentation";
+import { isFoldableProgressNote } from "@t3tools/client-runtime/progress-note";
 import {
   turnItemHasDetail,
   turnItemNeedsDetailFetch,
@@ -1017,16 +1018,19 @@ export function failedFeedRunIds(
 }
 
 /**
- * A prompt without a run (a provider-native subagent, or a turn imported from
- * V1) folds its response like a run. `runlessWorkActive` keeps the latest
- * runless response open; V2 work must not reopen imported turns.
+ * A settled run folds tool steps, thinking and short progress notes. The
+ * terminal assistant message always stays visible, and so does every other
+ * message with real content: only a one-line note (see
+ * `isFoldableProgressNote`) folds. A prompt without a run (a provider-native
+ * subagent, or a turn imported from V1) folds its response like a run.
+ * `runlessWorkActive` keeps the latest runless response open; V2 work must
+ * not reopen imported turns.
  */
 function deriveThreadFeedRunFolds(
   feed: ReadonlyArray<ThreadFeedEntry>,
   latestRun: ThreadFeedLatestRun | null,
   runlessWorkActive: boolean,
 ): ReadonlyMap<string, ThreadFeedRunFold> {
-  const firstAssistantMessageIdByRun = new Map<RunId, string>();
   const terminalAssistantMessageIdByRun = new Map<RunId, string>();
   const interruptedRunIds = new Set<RunId>();
   const failedRunIds = failedFeedRunIds(feed, latestRun);
@@ -1060,9 +1064,6 @@ function deriveThreadFeedRunFolds(
     }
     group.entries.push(entry);
     if (entry.type === "message") {
-      if (!firstAssistantMessageIdByRun.has(runId)) {
-        firstAssistantMessageIdByRun.set(runId, entry.id);
-      }
       terminalAssistantMessageIdByRun.set(runId, entry.id);
     }
     if (entry.type !== "activity-group") continue;
@@ -1092,14 +1093,15 @@ function deriveThreadFeedRunFolds(
     ) {
       continue;
     }
-    const firstAssistantId = firstAssistantMessageIdByRun.get(runId);
     const terminalAssistantId = terminalAssistantMessageIdByRun.get(runId);
     const hiddenEntryIds = new Set(
       group.entries
         .filter(
           (entry) =>
-            entry.id !== firstAssistantId &&
             entry.id !== terminalAssistantId &&
+            // Messages with real content stay readable; only short progress
+            // notes fold along with the work around them.
+            (entry.type !== "message" || isFoldableProgressNote(entry.message.text)) &&
             entry.type !== "html-render" &&
             !(
               entry.type === "activity-group" &&

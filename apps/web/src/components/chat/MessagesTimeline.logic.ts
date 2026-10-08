@@ -1,4 +1,5 @@
 import { worktreeSetupAgentStarted } from "@t3tools/client-runtime/worktree-setup";
+import { isFoldableProgressNote } from "@t3tools/client-runtime/progress-note";
 export { worktreeSetupAgentStarted } from "@t3tools/client-runtime/worktree-setup";
 import * as Equal from "effect/Equal";
 import { shallow } from "zustand/vanilla/shallow";
@@ -862,12 +863,13 @@ function failedTimelineRunIds(
 }
 
 /**
- * Settled turns fold work before their terminal assistant message behind
- * a "Worked for ..." row; assistant messages themselves always stay visible.
- * Ordinary trailing work joins the fold, while failures
- * and work still in progress stay visible. A prompt without a run (a
- * provider-native subagent, or a turn imported from V1) folds its response
- * the same way.
+ * Settled turns fold tool steps, thinking and short progress notes behind a
+ * "Worked for ..." row. The terminal assistant message always stays visible,
+ * and so does every other message with real content: only a one-line note
+ * (see `isFoldableProgressNote`) folds. Ordinary trailing work joins the fold,
+ * while failures and work still in progress stay visible. A prompt without a
+ * run (a provider-native subagent, or a turn imported from V1) folds under
+ * the same rule.
  */
 function deriveTurnFolds(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
@@ -976,9 +978,12 @@ function deriveTurnFolds(input: {
       ? group.entries.findIndex((entry) => entry.id === group.terminalEntry?.id)
       : group.entries.length;
     for (const [index, entry] of group.entries.entries()) {
-      // Assistant prose never folds: an answer followed by a later status
-      // line in the same turn must stay readable. Only work folds.
-      if (entry.kind === "message") {
+      if (entry.id === group.terminalEntry?.id) {
+        continue;
+      }
+      // Messages with real content stay readable; only short progress notes
+      // fold along with the work around them.
+      if (entry.kind === "message" && !isFoldableProgressNote(entry.message.text)) {
         continue;
       }
       const isCompaction =

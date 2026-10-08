@@ -823,18 +823,18 @@ describe("buildThreadFeed", () => {
     ).toBe(false);
   });
 
-  it("keeps opening and final assistant messages around the first hidden work", () => {
+  it("keeps a multi-line plan and the final message visible while a short note folds", () => {
     const opening = {
       ...assistantMessage("2026-06-20T00:00:01.500Z"),
       id: TurnItemId.make("item-opening"),
       messageId: MessageId.make("message-opening"),
-      text: "I will check the deployment configuration.",
+      text: "The goal: check the deployment.\nThe parts:\n1. Configuration\n2. Build",
     };
     const middle = {
       ...assistantMessage("2026-06-20T00:00:02.500Z"),
       id: TurnItemId.make("item-middle"),
       messageId: MessageId.make("message-middle"),
-      text: "The configuration is valid; checking the build next.",
+      text: "Let me check the build.",
     };
     const feed = buildThreadFeed([
       projected(userMessage(), 0),
@@ -876,23 +876,32 @@ describe("buildThreadFeed", () => {
     expect(expanded[4]).toMatchObject({ message: { id: middle.messageId, text: middle.text } });
   });
 
-  it("does not fold a response that only has opening and final messages", () => {
-    const feed = buildThreadFeed([
-      projected(userMessage(), 0),
-      projected(
-        {
-          ...assistantMessage("2026-06-20T00:00:02.000Z"),
-          id: TurnItemId.make("item-opening"),
-          messageId: MessageId.make("message-opening"),
-          text: "The result is ready.",
-        },
-        1,
-      ),
-      projected(assistantMessage(), 2),
-    ]);
+  it("folds a short opening note in a prose-only response but keeps a long one", () => {
+    const presentedIds = (openingText: string) =>
+      deriveThreadFeedPresentation(
+        buildThreadFeed([
+          projected(userMessage(), 0),
+          projected(
+            {
+              ...assistantMessage("2026-06-20T00:00:02.000Z"),
+              id: TurnItemId.make("item-opening"),
+              messageId: MessageId.make("message-opening"),
+              text: openingText,
+            },
+            1,
+          ),
+          projected(assistantMessage(), 2),
+        ]),
+        null,
+        new Set(),
+      ).map((entry) => entry.id);
 
-    const presented = deriveThreadFeedPresentation(feed, null, new Set());
-    expect(presented.map((entry) => entry.id)).toEqual([
+    expect(presentedIds("Let me check the result.")).toEqual([
+      "message-user",
+      "run-fold:run-1",
+      "message-assistant",
+    ]);
+    expect(presentedIds("The result is ready.\n- Build passed\n- Tests passed")).toEqual([
       "message-user",
       "message-opening",
       "message-assistant",
@@ -1148,7 +1157,7 @@ describe("buildThreadFeed", () => {
         new Set(),
         "2026-06-20T00:01:00.000Z",
       )
-        .slice(0, 4)
+        .slice(0, 3)
         .map((entry) => (entry.type === "message" ? entry.message.role : entry.type));
 
     // A sent prompt and an automatic wake both start V2 work below the import.
@@ -1158,7 +1167,7 @@ describe("buildThreadFeed", () => {
         id: TurnItemId.make("new-prompt"),
         messageId: MessageId.make("new-prompt"),
       }),
-    ).toEqual(["user", "assistant", "run-fold", "assistant"]);
+    ).toEqual(["user", "run-fold", "assistant"]);
     expect(
       presented({
         ...base("wake", "2026-06-20T00:01:00.000Z", 4),
@@ -1167,7 +1176,7 @@ describe("buildThreadFeed", () => {
         outcome: "completed",
         summary: "Background task finished",
       }),
-    ).toEqual(["user", "assistant", "run-fold", "assistant"]);
+    ).toEqual(["user", "run-fold", "assistant"]);
   });
 
   it("keeps a provider-native subagent's runless tool call live while it works", () => {

@@ -39,6 +39,10 @@
       "types": "./src/userMessage.ts",
       "default": "./src/userMessage.ts"
     },
+    "./progress-note": {
+      "types": "./src/progressNote.ts",
+      "default": "./src/progressNote.ts"
+    },
     "./secret-request": {
       "types": "./src/secretRequest.ts",
       "default": "./src/secretRequest.ts"
