@@ -55,7 +55,10 @@ import {
   resolveProviderStatusCachePath,
   writeProviderStatusCache,
 } from "./providerStatusCache.ts";
-import { COMPACT_SLASH_COMMAND } from "./providerSnapshot.ts";
+import {
+  COMPACT_SLASH_COMMAND,
+  COMPACT_WITH_INSTRUCTIONS_SLASH_COMMAND,
+} from "./providerSnapshot.ts";
 import type { ProviderInstance, ProviderWorkspaceSnapshot } from "./ProviderDriver.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
@@ -3252,7 +3255,7 @@ it.layer(
         );
 
         assert.deepStrictEqual(status.slashCommands, [
-          COMPACT_SLASH_COMMAND,
+          COMPACT_WITH_INSTRUCTIONS_SLASH_COMMAND,
           {
             name: "ui",
             description: "Explore and refine UI",
