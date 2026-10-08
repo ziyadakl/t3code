@@ -15,7 +15,7 @@ import { Textarea } from "../ui/textarea";
 import type { MessageRewindMenuRow } from "../ChatView.logic";
 
 /** Claude Code's `/rewind` menu labels. */
-export const REWIND_CHOICE_LABELS: Record<ThreadRewindChoice, string> = {
+const REWIND_CHOICE_LABELS: Record<ThreadRewindChoice, string> = {
   "code-and-conversation": "Restore code and conversation",
   conversation: "Restore conversation",
   code: "Restore code",

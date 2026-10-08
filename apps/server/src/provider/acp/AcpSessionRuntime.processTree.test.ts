@@ -39,6 +39,14 @@ const threadSpawnHelperSource = NodeURL.fileURLToPath(
   new URL("../../../scripts/acp-thread-spawn-helper.c", import.meta.url),
 );
 
+// terminatePosixOwnedProcessTree reads the real process.pid to find the T3
+// server and never signals it or its group. A fabricated PID equal to the test
+// worker's real PID silently becomes "the server". Fresh CI VMs hand workers
+// PIDs near 1000, so fabricated PIDs that must stay foreign go above
+// PID_MAX_LIMIT (2^22 on Linux, far above macOS's 99999), where no real
+// process can live.
+const ABOVE_REAL_PIDS = 4_194_304;
+
 const identity = (
   pid: number,
   ppid: number,
@@ -73,7 +81,13 @@ function makeController(input: {
         .map((process) => process.pid),
     childrenOf: (pid) => [...processes.values()].filter((process) => process.ppid === pid),
     identity: (pid) => processes.get(pid),
-    snapshot: () => [...processes.values()],
+    snapshot: () => {
+      const self = processes.get(process.pid);
+      if (self !== undefined && self.startTime !== "server") {
+        throw new Error(`fixture PID ${process.pid} collides with the test worker's real PID`);
+      }
+      return [...processes.values()];
+    },
     signalProcess: (pid, signal) => {
       signals.push(`process:${pid}:${signal}`);
       if (input.onProcess) return input.onProcess(processes, pid, signal);
@@ -654,9 +668,10 @@ describe("terminatePosixOwnedProcessTree", () => {
 
   it.live("rotates more than 64 live parents without scanning retained tombstones", () =>
     Effect.gen(function* () {
-      const parents = Array.from({ length: 130 }, (_, index) =>
-        identity(1_000 + index, 100, 1_000 + index, 1_000 + index),
-      );
+      const parents = Array.from({ length: 130 }, (_, index) => {
+        const pid = ABOVE_REAL_PIDS + 1_000 + index;
+        return identity(pid, 100, pid, pid);
+      });
       let childListReads = 0;
       let identityCalls = 0;
       let snapshotCalls = 0;

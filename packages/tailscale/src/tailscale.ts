@@ -302,7 +302,7 @@ export interface TailscaleWhois {
 
 const decodeTailscaleWhoisJson = Schema.decodeEffect(Schema.fromJsonString(TailscaleWhoisJson));
 
-export const parseTailscaleWhois = (
+const parseTailscaleWhois = (
   rawWhoisJson: string,
 ): Effect.Effect<TailscaleWhois, TailscaleWhoisParseError> =>
   decodeTailscaleWhoisJson(rawWhoisJson).pipe(

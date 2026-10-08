@@ -58,7 +58,7 @@ export type MirrorAction =
     };
 
 /** The folder a desktop session belongs to: where it started, not a worktree it moved into. */
-export function desktopProjectFolder(session: ClaudeSessionSources.DesktopSession): string {
+function desktopProjectFolder(session: ClaudeSessionSources.DesktopSession): string {
   return session.originCwd || session.cwd;
 }
 
