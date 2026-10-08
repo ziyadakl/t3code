@@ -1440,6 +1440,19 @@ describe("MessagesTimeline", () => {
             },
           },
           {
+            id: "work-spacing",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:31.500Z",
+            entry: {
+              id: "work-spacing",
+              createdAt: "2026-03-17T19:12:31.500Z",
+              runId,
+              label: "Ran command",
+              tone: "tool",
+              toolLifecycleStatus: "completed",
+            },
+          },
+          {
             id: "assistant-final-spacing",
             kind: "message",
             createdAt: "2026-03-17T19:12:32.000Z",

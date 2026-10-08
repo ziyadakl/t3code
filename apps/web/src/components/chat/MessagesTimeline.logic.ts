@@ -862,8 +862,9 @@ function failedTimelineRunIds(
 }
 
 /**
- * Settled turns fold activity before their terminal assistant message behind
- * a "Worked for ..." row. Ordinary trailing work joins the fold, while failures
+ * Settled turns fold work before their terminal assistant message behind
+ * a "Worked for ..." row; assistant messages themselves always stay visible.
+ * Ordinary trailing work joins the fold, while failures
  * and work still in progress stay visible. A prompt without a run (a
  * provider-native subagent, or a turn imported from V1) folds its response
  * the same way.
@@ -975,7 +976,9 @@ function deriveTurnFolds(input: {
       ? group.entries.findIndex((entry) => entry.id === group.terminalEntry?.id)
       : group.entries.length;
     for (const [index, entry] of group.entries.entries()) {
-      if (entry.id === group.terminalEntry?.id) {
+      // Assistant prose never folds: an answer followed by a later status
+      // line in the same turn must stay readable. Only work folds.
+      if (entry.kind === "message") {
         continue;
       }
       const isCompaction =
