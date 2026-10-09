@@ -12,18 +12,24 @@ type SlashSearchItem = Extract<
   { type: "slash-command" | "provider-slash-command" | "skill" }
 >;
 
+export type SlashCommandPromptPosition = "prompt-start" | "line-start" | "mid-line";
+
 /**
- * A provider expands a slash command only when it opens the whole message;
- * anywhere else it reaches the agent as literal text, so it is not offered
- * there. Built-ins apply locally on selection and skills insert a `$` mention
- * the server dispatches from any position, so both stay available.
+ * A provider expands its own slash command only when it opens the whole
+ * message, so provider commands are offered only there. Built-ins apply
+ * locally on selection, so they stay available at the start of any line.
+ * Skills insert a `$` mention the server dispatches from any position, so
+ * they are the only items offered mid-line.
  */
 export function slashCommandItemsForPromptPosition(
   items: ReadonlyArray<SlashSearchItem>,
-  isAtPromptStart: boolean,
+  position: SlashCommandPromptPosition,
 ): SlashSearchItem[] {
-  if (isAtPromptStart) {
+  if (position === "prompt-start") {
     return [...items];
+  }
+  if (position === "mid-line") {
+    return items.filter((item) => item.type === "skill");
   }
   return items.filter((item) => item.type !== "provider-slash-command");
 }

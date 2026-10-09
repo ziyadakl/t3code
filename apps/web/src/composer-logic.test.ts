@@ -313,6 +313,43 @@ describe("detectComposerTrigger", () => {
     });
   });
 
+  it("detects a slash command typed mid-sentence as an inline trigger", () => {
+    const text = "hey can u /ask";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "slash-command",
+      query: "ask",
+      rangeStart: "hey can u ".length,
+      rangeEnd: text.length,
+      inline: true,
+    });
+  });
+
+  it("detects a plugin skill name typed mid-sentence", () => {
+    const text = "please /mattpocock-skills:ask";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toMatchObject({ kind: "slash-command", query: "mattpocock-skills:ask" });
+  });
+
+  it("opens the inline slash menu on a bare slash after text", () => {
+    const text = "hey /";
+
+    expect(detectComposerTrigger(text, text.length)).toMatchObject({
+      kind: "slash-command",
+      query: "",
+      inline: true,
+    });
+  });
+
+  it.each(["see /etc/hosts", "use and/or", "path src/review"])(
+    "leaves prose slashes alone in %s",
+    (text) => {
+      expect(detectComposerTrigger(text, text.length)).toBeNull();
+    },
+  );
+
   it.each(["$", "€", "£", "¥", "₹", "₩", "₿", "𑿝"])(
     "detects %sskill trigger at cursor",
     (prefix) => {
