@@ -2694,7 +2694,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       );
       const slashCommandItems = slashCommandItemsForPromptPosition(
         [...builtInSlashCommandItems, ...visibleProviderSlashCommandItems, ...skillItems],
-        composerTrigger.rangeStart === 0,
+        composerTrigger.inline
+          ? "mid-line"
+          : composerTrigger.rangeStart === 0
+            ? "prompt-start"
+            : "line-start",
       );
       return searchSlashCommandItems(slashCommandItems, query);
     }
