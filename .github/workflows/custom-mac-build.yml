@@ -1,8 +1,12 @@
 name: Custom Mac CLI Build
 
-# Builds the darwin-arm64 T3 Code runtime archive for this fork's custom-v2
-# branch on a GitHub-hosted Apple Silicon runner, so no personal Mac ever has to
-# build it. Never runs on its own; see the trigger note below.
+# Builds the T3 Code runtime archives for this fork's custom-v2 branch on
+# GitHub-hosted runners: darwin-arm64 for the Mac, linux-x64 for the Work boxes,
+# so no Mac or server ever has to build one. Never runs on its own; see the
+# trigger note below. The name stays "Mac" so existing run lookups keep working.
+#
+# The Linux artifact carries the version in its name (cli-linux-x64-<version>),
+# so a Work box can find the build the Mac runs without knowing the run.
 #
 # This is a trimmed copy of the CLI-archive half of release-desktop.yml: the same
 # setup-vp action, the same Rust toolchain action, the same build-exe and
@@ -17,7 +21,7 @@ name: Custom Mac CLI Build
 # The dispatch trigger stays for the day custom-v2 becomes the default branch.
 #
 # The version is 0.0.45-custom.<8-char sha of the newest commit outside .github/>,
-# so a change to this file alone keeps the name of the Linux build made on the VPS.
+# so a change to this file alone keeps the name of the build.
 on:
   workflow_dispatch:
     inputs:
@@ -26,6 +30,10 @@ on:
         required: false
   push:
     branches: [custom-v2]
+  # A change to this file builds both archives before it merges.
+  pull_request:
+    branches: [custom-v2]
+    paths: [.github/workflows/custom-mac-build.yml]
 
 permissions:
   contents: read
@@ -38,14 +46,30 @@ env:
   # Keep in step with SEA_NODE_VERSION in apps/server/vite.config.ts; the
   # single-executable build needs a Node 25.7+ host, unlike the repo's own Node.
   VP_NODE_VERSION: "26.8.2"
-  RUST_TARGET: aarch64-apple-darwin
-  RESOURCE_KEY: darwin-arm64
 
 jobs:
   build:
-    name: Build macOS arm64 CLI archive
-    runs-on: macos-14
+    name: Build ${{ matrix.platform }} ${{ matrix.arch }} CLI archive
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: mac
+            arch: arm64
+            runner: macos-14
+            rust_target: aarch64-apple-darwin
+            resource_key: darwin-arm64
+          # Ubuntu 24.04's glibc (2.39) is the oldest any Work box runs.
+          - platform: linux
+            arch: x64
+            runner: ubuntu-24.04
+            rust_target: x86_64-unknown-linux-gnu
+            resource_key: linux-x64
+    env:
+      RUST_TARGET: ${{ matrix.rust_target }}
+      RESOURCE_KEY: ${{ matrix.resource_key }}
     steps:
       # This repository is public, so Git needs no credentials. checkout's
       # credential cleanup runs submodule foreach even with submodules disabled,
@@ -131,8 +155,8 @@ jobs:
         run: |
           set -euo pipefail
           node scripts/build-cli-archive.ts \
-            --platform mac \
-            --arch arm64 \
+            --platform "${{ matrix.platform }}" \
+            --arch "${{ matrix.arch }}" \
             --version "$VERSION" \
             --resource-monitor-dir "$RUNNER_TEMP/cli-resource-monitor" \
             --output-dir release-cli
@@ -144,6 +168,7 @@ jobs:
       # codesign only exists on macOS, so record its verdict here for anyone
       # inspecting the artifact from a Linux box later.
       - name: Report signing state
+        if: matrix.platform == 'mac'
         shell: bash
         run: |
           set -euo pipefail
@@ -157,6 +182,6 @@ jobs:
       - name: Upload CLI archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: cli-mac-arm64
+          name: ${{ matrix.platform == 'mac' && 'cli-mac-arm64' || format('cli-linux-x64-{0}', env.VERSION) }}
           path: release-cli/*
           if-no-files-found: error
