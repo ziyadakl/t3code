@@ -5,8 +5,9 @@ name: Custom Mac CLI Build
 # so no Mac or server ever has to build one. Never runs on its own; see the
 # trigger note below. The name stays "Mac" so existing run lookups keep working.
 #
-# The Linux artifact carries the version in its name (cli-linux-x64-<version>),
-# so a Work box can find the build the Mac runs without knowing the run.
+# Each artifact carries the version in its name (cli-mac-arm64-<version>,
+# cli-linux-x64-<version>), so the Mac and each Work box can fetch one build by
+# its version alone, without knowing the run.
 #
 # This is a trimmed copy of the CLI-archive half of release-desktop.yml: the same
 # setup-vp action, the same Rust toolchain action, the same build-exe and
@@ -182,6 +183,6 @@ jobs:
       - name: Upload CLI archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: ${{ matrix.platform == 'mac' && 'cli-mac-arm64' || format('cli-linux-x64-{0}', env.VERSION) }}
+          name: cli-${{ matrix.platform }}-${{ matrix.arch }}-${{ env.VERSION }}
           path: release-cli/*
           if-no-files-found: error
