@@ -4,7 +4,7 @@ import { FLOATING_LAYER_SELECTOR } from "~/lib/floatingLayer";
 import { isTerminalFocused } from "~/lib/terminalFocus";
 
 /** How close two Escape presses must be to count as a double press. */
-export const DOUBLE_ESCAPE_WINDOW_MS = 500;
+const DOUBLE_ESCAPE_WINDOW_MS = 500;
 
 export interface EscapeState {
   /** When the last unblocked press landed, or null when none is remembered. */
