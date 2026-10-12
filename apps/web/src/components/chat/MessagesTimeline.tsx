@@ -2401,7 +2401,8 @@ function RevertUserMessageButton({
             type="button"
             size="xs"
             variant="ghost"
-            disabled={activity.isRevertingCheckpoint || activity.isWorking}
+            // A running turn is stopped by the click itself (ChatView requestMessageRewind).
+            disabled={activity.isRevertingCheckpoint}
             onClick={() => ctx.onRevertToTurnCount(turnCount, messageId)}
             aria-label="Edit from here"
           />

@@ -58,6 +58,8 @@ import * as Schema from "effect/Schema";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentThreadShells, environmentThreadDetails } from "../state/threads";
 import { waitForAtomValue } from "../state/waitForAtomValue";
+import { orchestrationEnvironment } from "../state/orchestration";
+import { formatEnvironmentQueryError } from "../state/query";
 import { filterTerminalContextsWithText, type TerminalContextDraft } from "../lib/terminalContext";
 import { stripInlineContextReferences } from "~/lib/composerContextReferences";
 import type { DraftThreadEnvMode } from "../composerDraftStore";
@@ -1108,6 +1110,34 @@ export async function waitForStartedServerThread(
 }
 
 /**
+ * Resolves with the thread's runs once none is live, the server's condition
+ * for a rewind (Orchestrator `hasLiveRun`), after Stop was sent. Rejects when
+ * the run has not stopped within `timeoutMs`.
+ */
+export async function waitForThreadToStop(
+  threadRef: ScopedThreadRef,
+  timeoutMs = 15_000,
+): Promise<ReadonlyArray<OrchestrationV2Run>> {
+  const threadAtom = environmentThreadDetails.stateAtom(threadRef);
+  const stopped = await waitForAtomValue({
+    registry: appAtomRegistry,
+    atom: threadAtom,
+    predicate: (state) => {
+      const projection = Option.getOrNull(state.data);
+      return (
+        projection !== null &&
+        !projection.runs.some(
+          (run) =>
+            run.status === "preparing" || run.status === "starting" || run.status === "running",
+        )
+      );
+    },
+    timeoutMs,
+  });
+  if (!stopped) throw new Error("The current turn did not stop. Press Stop, then rewind again.");
+  return Option.getOrNull(appAtomRegistry.get(threadAtom).data)?.runs ?? [];
+}
+/**
  * Why a message rewind cannot start now, or null. A queued message, even one
  * Stop held, would be sent into the rewound chat; the server refuses it too.
  */
@@ -1164,6 +1194,59 @@ export function deriveMessageRewindMenu(input: {
   };
 }
 
+/**
+ * Fetches Claude's dry run of a code restore for one message through the
+ * query the rewind menu reads. The query stays mounted until `release`, so a
+ * menu opened before then shows the answer without checking again. Answers
+ * `{ preview: null, error: null }` when the dry run is still out at the timeout.
+ */
+export async function loadThreadRewindPreview(
+  target: {
+    readonly environmentId: EnvironmentId;
+    readonly threadId: ThreadId;
+    readonly messageId: MessageId;
+  },
+  timeoutMs = 20_000,
+): Promise<{
+  readonly preview: OrchestrationV2ThreadRewindPreview | null;
+  readonly error: string | null;
+  readonly release: () => void;
+}> {
+  const atom = orchestrationEnvironment.threadRewindPreview({
+    environmentId: target.environmentId,
+    input: { threadId: target.threadId, messageId: target.messageId },
+  });
+  const release = appAtomRegistry.subscribe(atom, () => {});
+  await waitForAtomValue({
+    registry: appAtomRegistry,
+    atom,
+    predicate: (result) => result._tag !== "Initial" && !result.waiting,
+    timeoutMs,
+  });
+  // Only a settled answer counts: a stale success while refetching is not one.
+  const result = appAtomRegistry.get(atom);
+  if (result.waiting) return { preview: null, error: null, release };
+  return {
+    preview: result._tag === "Success" ? result.value : null,
+    error: result._tag === "Failure" ? formatEnvironmentQueryError(result.cause) : null,
+    release,
+  };
+}
+/**
+ * What a click on a Claude message's rewind arrow does once the dry run is
+ * back: rewind the conversation at once when no code choice could apply, or
+ * open the rewind menu. An unknown answer (dry run failed) always asks.
+ */
+export function decideMessageRewindStart(input: {
+  readonly preview: OrchestrationV2ThreadRewindPreview | null;
+  readonly error: string | null;
+}):
+  | { readonly kind: "rewind-now"; readonly choice: ThreadRewindChoice }
+  | { readonly kind: "ask" } {
+  return input.preview !== null && !threadRewindPreviewOffersCode(input.preview)
+    ? { kind: "rewind-now", choice: "conversation" }
+    : { kind: "ask" };
+}
 /**
  * Runs `revert` (the rollback command `requestId`) and resolves once the
  * message's run is rolled back, or the thread records that this rewind
