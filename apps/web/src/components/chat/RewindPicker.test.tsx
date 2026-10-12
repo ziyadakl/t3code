@@ -115,6 +115,17 @@ describe("RewindPicker", () => {
     expect(onChoose).toHaveBeenCalledExactlyOnceWith("m1");
   });
 
+  it("opens and closes in a browser whose scrollIntoView returns a promise", () => {
+    // Current Chrome resolves scrollIntoView with a promise; an effect that
+    // returned it crashed the page with "destroy is not a function".
+    scrollIntoView.mockImplementation(() => Promise.resolve() as unknown as void);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    render();
+    render(false);
+    expect(errors).not.toHaveBeenCalled();
+    errors.mockRestore();
+  });
+
   it("closes without choosing on Escape", () => {
     render();
     key("Escape");

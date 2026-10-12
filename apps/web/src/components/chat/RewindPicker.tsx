@@ -91,8 +91,10 @@ function RewindPickerList(props: {
   const selected = Math.min(index, items.length - 1);
   const optionId = (position: number) => `${idPrefix}-option-${position}`;
 
-  const scrollToOption = (position: number) =>
-    document.getElementById(optionId(position))?.scrollIntoView({ block: "nearest" });
+  // Chrome's scrollIntoView returns a promise; never hand it to React.
+  const scrollToOption = (position: number): void => {
+    void document.getElementById(optionId(position))?.scrollIntoView({ block: "nearest" });
+  };
 
   const select = (next: number) => {
     setIndex(next);
@@ -101,7 +103,9 @@ function RewindPickerList(props: {
 
   // Once, on open: the newest message is last, so a long thread would open scrolled away from it.
   const scrollToNewest = useEffectEvent(() => scrollToOption(initialRewindIndex(items.length)));
-  useEffect(() => scrollToNewest(), []);
+  useEffect(() => {
+    scrollToNewest();
+  }, []);
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === "Enter") {
