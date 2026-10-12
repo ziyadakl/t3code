@@ -217,6 +217,7 @@ import {
   TIMELINE_MINIMAP_MIN_ITEMS,
   type TimelineLatestRun,
   type WorkGroupScrollAnchor,
+  isMessageRewindDisabled,
 } from "./MessagesTimeline.logic";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
@@ -342,6 +343,8 @@ interface TimelineRowSharedState {
 
 interface TimelineRowActivityState {
   isWorking: boolean;
+  /** A Stop reaches the running work, so a rewind can stop it first. */
+  canInterrupt: boolean;
   isCompacting: boolean;
   isRevertingCheckpoint: boolean;
   activeTurnInProgress: boolean;
@@ -463,6 +466,8 @@ interface MessagesTimelineProps {
   onUseArtifactTemplate?: (template: CodexArtifactTemplate) => void;
   onRunShellCommand?: (command: string) => void;
   isRevertingCheckpoint: boolean;
+  /** A Stop reaches the running work; a rewind arrow click stops it first. */
+  canInterrupt: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onFileOpen?: (attachment: ChatFileAttachment) => void;
   onFileDownload?: (attachment: ChatFileAttachment) => void;
@@ -539,6 +544,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onUseArtifactTemplate = NOOP_USE_ARTIFACT_TEMPLATE,
   onRunShellCommand,
   isRevertingCheckpoint,
+  canInterrupt,
   onImageExpand,
   onFileOpen = NOOP_OPEN_ATTACHMENT,
   onFileDownload = NOOP_OPEN_ATTACHMENT,
@@ -1239,6 +1245,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const activityState = useMemo<TimelineRowActivityState>(
     () => ({
       isWorking,
+      canInterrupt,
       isCompacting: compactionAwaitingRow,
       isRevertingCheckpoint,
       backgroundWorktreeSetup,
@@ -1253,6 +1260,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       isPreparingWorktree,
       isRevertingCheckpoint,
       isWorking,
+      canInterrupt,
       latestRun?.runId,
     ],
   );
@@ -2401,7 +2409,7 @@ function RevertUserMessageButton({
             type="button"
             size="xs"
             variant="ghost"
-            disabled={activity.isRevertingCheckpoint || activity.isWorking}
+            disabled={isMessageRewindDisabled(activity)}
             onClick={() => ctx.onRevertToTurnCount(turnCount, messageId)}
             aria-label="Edit from here"
           />

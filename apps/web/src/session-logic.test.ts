@@ -28,6 +28,7 @@ import {
   deriveTimelineEntriesFromVisibleTurnItems,
   deriveTimelineEntriesFromVisibleTurnItemsWithState,
   deriveRevertTurnCountByUserMessageId,
+  deriveMessageRewindTargets,
   deriveRewindTurnCountByUserMessageId,
   derivePhase,
   findLatestProposedPlan,
@@ -1878,4 +1879,49 @@ it("renders automatic completion as a work entry instead of a user bubble", () =
       ],
     })[0]?.kind,
   ).toBe("message");
+});
+
+describe("deriveMessageRewindTargets", () => {
+  const userTurn = (id: string, runId: RunId | null): TimelineEntry => {
+    const chatMessage: ChatMessage = {
+      id: MessageId.make(id),
+      role: "user",
+      text: id,
+      runId,
+      inputIntent: "turn_start",
+      streaming: false,
+      createdAt: "2026-06-20T00:00:00.000Z",
+      updatedAt: "2026-06-20T00:00:00.000Z",
+    };
+    return {
+      id: chatMessage.id,
+      kind: "message",
+      createdAt: chatMessage.createdAt,
+      message: chatMessage,
+    };
+  };
+  const entries = [userTurn("first", RunId.make("run-1")), userTurn("second", RunId.make("run-2"))];
+
+  it("lets a Claude thread rewind to every sent turn, checkpoint or not", () => {
+    const targets = deriveMessageRewindTargets({
+      timelineEntries: entries,
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+      supportsMessageRewind: true,
+    });
+    expect([...targets]).toEqual([
+      [MessageId.make("first"), 0],
+      [MessageId.make("second"), 1],
+    ]);
+  });
+
+  it("offers nothing when the provider can neither rewind nor roll back", () => {
+    const targets = deriveMessageRewindTargets({
+      timelineEntries: entries,
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+      supportsMessageRewind: false,
+    });
+    expect(targets.size).toBe(0);
+  });
 });

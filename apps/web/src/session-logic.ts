@@ -1069,6 +1069,29 @@ export function deriveRewindTurnCountByUserMessageId(
   return byUserMessageId;
 }
 
+/**
+ * Which sent messages a thread can rewind to, and how many earlier turns each
+ * rewind keeps. The rewind arrows and the rewind picker share it, so both
+ * offer the same messages.
+ */
+export function deriveMessageRewindTargets(input: {
+  readonly timelineEntries: ReadonlyArray<TimelineEntry>;
+  readonly turnDiffSummaries: ReadonlyArray<ThreadCheckpointSummary>;
+  readonly supportsConversationRollback: boolean;
+  readonly supportsMessageRewind: boolean;
+}): Map<ChatMessage["id"], number> {
+  if (input.supportsMessageRewind) {
+    return deriveRewindTurnCountByUserMessageId(input.timelineEntries);
+  }
+  if (input.supportsConversationRollback) {
+    return deriveRevertTurnCountByUserMessageId({
+      timelineEntries: input.timelineEntries,
+      checkpoints: input.turnDiffSummaries,
+    });
+  }
+  return new Map();
+}
+
 export function derivePhase(runtime: ThreadRuntimeSummary | null): SessionPhase {
   if (runtime === null) return "disconnected";
   if (

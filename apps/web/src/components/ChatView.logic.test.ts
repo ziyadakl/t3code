@@ -86,8 +86,14 @@ import {
   waitForRevertedMessage,
   prepareRevertedMessageAttachments,
   deriveMessageRewindMenu,
+  decideMessageRewindStart,
+  planMessageRewind,
   messageRewindBlockedReason,
+  waitForThreadToStop,
+  loadThreadRewindPreview,
 } from "./ChatView.logic";
+import { orchestrationEnvironment } from "../state/orchestration";
+import * as Cause from "effect/Cause";
 
 const environmentId = EnvironmentId.make("environment-local");
 const projectId = ProjectId.make("project-1");
@@ -2328,6 +2334,212 @@ describe("deriveMessageRewindMenu", () => {
     expect(deriveMessageRewindMenu({ preview: null, error: "Connection lost." })).toEqual({
       rows: rows({ code: false }),
       note: "Could not check for code changes: Connection lost.",
+    });
+  });
+});
+
+describe("planMessageRewind", () => {
+  const idle = {
+    canInterrupt: false,
+    isWorking: false,
+    supportsMessageRewind: true,
+    afterStop: false,
+    runs: [{ status: "completed", queueHeld: false }],
+  } as const;
+  const queued = [
+    { status: "running", queueHeld: false },
+    { status: "queued", queueHeld: false },
+  ] as const;
+
+  it("refuses a Claude rewind while a message waits in the queue, before stopping anything", () => {
+    expect(
+      planMessageRewind({ ...idle, canInterrupt: true, isWorking: true, runs: queued }),
+    ).toEqual({
+      kind: "refuse",
+      reason: "Send or remove your queued messages before rewinding.",
+    });
+  });
+
+  it("stops a running turn first", () => {
+    expect(
+      planMessageRewind({
+        ...idle,
+        canInterrupt: true,
+        isWorking: true,
+        runs: [{ status: "running", queueHeld: false }],
+      }),
+    ).toEqual({ kind: "stop-first" });
+  });
+
+  it("refuses when Stop held a queued message while the turn stopped", () => {
+    expect(
+      planMessageRewind({
+        ...idle,
+        afterStop: true,
+        runs: [
+          { status: "interrupted", queueHeld: false },
+          { status: "queued", queueHeld: true },
+        ],
+      }),
+    ).toEqual({
+      kind: "refuse",
+      reason: "Send or remove your queued messages before rewinding.",
+    });
+  });
+
+  it("asks the user to wait for work that Stop cannot reach", () => {
+    expect(planMessageRewind({ ...idle, isWorking: true })).toEqual({
+      kind: "refuse",
+      reason: "Wait for the current work to finish before rewinding.",
+    });
+  });
+
+  it("checks with Claude which files a rewind would change", () => {
+    expect(planMessageRewind(idle)).toEqual({ kind: "check-files" });
+    expect(planMessageRewind({ ...idle, afterStop: true })).toEqual({ kind: "check-files" });
+  });
+
+  it("reverts at once for other providers when nothing was running", () => {
+    expect(planMessageRewind({ ...idle, supportsMessageRewind: false })).toEqual({
+      kind: "revert",
+    });
+  });
+
+  it("asks other providers' users after a stop, since the stopped turn's files may be unknown", () => {
+    expect(planMessageRewind({ ...idle, supportsMessageRewind: false, afterStop: true })).toEqual({
+      kind: "ask",
+    });
+  });
+
+  it("leaves a queue to other providers, whose rollback does not refuse it", () => {
+    expect(
+      planMessageRewind({
+        ...idle,
+        supportsMessageRewind: false,
+        canInterrupt: true,
+        isWorking: true,
+        runs: queued,
+      }),
+    ).toEqual({ kind: "stop-first" });
+  });
+});
+
+describe("decideMessageRewindStart", () => {
+  it("rewinds the conversation at once when Claude changed no files after the message", () => {
+    expect(
+      decideMessageRewindStart({ preview: { filesChanged: [], insertions: 0, deletions: 0 } }),
+    ).toEqual({ kind: "rewind-now" });
+  });
+
+  it("asks when restoring code would change files", () => {
+    expect(
+      decideMessageRewindStart({
+        preview: { filesChanged: ["/w/a.ts"], insertions: 2, deletions: 1 },
+      }),
+    ).toEqual({ kind: "ask" });
+  });
+
+  it("asks when the dry run gave no answer, never skipping on an unknown one", () => {
+    expect(decideMessageRewindStart({ preview: null })).toEqual({ kind: "ask" });
+  });
+
+  it("rewinds at once when Claude kept no snapshots, since no code choice is possible", () => {
+    expect(
+      decideMessageRewindStart({
+        preview: {
+          filesChanged: [],
+          insertions: 0,
+          deletions: 0,
+          unavailableReason: "Claude kept no file snapshots for this message.",
+        },
+      }),
+    ).toEqual({ kind: "rewind-now" });
+  });
+});
+
+describe("waitForThreadToStop", () => {
+  const threadRef = { environmentId: EnvironmentId.make("env-1"), threadId: ThreadId.make("t") };
+
+  function projectionWithRun(status: string) {
+    const base = makeThreadProjectionFixture();
+    return {
+      ...base,
+      runs: [{ id: RunId.make("run-1"), status, queueHeld: false }],
+    } as unknown as ReturnType<typeof makeThreadProjectionFixture>;
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("resolves once the stopped run is no longer live", async () => {
+    const state = Atom.make({ data: Option.some(projectionWithRun("running")) });
+    vi.spyOn(environmentThreadDetails, "stateAtom").mockReturnValue(state as never);
+    let stopped = false;
+    const waiting = waitForThreadToStop(threadRef).then(() => {
+      stopped = true;
+    });
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+
+    appAtomRegistry.set(state, { data: Option.some(projectionWithRun("interrupted")) });
+
+    await waiting;
+    expect(stopped).toBe(true);
+  });
+
+  it("fails with a reason the user can act on when the run does not stop in time", async () => {
+    vi.useFakeTimers();
+    const state = Atom.make({ data: Option.some(projectionWithRun("running")) });
+    vi.spyOn(environmentThreadDetails, "stateAtom").mockReturnValue(state as never);
+    const waiting = waitForThreadToStop(threadRef, 15_000);
+    const outcome = expect(waiting).rejects.toThrow(
+      "The current turn did not stop. Press Stop, then rewind again.",
+    );
+
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    await outcome;
+  });
+});
+
+describe("loadThreadRewindPreview", () => {
+  const target = {
+    environmentId: EnvironmentId.make("env-1"),
+    threadId: ThreadId.make("t"),
+    messageId: MessageId.make("message-2"),
+  };
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it("returns Claude's dry run, read from the query the rewind menu shows", async () => {
+    const preview = { filesChanged: ["/w/a.ts"], insertions: 2, deletions: 1 };
+    const query = Atom.make(AsyncResult.success(preview));
+    const family = vi
+      .spyOn(orchestrationEnvironment, "threadRewindPreview")
+      .mockReturnValue(query as never);
+
+    const loaded = await loadThreadRewindPreview(target);
+    loaded.release();
+
+    expect(family).toHaveBeenCalledWith({
+      environmentId: target.environmentId,
+      input: { threadId: target.threadId, messageId: target.messageId },
+    });
+    expect({ preview: loaded.preview, error: loaded.error }).toEqual({ preview, error: null });
+  });
+
+  it("returns the failure as an error when the dry run failed", async () => {
+    const query = Atom.make(AsyncResult.failure(Cause.fail(new Error("Connection lost."))));
+    vi.spyOn(orchestrationEnvironment, "threadRewindPreview").mockReturnValue(query as never);
+
+    const loaded = await loadThreadRewindPreview(target);
+    loaded.release();
+
+    expect({ preview: loaded.preview, error: loaded.error }).toEqual({
+      preview: null,
+      error: "Connection lost.",
     });
   });
 });

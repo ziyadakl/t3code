@@ -19,6 +19,7 @@ import type { TurnDiffSummary } from "../../types";
 import { describe, expect, it } from "vite-plus/test";
 import { MessageId, RunId } from "@t3tools/contracts";
 import {
+  isMessageRewindDisabled,
   computeStableMessagesTimelineRows,
   computeMessageDurationStart,
   deriveMessagesTimelineRows,
@@ -5005,4 +5006,46 @@ describe("failed turn transcript", () => {
       });
     },
   );
+});
+
+describe("isMessageRewindDisabled", () => {
+  it("is disabled while a rewind is already running", () => {
+    expect(
+      isMessageRewindDisabled({
+        isRevertingCheckpoint: true,
+        isWorking: false,
+        canInterrupt: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("is disabled while work runs that no Stop can reach", () => {
+    expect(
+      isMessageRewindDisabled({
+        isRevertingCheckpoint: false,
+        isWorking: true,
+        canInterrupt: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("stays enabled while a stoppable turn runs, since the click stops it", () => {
+    expect(
+      isMessageRewindDisabled({
+        isRevertingCheckpoint: false,
+        isWorking: true,
+        canInterrupt: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("is enabled when the thread is idle", () => {
+    expect(
+      isMessageRewindDisabled({
+        isRevertingCheckpoint: false,
+        isWorking: false,
+        canInterrupt: false,
+      }),
+    ).toBe(false);
+  });
 });

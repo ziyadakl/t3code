@@ -22,8 +22,7 @@ export {
   toolGroupAction,
 } from "@t3tools/client-runtime/work-log/presentation";
 import {
-  deriveRevertTurnCountByUserMessageId,
-  deriveRewindTurnCountByUserMessageId,
+  deriveMessageRewindTargets,
   formatDuration,
   isStreamingMessageTextUpdate,
   isStreamingTurnItemTextUpdate,
@@ -644,6 +643,18 @@ function expandedWorkGroupRow(
   };
 }
 
+/**
+ * The rewind arrow is off during a rewind and while work runs that no Stop
+ * reaches; a stoppable turn leaves it on, since the click stops the turn first.
+ */
+export function isMessageRewindDisabled(input: {
+  isRevertingCheckpoint: boolean;
+  isWorking: boolean;
+  canInterrupt: boolean;
+}): boolean {
+  return input.isRevertingCheckpoint || (input.isWorking && !input.canInterrupt);
+}
+
 export function resolveAssistantMessageCopyState({
   text,
   showCopyButton,
@@ -1239,14 +1250,12 @@ export function deriveMessagesTimelineRows(input: {
       turnDiffSummaryByAssistantMessageId.set(summary.assistantMessageId, summary);
     }
   }
-  const revertTurnCountByUserMessageId = input.supportsMessageRewind
-    ? deriveRewindTurnCountByUserMessageId(timelineEntries)
-    : input.supportsConversationRollback
-      ? deriveRevertTurnCountByUserMessageId({
-          timelineEntries: timelineEntries,
-          checkpoints: input.turnDiffSummaries,
-        })
-      : new Map<MessageId, number>();
+  const messageRewindTargets = deriveMessageRewindTargets({
+    timelineEntries,
+    turnDiffSummaries: input.turnDiffSummaries,
+    supportsConversationRollback: input.supportsConversationRollback,
+    supportsMessageRewind: input.supportsMessageRewind === true,
+  });
   const nextRows: MessagesTimelineRow[] = [];
   const durationStartByMessageId = computeMessageDurationStart(
     timelineEntries.flatMap((entry) => (entry.kind === "message" ? [entry.message] : [])),
@@ -1699,7 +1708,7 @@ export function deriveMessagesTimelineRows(input: {
           : undefined,
       revertTurnCount:
         timelineEntry.message.role === "user"
-          ? revertTurnCountByUserMessageId.get(timelineEntry.message.id)
+          ? messageRewindTargets.get(timelineEntry.message.id)
           : undefined,
     });
   }
