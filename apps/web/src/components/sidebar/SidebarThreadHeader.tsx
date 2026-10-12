@@ -6,7 +6,8 @@
  * The scope icon swaps to the project favicon while a project is selected,
  * so the header still names the scope after the row that showed it is gone.
  *
- * The scope picker itself is passed in: its combobox state lives with the rest
+ * An optional machine filter leads the group when more than one machine is
+ * known. The scope picker itself is passed in: its combobox state lives with the rest
  * of the sidebar's scope logic. `searchFieldRef` lands on the search field so
  * the picker's popup can anchor to that width rather than to its 28px trigger.
  */
@@ -27,10 +28,21 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 export interface SidebarThreadHeaderProps {
   /** Lands on the search field so a popup can anchor to its width. */
   searchFieldRef?: RefObject<HTMLDivElement | null>;
-  /** Without projects there is nothing to scope, so those controls stay out. */
+  /** Without any project there is nothing to scope, so those controls stay out. */
   hasProjects: boolean;
+  /**
+   * Whether the machine filter leaves any project to scope to. Gates only the
+   * scope picker: Add project stays while the filtered machine has none.
+   */
+  hasVisibleProjects: boolean;
   /** The project scope combobox, rendered as the first icon of the group. */
   projectScope: ReactNode;
+  /**
+   * The machine filter (null with a single machine), rendered ahead of
+   * everything else and outside the project gates: a machine with no
+   * projects must not hide the way back.
+   */
+  environmentFilter: ReactNode;
   onNewProject: () => void;
   /** Receives the click so Shift+click can skip the project picker. */
   onNewThread: (event: ReactMouseEvent) => void;
@@ -52,7 +64,9 @@ export interface SidebarThreadHeaderProps {
 export function SidebarThreadHeader({
   searchFieldRef,
   hasProjects,
+  hasVisibleProjects,
   projectScope,
+  environmentFilter,
   onNewProject,
   onNewThread,
   newThreadDisabled,
@@ -124,9 +138,10 @@ export function SidebarThreadHeader({
           hover states, and a background well reads far louder on themed
           palettes than on the base light and dark ones. */}
       <div className="flex shrink-0 items-center">
+        {environmentFilter}
         {hasProjects ? (
           <>
-            {projectScope}
+            {hasVisibleProjects ? projectScope : null}
             <SidebarHeaderIconButton label="Add project" onClick={onNewProject}>
               <FolderPlusIcon />
             </SidebarHeaderIconButton>

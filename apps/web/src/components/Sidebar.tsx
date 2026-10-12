@@ -52,6 +52,7 @@ import {
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
 import {
+  type EnvironmentId,
   type EnvironmentMachineKind,
   type ScopedThreadRef,
   type ThreadId,
@@ -215,6 +216,11 @@ import {
   type SidebarListItem,
   type SidebarListMarker,
   type SidebarSection,
+  filterToEnvironment,
+  isDraftSessionInSidebarScope,
+  resolveSidebarEnvironmentFilter,
+  sidebarProjectScopeTriggerLabel,
+  sidebarSearchEnvironmentIds,
 } from "./Sidebar.logic";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
@@ -264,6 +270,7 @@ import {
 } from "./ui/combobox";
 import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
+import { SidebarEnvironmentFilter } from "./sidebar/SidebarEnvironmentFilter";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuShortcut, MenuTrigger } from "./ui/menu";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
@@ -918,6 +925,19 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
   );
 });
 
+// Outlined call to action under a sidebar empty-state message.
+function SidebarEmptyStateButton(props: { onClick: () => void; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={props.onClick}
+      className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-sidebar-border px-2.5 py-1 text-2xs font-medium text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+    >
+      {props.children}
+    </button>
+  );
+}
+
 interface SidebarDraftRowData {
   draftId: DraftId;
   session: DraftSessionState;
@@ -932,6 +952,8 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
   projectByKey: ReadonlyMap<string, EnvironmentProject>;
   projectDisplayNameByKey: ReadonlyMap<string, string>;
   scopedProjectKeys: ReadonlySet<string> | null;
+  /** Drafts on other machines, except the open one, stay out while filtered. */
+  environmentFilterId: EnvironmentId | null;
   routeDraftId: string | null;
   onNavigateToDraft: (draftId: DraftId) => void;
   onDraftContextMenu: (draftId: DraftId, position: { x: number; y: number }) => void;
@@ -972,8 +994,11 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
         continue;
       }
       if (
-        props.scopedProjectKeys !== null &&
-        !props.scopedProjectKeys.has(`${session.environmentId}:${session.projectId}`)
+        !isDraftSessionInSidebarScope(session, {
+          scopedProjectKeys: props.scopedProjectKeys,
+          environmentFilterId: props.environmentFilterId,
+          isRouteDraft: draftKey === props.routeDraftId,
+        })
       ) {
         continue;
       }
@@ -998,6 +1023,7 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
     draftThreadsByThreadKey,
     draftsByThreadKey,
     frozenActive,
+    props.environmentFilterId,
     props.routeDraftId,
     props.scopedProjectKeys,
   ]);
@@ -2322,7 +2348,7 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
 });
 
 export default function Sidebar() {
-  const { projects, threads } = useUnarchivedProjectsAndThreads();
+  const { projects: allProjects, threads: allThreads } = useUnarchivedProjectsAndThreads();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
@@ -2412,6 +2438,27 @@ export default function Sidebar() {
     [],
   );
   const environments = useEnvironmentIdentities();
+  // Machine filter: narrows the whole sidebar to one environment. Filtering
+  // the roots means project groups, the scope picker, shelves and search all
+  // follow. A saved choice for a machine that is gone (or a single-machine
+  // catalog) resolves to all machines without clearing the saved choice.
+  const selectedEnvironmentFilterId = useUiStateStore((store) => store.sidebarEnvironmentFilterId);
+  const setEnvironmentFilterId = useUiStateStore((store) => store.setSidebarEnvironmentFilterId);
+  const environmentFilterId = useMemo(
+    () =>
+      resolveSidebarEnvironmentFilter(
+        selectedEnvironmentFilterId,
+        environments.map((environment) => environment.environmentId),
+      ),
+    [environments, selectedEnvironmentFilterId],
+  );
+  // `projects` and `threads` below are the machine-filtered lists the rest of
+  // the sidebar reads; `allProjects` and `allThreads` are the unfiltered ones.
+  // The names stay upstream's so merges from upstream keep applying cleanly.
+  const projects = useMemo(
+    () => filterToEnvironment(allProjects, environmentFilterId),
+    [allProjects, environmentFilterId],
+  );
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const clearSelection = useThreadSelectionStore((s) => s.clearSelection);
@@ -2431,6 +2478,19 @@ export default function Sidebar() {
     [routeDraftThread, routeTarget],
   );
   const routeThreadKey = routeThreadRef ? scopedThreadKey(routeThreadRef) : null;
+  // The open thread stays listed on any machine so the filter never hides
+  // what the user is looking at.
+  const threads = useMemo(
+    () =>
+      filterToEnvironment(
+        allThreads,
+        environmentFilterId,
+        (thread) =>
+          routeThreadKey !== null &&
+          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeThreadKey,
+      ),
+    [allThreads, environmentFilterId, routeThreadKey],
+  );
   const routeTargetRef = useRef(routeTarget);
   routeTargetRef.current = routeTarget;
   // Post-settle navigation validates against the CURRENT route, not the one
@@ -2446,6 +2506,10 @@ export default function Sidebar() {
       ),
     [environments],
   );
+  const environmentFilterLabel =
+    environmentFilterId === null
+      ? null
+      : (environmentLabelById.get(environmentFilterId) ?? "this machine");
   const environmentMachineById = useEnvironmentMachines();
   const orderedProjects = useMemo(
     () =>
@@ -2481,6 +2545,31 @@ export default function Sidebar() {
     () => sortSidebarV2ProjectGroups(unsortedProjectGroups, threads, sidebarProjectSortOrder),
     [sidebarProjectSortOrder, threads, unsortedProjectGroups],
   );
+  // Every machine's project groups, built once. New thread is not
+  // filter-aware (the palette picker and the default project span every
+  // machine), so its create-directly-or-pick decision counts these; rows kept
+  // visible from another machine and a paused project scope read names here.
+  const allProjectGroups = useMemo(
+    () =>
+      environmentFilterId === null
+        ? unsortedProjectGroups
+        : buildSidebarProjectSnapshots({
+            projects: allProjects,
+            settings: projectGroupingSettings,
+            primaryEnvironmentId,
+            resolveEnvironmentLabel: (environmentId) =>
+              environmentLabelById.get(environmentId) ?? null,
+          }),
+    [
+      allProjects,
+      environmentFilterId,
+      environmentLabelById,
+      primaryEnvironmentId,
+      projectGroupingSettings,
+      unsortedProjectGroups,
+    ],
+  );
+  const allProjectGroupCount = allProjectGroups.length;
   const projectGroupsRef = useRef(projectGroups);
   projectGroupsRef.current = projectGroups;
   // Threads on non-primary environments (T3 Connect, hosted) resolve their
@@ -2497,20 +2586,23 @@ export default function Sidebar() {
   );
   // Rows read the project record for its icon and cwd. Group labels can include
   // a repository owner or a different title, so they travel separately.
+  // Lookups span every machine: the open thread or draft stays listed on any
+  // machine and still needs its project's icon and name.
   const projectByKey = useMemo(
-    () => new Map(projects.map((project) => [`${project.environmentId}:${project.id}`, project])),
-    [projects],
+    () =>
+      new Map(allProjects.map((project) => [`${project.environmentId}:${project.id}`, project])),
+    [allProjects],
   );
   const projectDisplayNameByKey = useMemo(
     () =>
       new Map(
-        projectGroups.flatMap((group) =>
+        allProjectGroups.flatMap((group) =>
           group.memberProjects.map(
             (project) => [`${project.environmentId}:${project.id}`, group.displayName] as const,
           ),
         ),
       ),
-    [projectGroups],
+    [allProjectGroups],
   );
 
   const nowMinute = useNowMinute();
@@ -2601,11 +2693,24 @@ export default function Sidebar() {
   // only after every catalog environment has a live project snapshot. Cached
   // or disconnected environments cannot establish that the project is gone.
   const allProjectSnapshotsReady = useAllEnvironmentProjectSnapshotsReady();
+  // While filtered to one machine the scoped project may simply live
+  // elsewhere, so only the unfiltered catalog can prove it is gone.
   useEffect(() => {
-    if (projectScopeKey !== null && allProjectSnapshotsReady && scopedProjectGroup === null) {
+    if (
+      projectScopeKey !== null &&
+      environmentFilterId === null &&
+      allProjectSnapshotsReady &&
+      scopedProjectGroup === null
+    ) {
       setProjectScopeKey(null);
     }
-  }, [allProjectSnapshotsReady, projectScopeKey, scopedProjectGroup, setProjectScopeKey]);
+  }, [
+    allProjectSnapshotsReady,
+    environmentFilterId,
+    projectScopeKey,
+    scopedProjectGroup,
+    setProjectScopeKey,
+  ]);
   // Count-only subscription: the parent needs "are there draft rows" for the
   // empty state, while SidebarDraftBlock owns the per-keystroke content
   // subscription. Selecting a number keeps typing in a draft composer from
@@ -2623,8 +2728,11 @@ export default function Sidebar() {
         continue;
       }
       if (
-        scopedProjectKeys !== null &&
-        !scopedProjectKeys.has(`${session.environmentId}:${session.projectId}`)
+        !isDraftSessionInSidebarScope(session, {
+          scopedProjectKeys,
+          environmentFilterId,
+          isRouteDraft: draftKey === routeDraftIdForRows,
+        })
       ) {
         continue;
       }
@@ -2636,7 +2744,7 @@ export default function Sidebar() {
   // hidden now, and bulk actions must never count or touch invisible rows.
   useEffect(() => {
     clearSelection();
-  }, [clearSelection, projectScopeKey]);
+  }, [clearSelection, environmentFilterId, projectScopeKey]);
 
   const openProjectSettings = useCallback(
     (projectGroup: SidebarProjectSnapshot) => {
@@ -2706,7 +2814,9 @@ export default function Sidebar() {
     // Subagent child threads live in the parent's Agents surface, not the
     // sidebar roster (v2 models them as real threads with lineage).
     const visible = filterSidebarV2VisibleThreads(threads, scopedProjectKeys);
-    inboxReturns.observe(workingShelfEnabled ? threads : null);
+    // Every thread, not the filtered ones: a thread hidden by the machine
+    // filter would otherwise lose its return stamp on each filter flip.
+    inboxReturns.observe(workingShelfEnabled ? allThreads : null);
     const pinned: EnvironmentThreadShell[] = [];
     const active: EnvironmentThreadShell[] = [];
     const working: EnvironmentThreadShell[] = [];
@@ -2806,6 +2916,7 @@ export default function Sidebar() {
       snoozeNow: preciseNow,
     };
   }, [
+    allThreads,
     nowMinute,
     optimisticDrop,
     scopedProjectKeys,
@@ -2829,7 +2940,13 @@ export default function Sidebar() {
     ],
     [activeThreads, pinnedThreads, settledThreads, snoozedThreads, workingThreads],
   );
-  const searchEnvironmentIds = useConnectedEnvironmentIds();
+  const connectedEnvironmentIds = useConnectedEnvironmentIds();
+  // Filtered to one machine, only that machine's server is asked, and only
+  // while it is connected.
+  const searchEnvironmentIds = useMemo(
+    () => sidebarSearchEnvironmentIds(connectedEnvironmentIds, environmentFilterId),
+    [connectedEnvironmentIds, environmentFilterId],
+  );
   // useThreadSearch owns the debounce and the two-character floor.
   const threadSearch = useThreadSearch(searchEnvironmentIds, threadSearchQuery);
   const threadSearchMatchByKey = useMemo(
@@ -3562,7 +3679,7 @@ export default function Sidebar() {
   useEffect(() => {
     if (optimisticDrop === null) return;
     const canonicalByKey = new Map(
-      threads.map((thread) => [
+      allThreads.map((thread) => [
         scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
         thread,
       ]),
@@ -3627,7 +3744,7 @@ export default function Sidebar() {
     if (membershipChanged || foreignKeyLanded || allAssignmentsLanded) {
       setOptimisticDrop(null);
     }
-  }, [activeKeys, optimisticDrop, pinnedKeys, threads]);
+  }, [activeKeys, allThreads, optimisticDrop, pinnedKeys]);
   const attemptPin = useCallback(
     (threadRef: ScopedThreadRef) => {
       void (async () => {
@@ -3853,19 +3970,19 @@ export default function Sidebar() {
   const { pinnedKeysById, activeKeysById } = useMemo(
     () => ({
       pinnedKeysById: new Map(
-        threads.map((thread) => [
+        allThreads.map((thread) => [
           scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
           thread.pinOrderKey ?? null,
         ]),
       ),
       activeKeysById: new Map(
-        threads.map((thread) => [
+        allThreads.map((thread) => [
           scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
           thread.activeOrderKey ?? null,
         ]),
       ),
     }),
-    [threads],
+    [allThreads],
   );
   const draggedThreadKey = dragState?.activeKey;
   const draggedFromSection = dragState?.activeSection;
@@ -4795,7 +4912,7 @@ export default function Sidebar() {
       // One project: nothing to pick, create immediately. Shift+click creates
       // directly in the current project even with several projects, skipping
       // the palette picker.
-      if (shouldCreateNewThreadInCurrentProject(event?.shiftKey ?? false, projectGroups.length)) {
+      if (shouldCreateNewThreadInCurrentProject(event?.shiftKey ?? false, allProjectGroupCount)) {
         if (isMobile) setOpenMobile(false);
         void startNewThreadFromContext({
           activeDraftThread: newThreadContext.activeDraftThread,
@@ -4808,7 +4925,7 @@ export default function Sidebar() {
       if (isMobile) setOpenMobile(false);
       openCommandPalette({ open: "new-thread-in" });
     },
-    [isMobile, newThreadContext, projectGroups.length, setOpenMobile],
+    [allProjectGroupCount, isMobile, newThreadContext, setOpenMobile],
   );
 
   // The button mirrors chat.new: in multi-project setups both route through
@@ -4821,7 +4938,7 @@ export default function Sidebar() {
   // shift+click and its keyboard twin chat.newLocal for direct create.
   const newThreadShortcutLabel =
     shortcutLabelForCommand(keybindings, "chat.new") ??
-    (projectGroups.length <= 1 ? shortcutLabelForCommand(keybindings, "chat.newLocal") : undefined);
+    (allProjectGroupCount <= 1 ? shortcutLabelForCommand(keybindings, "chat.newLocal") : undefined);
   const newThreadInProjectShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newLocal");
   return (
     <>
@@ -4835,7 +4952,18 @@ export default function Sidebar() {
           <SidebarGroup className="z-[1]">
             <SidebarThreadHeader
               searchFieldRef={headerSearchRef}
-              hasProjects={projectGroups.length > 0}
+              hasProjects={allProjects.length > 0}
+              hasVisibleProjects={projectGroups.length > 0}
+              environmentFilter={
+                environments.length > 1 ? (
+                  <SidebarEnvironmentFilter
+                    environments={environments}
+                    machineByEnvironmentId={environmentMachineById}
+                    selectedEnvironmentId={environmentFilterId}
+                    onSelect={setEnvironmentFilterId}
+                  />
+                ) : null
+              }
               projectScope={
                 <Combobox
                   items={projectScopeItems}
@@ -4864,11 +4992,14 @@ export default function Sidebar() {
                   <ComboboxTrigger
                     render={
                       <SidebarHeaderIconButton
-                        label={
-                          scopedProjectGroup
-                            ? `Filter threads by project: ${scopedProjectGroup.displayName}`
-                            : "Filter threads by project"
-                        }
+                        label={sidebarProjectScopeTriggerLabel({
+                          projectScopeKey,
+                          scopedProjectName: scopedProjectGroup?.displayName ?? null,
+                          savedProjectName:
+                            allProjectGroups.find((group) => group.projectKey === projectScopeKey)
+                              ?.displayName ?? null,
+                          environmentFilterLabel,
+                        })}
                       />
                     }
                   >
@@ -4970,10 +5101,10 @@ export default function Sidebar() {
               }
               onNewProject={openAddProjectCommandPalette}
               onNewThread={handleNewThreadClick}
-              newThreadDisabled={projects.length === 0}
+              newThreadDisabled={allProjects.length === 0}
               newThreadShortcutLabel={newThreadShortcutLabel}
               newThreadInProjectShortcutLabel={newThreadInProjectShortcutLabel}
-              showNewThreadInProjectHint={projectGroups.length > 1}
+              showNewThreadInProjectHint={allProjectGroupCount > 1}
               searchInputRef={threadSearchInputRef}
               searchQuery={threadSearchQuery}
               onSearchQueryChange={(value) => {
@@ -5049,12 +5180,20 @@ export default function Sidebar() {
                 </ul>
               </TooltipProvider>
             ) : (
-              <p
-                role="status"
-                className="px-2 py-6 text-center text-xs text-sidebar-muted-foreground"
-              >
-                {threadSearch.isPending ? "Searching thread messages…" : "No threads found"}
-              </p>
+              <div className="flex flex-col items-center gap-2 px-2 py-6 text-center text-xs">
+                <p role="status" className="text-sidebar-muted-foreground">
+                  {threadSearch.isPending
+                    ? "Searching thread messages…"
+                    : environmentFilterLabel !== null
+                      ? `No threads found on ${environmentFilterLabel}`
+                      : "No threads found"}
+                </p>
+                {!threadSearch.isPending && environmentFilterLabel !== null ? (
+                  <SidebarEmptyStateButton onClick={() => setEnvironmentFilterId(null)}>
+                    Show all machines
+                  </SidebarEmptyStateButton>
+                ) : null}
+              </div>
             )
           ) : null}
           {!isSearchingThreads ? (
@@ -5244,6 +5383,7 @@ export default function Sidebar() {
                           projectByKey={projectByKey}
                           projectDisplayNameByKey={projectDisplayNameByKey}
                           scopedProjectKeys={scopedProjectKeys}
+                          environmentFilterId={environmentFilterId}
                           routeDraftId={routeDraftIdForRows}
                           onNavigateToDraft={navigateToDraft}
                           onDraftContextMenu={handleDraftContextMenu}
@@ -5401,17 +5541,24 @@ export default function Sidebar() {
             settledThreads.length ===
             0 ? (
             <div className="flex flex-col items-center gap-2 px-2 py-6 text-center text-xs text-muted-foreground/60">
-              {projects.length === 0 ? (
+              {allProjects.length === 0 ? (
                 <>
                   <span>No projects yet</span>
-                  <button
-                    type="button"
-                    onClick={openAddProjectCommandPalette}
-                    className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-sidebar-border px-2.5 py-1 text-2xs font-medium text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
-                  >
+                  <SidebarEmptyStateButton onClick={openAddProjectCommandPalette}>
                     <PlusIcon className="-mx-0.5 size-3" />
                     Add project
-                  </button>
+                  </SidebarEmptyStateButton>
+                </>
+              ) : environmentFilterLabel !== null ? (
+                <>
+                  <span>
+                    {scopedProjectGroup
+                      ? `No threads in ${scopedProjectGroup.displayName} on ${environmentFilterLabel}`
+                      : `No threads on ${environmentFilterLabel}`}
+                  </span>
+                  <SidebarEmptyStateButton onClick={() => setEnvironmentFilterId(null)}>
+                    Show all machines
+                  </SidebarEmptyStateButton>
                 </>
               ) : scopedProjectGroup ? (
                 `No threads in ${scopedProjectGroup.displayName} yet`
