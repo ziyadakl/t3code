@@ -87,6 +87,7 @@ import {
   prepareRevertedMessageAttachments,
   deriveMessageRewindMenu,
   decideMessageRewindStart,
+  planMessageRewind,
   messageRewindBlockedReason,
   waitForThreadToStop,
   loadThreadRewindPreview,
@@ -2337,29 +2338,109 @@ describe("deriveMessageRewindMenu", () => {
   });
 });
 
+describe("planMessageRewind", () => {
+  const idle = {
+    canInterrupt: false,
+    isWorking: false,
+    supportsMessageRewind: true,
+    afterStop: false,
+    runs: [{ status: "completed", queueHeld: false }],
+  } as const;
+  const queued = [
+    { status: "running", queueHeld: false },
+    { status: "queued", queueHeld: false },
+  ] as const;
+
+  it("refuses a Claude rewind while a message waits in the queue, before stopping anything", () => {
+    expect(
+      planMessageRewind({ ...idle, canInterrupt: true, isWorking: true, runs: queued }),
+    ).toEqual({
+      kind: "refuse",
+      reason: "Send or remove your queued messages before rewinding.",
+    });
+  });
+
+  it("stops a running turn first", () => {
+    expect(
+      planMessageRewind({
+        ...idle,
+        canInterrupt: true,
+        isWorking: true,
+        runs: [{ status: "running", queueHeld: false }],
+      }),
+    ).toEqual({ kind: "stop-first" });
+  });
+
+  it("refuses when Stop held a queued message while the turn stopped", () => {
+    expect(
+      planMessageRewind({
+        ...idle,
+        afterStop: true,
+        runs: [
+          { status: "interrupted", queueHeld: false },
+          { status: "queued", queueHeld: true },
+        ],
+      }),
+    ).toEqual({
+      kind: "refuse",
+      reason: "Send or remove your queued messages before rewinding.",
+    });
+  });
+
+  it("asks the user to wait for work that Stop cannot reach", () => {
+    expect(planMessageRewind({ ...idle, isWorking: true })).toEqual({
+      kind: "refuse",
+      reason: "Wait for the current work to finish before rewinding.",
+    });
+  });
+
+  it("checks with Claude which files a rewind would change", () => {
+    expect(planMessageRewind(idle)).toEqual({ kind: "check-files" });
+    expect(planMessageRewind({ ...idle, afterStop: true })).toEqual({ kind: "check-files" });
+  });
+
+  it("reverts at once for other providers when nothing was running", () => {
+    expect(planMessageRewind({ ...idle, supportsMessageRewind: false })).toEqual({
+      kind: "revert",
+    });
+  });
+
+  it("asks other providers' users after a stop, since the stopped turn's files may be unknown", () => {
+    expect(planMessageRewind({ ...idle, supportsMessageRewind: false, afterStop: true })).toEqual({
+      kind: "ask",
+    });
+  });
+
+  it("leaves a queue to other providers, whose rollback does not refuse it", () => {
+    expect(
+      planMessageRewind({
+        ...idle,
+        supportsMessageRewind: false,
+        canInterrupt: true,
+        isWorking: true,
+        runs: queued,
+      }),
+    ).toEqual({ kind: "stop-first" });
+  });
+});
+
 describe("decideMessageRewindStart", () => {
   it("rewinds the conversation at once when Claude changed no files after the message", () => {
     expect(
-      decideMessageRewindStart({
-        preview: { filesChanged: [], insertions: 0, deletions: 0 },
-        error: null,
-      }),
-    ).toEqual({ kind: "rewind-now", choice: "conversation" });
+      decideMessageRewindStart({ preview: { filesChanged: [], insertions: 0, deletions: 0 } }),
+    ).toEqual({ kind: "rewind-now" });
   });
 
   it("asks when restoring code would change files", () => {
     expect(
       decideMessageRewindStart({
         preview: { filesChanged: ["/w/a.ts"], insertions: 2, deletions: 1 },
-        error: null,
       }),
     ).toEqual({ kind: "ask" });
   });
 
-  it("asks when the dry run failed, never skipping on an unknown answer", () => {
-    expect(decideMessageRewindStart({ preview: null, error: "Connection lost." })).toEqual({
-      kind: "ask",
-    });
+  it("asks when the dry run gave no answer, never skipping on an unknown one", () => {
+    expect(decideMessageRewindStart({ preview: null })).toEqual({ kind: "ask" });
   });
 
   it("rewinds at once when Claude kept no snapshots, since no code choice is possible", () => {
@@ -2371,9 +2452,8 @@ describe("decideMessageRewindStart", () => {
           deletions: 0,
           unavailableReason: "Claude kept no file snapshots for this message.",
         },
-        error: null,
       }),
-    ).toEqual({ kind: "rewind-now", choice: "conversation" });
+    ).toEqual({ kind: "rewind-now" });
   });
 });
 

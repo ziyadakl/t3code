@@ -8,8 +8,18 @@ import { RewindPicker } from "./RewindPicker";
 import type { RewindPickerItem } from "./RewindPicker.logic";
 
 const items: ReadonlyArray<RewindPickerItem> = [
-  { messageId: MessageId.make("m1"), text: "Add a login page", createdAt: "2026-10-12T09:00:00Z" },
-  { messageId: MessageId.make("m2"), text: "  Now style it", createdAt: "2026-10-12T09:10:00Z" },
+  {
+    messageId: MessageId.make("m1"),
+    text: "Add a login page",
+    createdAt: "2026-10-12T09:00:00Z",
+    attachmentCount: 0,
+  },
+  {
+    messageId: MessageId.make("m2"),
+    text: "  Now style it",
+    createdAt: "2026-10-12T09:10:00Z",
+    attachmentCount: 0,
+  },
   {
     messageId: MessageId.make("m3"),
     text: "",

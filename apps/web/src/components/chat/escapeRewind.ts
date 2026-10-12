@@ -1,5 +1,6 @@
 import { useEffect, useEffectEvent, useRef } from "react";
 
+import { FLOATING_LAYER_SELECTOR } from "~/lib/floatingLayer";
 import { isTerminalFocused } from "~/lib/terminalFocus";
 
 /** How close two Escape presses must be to count as a double press. */
@@ -35,25 +36,6 @@ export function resolveEscapePress(
   }
   return { action: input.running ? "stop" : "none", nextState: { lastPressAt: input.now } };
 }
-
-// Mirrors ChatView's type-to-focus floating-layer list. Popups match only
-// while open or closing: some stay mounted when closed (the chat header
-// actions menu), and the sidebar's search results are an always-mounted
-// listbox, so a bare role match would block Escape everywhere.
-const FLOATING_LAYER_SELECTOR = [
-  '[role="dialog"][aria-modal="true"]',
-  ...[
-    "alert-dialog-popup",
-    "command-dialog-popup",
-    "dialog-popup",
-    "sheet-popup",
-    "menu-popup",
-    "select-popup",
-    "popover-popup",
-    "combobox-popup",
-    "autocomplete-popup",
-  ].map((slot) => `[data-slot="${slot}"]:is([data-open],[data-ending-style])`),
-].join(",");
 
 /**
  * Whether this Escape press belongs to something other than stop/rewind:

@@ -2,7 +2,7 @@ import { isCompactCommand } from "@t3tools/shared/compactCommand";
 import { ChatCanvas } from "./chat/ChatCanvas";
 import { RewindDialog } from "./chat/RewindDialog";
 import { RewindPicker } from "./chat/RewindPicker";
-import { rewindPickerItems } from "./chat/RewindPicker.logic";
+import { keepRewindPickerOpen, rewindPickerItems } from "./chat/RewindPicker.logic";
 import { useEscapeToStopAndRewind } from "./chat/escapeRewind";
 import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
 import {
@@ -403,6 +403,7 @@ import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../termina
 import { useKnownTerminalSessions, useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { useEnvironmentQuery } from "../state/query";
 import { useThreadRewindPreview } from "../state/queries";
+import { FLOATING_LAYER_SELECTOR } from "~/lib/floatingLayer";
 import {
   environmentServerConfigsAtom,
   primaryServerAvailableEditorsAtom,
@@ -552,6 +553,7 @@ import {
   waitForStartedServerThread,
   shouldRefocusComposerOnWindowFocus,
   decideMessageRewindStart,
+  planMessageRewind,
   loadThreadRewindPreview,
   waitForThreadToStop,
 } from "./ChatView.logic";
@@ -728,21 +730,6 @@ const TYPE_TO_FOCUS_INTERACTIVE_SELECTOR = [
   '[role="switch"]',
   '[role="tab"]',
 ].join(",");
-// Popups match only while open or closing: some stay mounted when closed,
-// such as the chat header actions menu.
-const TYPE_TO_FOCUS_FLOATING_LAYER_SELECTOR = [
-  '[role="dialog"][aria-modal="true"]',
-  '[data-slot="alert-dialog-popup"]:is([data-open],[data-ending-style])',
-  '[data-slot="command-dialog-popup"]:is([data-open],[data-ending-style])',
-  '[data-slot="dialog-popup"]:is([data-open],[data-ending-style])',
-  '[data-slot="sheet-popup"]:is([data-open],[data-ending-style])',
-  '[data-slot="sidebar"][data-mobile="true"]:is([data-open],[data-ending-style])',
-  '[data-slot="menu-popup"]:is([data-open],[data-ending-style])',
-  '[data-slot="select-popup"]:is([data-open],[data-ending-style])',
-  '[data-slot="popover-popup"]:is([data-open],[data-ending-style])',
-  '[data-slot="combobox-popup"]:is([data-open],[data-ending-style])',
-  '[data-slot="autocomplete-popup"]:is([data-open],[data-ending-style])',
-].join(",");
 
 type EnvironmentUnavailableState = {
   readonly environmentId: EnvironmentId;
@@ -772,7 +759,7 @@ function shouldRedirectInputToComposer(event: Event): boolean {
   if (eventPathContainsSelector(event, SECRET_REQUEST_SELECTOR)) return false;
   if (eventPathContainsSelector(event, TYPE_TO_FOCUS_EDITABLE_SELECTOR)) return false;
   if (eventPathContainsSelector(event, TYPE_TO_FOCUS_INTERACTIVE_SELECTOR)) return false;
-  if (document.querySelector(TYPE_TO_FOCUS_FLOATING_LAYER_SELECTOR)) return false;
+  if (document.querySelector(FLOATING_LAYER_SELECTOR)) return false;
   return true;
 }
 
@@ -6473,7 +6460,7 @@ export default function ChatView(props: ChatViewProps) {
             event.metaKey ||
             event.shiftKey ||
             eventPathContainsSelector(event, TYPE_TO_FOCUS_EDITABLE_SELECTOR) ||
-            document.querySelector(TYPE_TO_FOCUS_FLOATING_LAYER_SELECTOR)
+            document.querySelector(FLOATING_LAYER_SELECTOR)
           ) {
             return;
           }
@@ -8216,18 +8203,33 @@ export default function ChatView(props: ChatViewProps) {
     error: rewindPreview.error,
   });
 
-  const onRevertToTurnCount = useCallback(
-    async (
-      turnCount: number,
-      messageId: MessageId,
-      chosenAction?: RevertAction,
-      // Set by requestMessageRewind, which shows the progress itself and has
-      // already waited for the run it stopped to settle.
-      options?: { readonly ownsProgress?: boolean },
-    ) => {
-      const ownsProgress = options?.ownsProgress === true;
+  // Shows "Rewinding conversation" on this thread while `run` works.
+  const withRewindProgress = useCallback(
+    async (run: () => Promise<void>) => {
+      useComposerDraftStore.setState((store) => ({
+        rewindingThreadKeys: new Set(store.rewindingThreadKeys).add(routeThreadKey),
+      }));
+      try {
+        await run();
+      } finally {
+        useComposerDraftStore.setState((store) => {
+          const remaining = new Set(store.rewindingThreadKeys);
+          remaining.delete(routeThreadKey);
+          return { rewindingThreadKeys: remaining };
+        });
+      }
+    },
+    [routeThreadKey],
+  );
+  /**
+   * Rewinds to before `messageId` with `chosenAction`; without one, rewinds
+   * the conversation when no files could change, or opens the rewind menu.
+   * Unguarded: callers make sure nothing runs and show the progress.
+   */
+  const performRewind = useCallback(
+    async (turnCount: number, messageId: MessageId, chosenAction?: RevertAction) => {
       const localApi = readLocalApi();
-      if (!localApi || !activeThread || (isRevertingCheckpoint && !ownsProgress)) return;
+      if (!localApi || !activeThread) return;
       const sourceMessage = serverProjection?.messages.find((message) => message.id === messageId);
       const message = sourceMessage
         ? {
@@ -8258,10 +8260,6 @@ export default function ChatView(props: ChatViewProps) {
         );
         return;
       }
-      if (!ownsProgress && (phase === "running" || isSendBusy || isConnecting)) {
-        setThreadError(activeThread.id, "Interrupt the current turn before reverting checkpoints.");
-        return;
-      }
       const rewindBlockedReason = supportsMessageRewind
         ? messageRewindBlockedReason(serverProjection?.runs ?? [])
         : null;
@@ -8283,11 +8281,6 @@ export default function ChatView(props: ChatViewProps) {
       const restoresPrompt =
         action.type === "checkpoint" || threadRewindRestoresPrompt(action.choice);
 
-      if (!ownsProgress) {
-        useComposerDraftStore.setState((store) => ({
-          rewindingThreadKeys: new Set(store.rewindingThreadKeys).add(routeThreadKey),
-        }));
-      }
       setThreadError(activeThread.id, null);
       try {
         if (composerRef.current?.hasPendingAttachments()) {
@@ -8390,14 +8383,6 @@ export default function ChatView(props: ChatViewProps) {
           activeThread.id,
           error instanceof Error ? error.message : "Failed to revert thread state.",
         );
-      } finally {
-        if (!ownsProgress) {
-          useComposerDraftStore.setState((store) => {
-            const remaining = new Set(store.rewindingThreadKeys);
-            remaining.delete(routeThreadKey);
-            return { rewindingThreadKeys: remaining };
-          });
-        }
       }
     },
     [
@@ -8408,10 +8393,6 @@ export default function ChatView(props: ChatViewProps) {
       composerRef,
       createAttachmentAssetUrl,
       environmentId,
-      isConnecting,
-      isRevertingCheckpoint,
-      isSendBusy,
-      phase,
       revertThreadCheckpoint,
       rewindThread,
       routeThreadKey,
@@ -8423,12 +8404,40 @@ export default function ChatView(props: ChatViewProps) {
       turnDiffSummaries,
     ],
   );
-  // The dry run a click fetched stays mounted until the rewind menu reads it.
+  /** The rewind dialogs' entry: refused while a turn runs or a rewind is under way. */
+  const onRevertToTurnCount = useCallback(
+    async (turnCount: number, messageId: MessageId, action: RevertAction) => {
+      if (!activeThread || isRevertingCheckpoint) return;
+      if (phase === "running" || isSendBusy || isConnecting) {
+        setThreadError(activeThread.id, "Interrupt the current turn before reverting checkpoints.");
+        return;
+      }
+      await withRewindProgress(() => performRewind(turnCount, messageId, action));
+    },
+    [
+      activeThread,
+      isConnecting,
+      isRevertingCheckpoint,
+      isSendBusy,
+      performRewind,
+      phase,
+      setThreadError,
+      withRewindProgress,
+    ],
+  );
+  // The dry run a click fetched stays mounted while its rewind menu is open,
+  // so the menu shows it without asking Claude again, and is released when
+  // the menu closes.
   const heldRewindPreviewRef = useRef<(() => void) | null>(null);
   useEffect(() => {
+    if (pendingRevert !== null) return;
     heldRewindPreviewRef.current?.();
     heldRewindPreviewRef.current = null;
   }, [pendingRevert]);
+  useEffect(() => {
+    const held = heldRewindPreviewRef;
+    return () => held.current?.();
+  }, []);
   const messageRewindStartingRef = useRef(false);
   /**
    * The rewind arrow's one entry. Stops a running turn first, then rewinds
@@ -8438,66 +8447,77 @@ export default function ChatView(props: ChatViewProps) {
   const requestMessageRewind = useCallback(
     async (turnCount: number, messageId: MessageId) => {
       if (!activeThread || isRevertingCheckpoint || messageRewindStartingRef.current) return;
+      const threadId = activeThread.id;
+      let step = planMessageRewind({
+        canInterrupt: canInterruptRunningThread,
+        isWorking,
+        supportsMessageRewind,
+        afterStop: false,
+        runs: serverProjection?.runs ?? [],
+      });
+      if (step.kind === "refuse") {
+        setThreadError(threadId, step.reason);
+        return;
+      }
+      const askInMenu = () => setPendingRevert({ turnCount, messageId, routeThreadKey });
       messageRewindStartingRef.current = true;
-      useComposerDraftStore.setState((store) => ({
-        rewindingThreadKeys: new Set(store.rewindingThreadKeys).add(routeThreadKey),
-      }));
-      let heldPreview: (() => void) | null = null;
       try {
-        let runs = serverProjection?.runs ?? [];
-        const stoppedRun = canInterruptRunningThread;
-        if (stoppedRun) {
-          const result = await interruptThreadTurn({
-            environmentId,
-            input: { threadId: activeThread.id },
-          });
-          if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-            throw squashAtomCommandFailure(result);
+        await withRewindProgress(async () => {
+          let heldPreview: (() => void) | null = null;
+          try {
+            if (step.kind === "stop-first") {
+              const result = await interruptThreadTurn({ environmentId, input: { threadId } });
+              if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+                throw squashAtomCommandFailure(result);
+              }
+              step = planMessageRewind({
+                canInterrupt: false,
+                isWorking: false,
+                supportsMessageRewind,
+                afterStop: true,
+                runs: await waitForThreadToStop(routeThreadRef),
+              });
+            }
+            switch (step.kind) {
+              case "refuse":
+                throw new Error(step.reason);
+              case "ask":
+                askInMenu();
+                return;
+              case "check-files": {
+                const loaded = await loadThreadRewindPreview({
+                  environmentId,
+                  threadId,
+                  messageId,
+                });
+                heldPreview = loaded.release;
+                if (decideMessageRewindStart(loaded).kind === "ask") {
+                  heldRewindPreviewRef.current?.();
+                  heldRewindPreviewRef.current = heldPreview;
+                  heldPreview = null;
+                  askInMenu();
+                  return;
+                }
+                await performRewind(turnCount, messageId, {
+                  type: "rewind",
+                  choice: "conversation",
+                });
+                return;
+              }
+              default:
+                await performRewind(turnCount, messageId);
+            }
+          } catch (error) {
+            setThreadError(
+              threadId,
+              error instanceof Error ? error.message : "Failed to start the rewind.",
+            );
+          } finally {
+            heldPreview?.();
           }
-          runs = await waitForThreadToStop(routeThreadRef);
-        } else if (isWorking) {
-          // Sending, or work no Stop reaches: nothing to stop, so wait.
-          throw new Error("Wait for the current work to finish before rewinding.");
-        }
-        let action: RevertAction | undefined;
-        if (supportsMessageRewind) {
-          const blockedReason = messageRewindBlockedReason(runs);
-          if (blockedReason !== null) throw new Error(blockedReason);
-          const loaded = await loadThreadRewindPreview({
-            environmentId,
-            threadId: activeThread.id,
-            messageId,
-          });
-          heldPreview = loaded.release;
-          const decision = decideMessageRewindStart(loaded);
-          if (decision.kind === "rewind-now") {
-            action = { type: "rewind", choice: decision.choice };
-          } else {
-            heldRewindPreviewRef.current?.();
-            heldRewindPreviewRef.current = heldPreview;
-            heldPreview = null;
-            setPendingRevert({ turnCount, messageId, routeThreadKey });
-            return;
-          }
-        } else if (stoppedRun) {
-          // The stopped turn's file changes may not be on screen yet: ask.
-          setPendingRevert({ turnCount, messageId, routeThreadKey });
-          return;
-        }
-        await onRevertToTurnCount(turnCount, messageId, action, { ownsProgress: true });
-      } catch (error) {
-        setThreadError(
-          activeThread.id,
-          error instanceof Error ? error.message : "Failed to start the rewind.",
-        );
-      } finally {
-        heldPreview?.();
-        messageRewindStartingRef.current = false;
-        useComposerDraftStore.setState((store) => {
-          const remaining = new Set(store.rewindingThreadKeys);
-          remaining.delete(routeThreadKey);
-          return { rewindingThreadKeys: remaining };
         });
+      } finally {
+        messageRewindStartingRef.current = false;
       }
     },
     [
@@ -8507,12 +8527,13 @@ export default function ChatView(props: ChatViewProps) {
       interruptThreadTurn,
       isRevertingCheckpoint,
       isWorking,
-      onRevertToTurnCount,
+      performRewind,
       routeThreadKey,
       routeThreadRef,
       serverProjection,
       setThreadError,
       supportsMessageRewind,
+      withRewindProgress,
     ],
   );
 
@@ -8539,29 +8560,23 @@ export default function ChatView(props: ChatViewProps) {
             );
       if (!confirmed) return;
 
-      useComposerDraftStore.setState((store) => ({
-        rewindingThreadKeys: new Set(store.rewindingThreadKeys).add(routeThreadKey),
-      }));
       setThreadError(activeThread.id, null);
-      const result = await revertThreadCheckpoint({
-        environmentId,
-        input: {
-          threadId: activeThread.id,
-          checkpointId: input.checkpointId,
-          scopeId: input.scopeId,
-        },
-      });
-      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-        const error = squashAtomCommandFailure(result);
-        setThreadError(
-          activeThread.id,
-          error instanceof Error ? error.message : "Failed to revert thread state.",
-        );
-      }
-      useComposerDraftStore.setState((store) => {
-        const remaining = new Set(store.rewindingThreadKeys);
-        remaining.delete(routeThreadKey);
-        return { rewindingThreadKeys: remaining };
+      await withRewindProgress(async () => {
+        const result = await revertThreadCheckpoint({
+          environmentId,
+          input: {
+            threadId: activeThread.id,
+            checkpointId: input.checkpointId,
+            scopeId: input.scopeId,
+          },
+        });
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          setThreadError(
+            activeThread.id,
+            error instanceof Error ? error.message : "Failed to revert thread state.",
+          );
+        }
       });
     },
     [
@@ -10859,6 +10874,13 @@ export default function ChatView(props: ChatViewProps) {
     () => (rewindPickerOpen ? rewindPickerItems(timelineEntries, messageRewindTargets) : []),
     [rewindPickerOpen, timelineEntries, messageRewindTargets],
   );
+  const keptRewindPickerThreadKey = keepRewindPickerOpen(rewindPickerThreadKey, {
+    routeThreadKey,
+    itemCount: rewindPickerEntries.length,
+  });
+  if (keptRewindPickerThreadKey !== rewindPickerThreadKey) {
+    setRewindPickerThreadKey(keptRewindPickerThreadKey);
+  }
   useEscapeToStopAndRewind({
     enabled: isServerThread && !paintOnlyDisplayedTimeline,
     running: canInterruptRunningThread,
@@ -11400,6 +11422,7 @@ export default function ChatView(props: ChatViewProps) {
                   : {})}
                 isRevertingCheckpoint={isRevertingCheckpoint}
                 onImageExpand={onExpandTimelineImage}
+                canInterrupt={!paintOnlyDisplayedTimeline && canInterruptRunningThread}
                 onFileOpen={paintOnlyDisplayedTimeline ? noopHeldAttachment : openFileAttachment}
                 onFileDownload={
                   paintOnlyDisplayedTimeline ? noopHeldAttachment : downloadFileAttachment
@@ -11974,7 +11997,7 @@ export default function ChatView(props: ChatViewProps) {
       ) : null}
 
       <RewindPicker
-        open={rewindPickerOpen && rewindPickerEntries.length > 0}
+        open={rewindPickerOpen}
         items={rewindPickerEntries}
         onChoose={onChooseRewindPickerMessage}
         onCancel={() => setRewindPickerThreadKey(null)}

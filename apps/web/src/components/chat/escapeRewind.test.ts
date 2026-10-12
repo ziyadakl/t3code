@@ -126,6 +126,7 @@ describe("isEscapeOwnedElsewhere", () => {
     ["popover", `<div data-slot="popover-popup" data-open></div>`],
     ["combobox", `<div data-slot="combobox-popup" data-open></div>`],
     ["closing dialog", `<div data-slot="dialog-popup" data-ending-style></div>`],
+    ["mobile sidebar", `<div data-slot="sidebar" data-mobile="true" data-open></div>`],
     ["bare modal", `<div role="dialog" aria-modal="true"></div>`],
   ])("yields while the %s is open", (_name, html) => {
     mount(html);

@@ -1233,18 +1233,47 @@ export async function loadThreadRewindPreview(
   };
 }
 /**
+ * The next step of a click on a message's rewind arrow. Call it once before
+ * anything happens, and again with `afterStop` and the settled runs when it
+ * answered `stop-first`:
+ * - `refuse`: show `reason` and do nothing. A Claude queue is refused before
+ *   any Stop, so a click never kills a turn only to refuse afterwards.
+ * - `stop-first`: interrupt the running turn and wait for it to settle.
+ * - `check-files`: ask Claude for a dry run, then `decideMessageRewindStart`.
+ * - `ask`: open the rewind dialog. Other providers ask after a Stop because
+ *   the stopped turn's checkpoint, and so whether it changed files, may not
+ *   exist yet; asking is the safe choice.
+ * - `revert`: rewind now; the revert itself decides whether files matter.
+ */
+export function planMessageRewind(input: {
+  readonly canInterrupt: boolean;
+  readonly isWorking: boolean;
+  readonly supportsMessageRewind: boolean;
+  readonly afterStop: boolean;
+  readonly runs: ReadonlyArray<Pick<OrchestrationV2Run, "status" | "queueHeld">>;
+}):
+  | { readonly kind: "refuse"; readonly reason: string }
+  | { readonly kind: "stop-first" | "check-files" | "ask" | "revert" } {
+  const blockedReason = input.supportsMessageRewind ? messageRewindBlockedReason(input.runs) : null;
+  if (blockedReason !== null) return { kind: "refuse", reason: blockedReason };
+  if (input.canInterrupt) return { kind: "stop-first" };
+  if (input.isWorking) {
+    // Sending, or work no Stop reaches: nothing to stop, so wait.
+    return { kind: "refuse", reason: "Wait for the current work to finish before rewinding." };
+  }
+  if (input.supportsMessageRewind) return { kind: "check-files" };
+  return input.afterStop ? { kind: "ask" } : { kind: "revert" };
+}
+/**
  * What a click on a Claude message's rewind arrow does once the dry run is
  * back: rewind the conversation at once when no code choice could apply, or
- * open the rewind menu. An unknown answer (dry run failed) always asks.
+ * open the rewind menu. No answer (the dry run failed or timed out) always asks.
  */
 export function decideMessageRewindStart(input: {
   readonly preview: OrchestrationV2ThreadRewindPreview | null;
-  readonly error: string | null;
-}):
-  | { readonly kind: "rewind-now"; readonly choice: ThreadRewindChoice }
-  | { readonly kind: "ask" } {
+}): { readonly kind: "rewind-now" } | { readonly kind: "ask" } {
   return input.preview !== null && !threadRewindPreviewOffersCode(input.preview)
-    ? { kind: "rewind-now", choice: "conversation" }
+    ? { kind: "rewind-now" }
     : { kind: "ask" };
 }
 /**

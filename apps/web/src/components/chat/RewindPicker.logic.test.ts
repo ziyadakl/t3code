@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { MessageId } from "@t3tools/contracts";
 import {
+  keepRewindPickerOpen,
   initialRewindIndex,
   moveRewindSelection,
   rewindItemLabel,
@@ -37,9 +38,12 @@ describe("moveRewindSelection", () => {
 
 describe("rewindItemLabel", () => {
   it("shows the first line of the message, without its leading blank space", () => {
-    expect(rewindItemLabel({ text: "\n\n   Fix the login bug\nIt fails on Safari." })).toBe(
-      "Fix the login bug",
-    );
+    expect(
+      rewindItemLabel({
+        text: "\n\n   Fix the login bug\nIt fails on Safari.",
+        attachmentCount: 0,
+      }),
+    ).toBe("Fix the login bug");
   });
 
   it("names the attachments when a message has no text", () => {
@@ -48,7 +52,7 @@ describe("rewindItemLabel", () => {
   });
 
   it("says so when a message is empty", () => {
-    expect(rewindItemLabel({ text: " " })).toBe("Empty message");
+    expect(rewindItemLabel({ text: " ", attachmentCount: 0 })).toBe("Empty message");
   });
 });
 
@@ -100,5 +104,22 @@ describe("rewindPickerItems", () => {
         attachmentCount: 1,
       },
     ]);
+  });
+});
+
+describe("keepRewindPickerOpen", () => {
+  it("keeps the picker open on the thread it was opened for", () => {
+    expect(keepRewindPickerOpen("env:t1", { routeThreadKey: "env:t1", itemCount: 2 })).toBe(
+      "env:t1",
+    );
+  });
+  it("closes it on another thread, so coming back does not reopen it", () => {
+    expect(keepRewindPickerOpen("env:t1", { routeThreadKey: "env:t2", itemCount: 2 })).toBeNull();
+  });
+  it("closes it once there is nothing left to pick", () => {
+    expect(keepRewindPickerOpen("env:t1", { routeThreadKey: "env:t1", itemCount: 0 })).toBeNull();
+  });
+  it("stays closed", () => {
+    expect(keepRewindPickerOpen(null, { routeThreadKey: "env:t1", itemCount: 2 })).toBeNull();
   });
 });

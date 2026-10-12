@@ -27,6 +27,18 @@ export function moveRewindSelection(index: number, key: string, count: number): 
   }
 }
 
+/**
+ * The thread key the picker stays open for, or null to close it. It closes
+ * when the user moves to another thread, so returning does not reopen it,
+ * and when no message is left to pick.
+ */
+export function keepRewindPickerOpen(
+  openKey: string | null,
+  current: { readonly routeThreadKey: string; readonly itemCount: number },
+): string | null {
+  return openKey === current.routeThreadKey && current.itemCount > 0 ? openKey : null;
+}
+
 /** One row of the rewind picker: a user message the thread can go back to. */
 export interface RewindPickerItem {
   readonly messageId: MessageId;
@@ -34,14 +46,14 @@ export interface RewindPickerItem {
   /** ISO timestamp, shown as relative time. */
   readonly createdAt: string;
   /** Images and files sent with the message; names a text-less message. */
-  readonly attachmentCount?: number;
+  readonly attachmentCount: number;
 }
 
 /** A single-line label: the first non-blank line, or what the message carried. */
 export function rewindItemLabel(item: Pick<RewindPickerItem, "text" | "attachmentCount">): string {
   const firstLine = item.text.trimStart().split("\n", 1)[0]?.trimEnd() ?? "";
   if (firstLine.length > 0) return firstLine;
-  const attachments = item.attachmentCount ?? 0;
+  const attachments = item.attachmentCount;
   if (attachments > 0) return `${attachments} ${attachments === 1 ? "attachment" : "attachments"}`;
   return "Empty message";
 }

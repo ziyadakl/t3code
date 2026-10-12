@@ -1238,7 +1238,7 @@ export function deriveMessagesTimelineRows(input: {
       turnDiffSummaryByAssistantMessageId.set(summary.assistantMessageId, summary);
     }
   }
-  const revertTurnCountByUserMessageId = deriveMessageRewindTargets({
+  const messageRewindTargets = deriveMessageRewindTargets({
     timelineEntries,
     turnDiffSummaries: input.turnDiffSummaries,
     supportsConversationRollback: input.supportsConversationRollback,
@@ -1696,7 +1696,7 @@ export function deriveMessagesTimelineRows(input: {
           : undefined,
       revertTurnCount:
         timelineEntry.message.role === "user"
-          ? revertTurnCountByUserMessageId.get(timelineEntry.message.id)
+          ? messageRewindTargets.get(timelineEntry.message.id)
           : undefined,
     });
   }
