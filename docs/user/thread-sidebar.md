@@ -177,6 +177,11 @@ On web and desktop, open the command palette with `Cmd/Ctrl+K` to search threads
 across connected environments. Message search starts after two characters and
 includes your messages and final agent responses.
 
+When you have added more than one machine, the machine menu in the sidebar header
+shows only one machine's projects and threads. The thread you have open stays
+listed. While a machine is chosen, sidebar search looks only on that machine
+(plus the thread you have open); the command palette still searches every connected environment.
+
 Use **Settings → Keybindings** to find or customize shortcuts for searching files
 and copying a thread reference. A copied reference uses the thread's pull request
 link when available, otherwise its thread ID. See [keybindings](./keybindings.md)

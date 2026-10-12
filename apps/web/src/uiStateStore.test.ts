@@ -1,4 +1,4 @@
-import { ProjectId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
@@ -13,6 +13,7 @@ import {
   resolveProjectExpanded,
   setDefaultAdvertisedEndpointKey,
   setProjectExpanded,
+  setSidebarEnvironmentFilterId,
   setSidebarProjectScopeKey,
   setThreadChangedFilesExpanded,
   type UiState,
@@ -23,6 +24,7 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
     projectExpandedById: {},
     projectOrder: [],
     sidebarProjectScopeKey: null,
+    sidebarEnvironmentFilterId: null,
     threadLastVisitedAtById: {},
     threadChangedFilesExpandedById: {},
     defaultAdvertisedEndpointKey: null,
@@ -156,6 +158,15 @@ describe("uiStateStore pure functions", () => {
     expect(setSidebarProjectScopeKey(scoped, null).sidebarProjectScopeKey).toBeNull();
     expect(setSidebarProjectScopeKey(scoped, "").sidebarProjectScopeKey).toBeNull();
   });
+
+  it("stores the sidebar machine filter and resets it to all machines", () => {
+    const remoteEnvironmentId = EnvironmentId.make("environment-remote");
+    const filtered = setSidebarEnvironmentFilterId(makeUiState(), remoteEnvironmentId);
+
+    expect(filtered.sidebarEnvironmentFilterId).toBe("environment-remote");
+    expect(setSidebarEnvironmentFilterId(filtered, remoteEnvironmentId)).toBe(filtered);
+    expect(setSidebarEnvironmentFilterId(filtered, null).sidebarEnvironmentFilterId).toBeNull();
+  });
 });
 
 describe("parsePersistedState", () => {
@@ -170,6 +181,17 @@ describe("parsePersistedState", () => {
     expect(parsed.pullRequestMergeMethod).toBe("squash");
     expect(invalid.pullRequestMergeMethod).toBe("merge");
   });
+
+  it.each([42, "", "   ", { id: "environment-remote" }, undefined])(
+    "treats a persisted machine filter of %j as all machines",
+    (value) => {
+      const parsed = parsePersistedState({
+        sidebarEnvironmentFilterId: value as unknown as string,
+      });
+
+      expect(parsed.sidebarEnvironmentFilterId).toBeNull();
+    },
+  );
 
   it("hydrates raw UI-owned state without server entities", () => {
     const parsed = parsePersistedState({
@@ -202,6 +224,7 @@ describe("parsePersistedState", () => {
       },
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
       sidebarProjectScopeKey: null,
+      sidebarEnvironmentFilterId: null,
       pullRequestMergeMethod: "merge",
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
@@ -324,6 +347,7 @@ describe("uiStateStore persistence", () => {
       },
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
       sidebarProjectScopeKey: null,
+      sidebarEnvironmentFilterId: null,
       threadChangedFilesExpansionVersion: 2,
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
@@ -348,6 +372,19 @@ describe("uiStateStore persistence", () => {
     expect(parsePersistedState(persisted).sidebarProjectScopeKey).toBe(
       "github.com/pingdotgg/t3code",
     );
+  });
+
+  it("restores the sidebar machine filter across reloads", () => {
+    persistState(
+      makeUiState({ sidebarEnvironmentFilterId: EnvironmentId.make("environment-remote") }),
+    );
+
+    const persisted = JSON.parse(
+      localStorageStub.getItem(PERSISTED_STATE_KEY) ?? "{}",
+    ) as PersistedUiState;
+
+    expect(persisted.sidebarEnvironmentFilterId).toBe("environment-remote");
+    expect(parsePersistedState(persisted).sidebarEnvironmentFilterId).toBe("environment-remote");
   });
 
   it("drops the temporary expanded-only migration fallback when rewriting state", () => {
