@@ -8492,6 +8492,9 @@ export default function ChatView(props: ChatViewProps) {
                 });
                 heldPreview = loaded.release;
                 if (decideMessageRewindStart(loaded).kind === "ask") {
+                  // Left this thread (or unmounted, which nulls the ref) during
+                  // the dry run: no menu opens, so `finally` releases it now.
+                  if (currentRouteThreadKeyRef.current !== routeThreadKey) return;
                   heldRewindPreviewRef.current?.();
                   heldRewindPreviewRef.current = heldPreview;
                   heldPreview = null;

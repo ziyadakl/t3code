@@ -217,6 +217,7 @@ import {
   TIMELINE_MINIMAP_MIN_ITEMS,
   type TimelineLatestRun,
   type WorkGroupScrollAnchor,
+  isMessageRewindDisabled,
 } from "./MessagesTimeline.logic";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
@@ -2408,11 +2409,7 @@ function RevertUserMessageButton({
             type="button"
             size="xs"
             variant="ghost"
-            // A running turn is stopped by the click itself (ChatView requestMessageRewind);
-            // work no Stop reaches has to finish first.
-            disabled={
-              activity.isRevertingCheckpoint || (activity.isWorking && !activity.canInterrupt)
-            }
+            disabled={isMessageRewindDisabled(activity)}
             onClick={() => ctx.onRevertToTurnCount(turnCount, messageId)}
             aria-label="Edit from here"
           />
