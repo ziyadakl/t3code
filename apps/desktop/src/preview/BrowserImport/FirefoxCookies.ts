@@ -119,6 +119,43 @@ const expiryToSeconds = (expiry: number, schemaVersion: number): number | undefi
   return schemaVersion >= FIREFOX_EXPIRY_MILLISECONDS_SCHEMA ? Math.floor(expiry / 1000) : expiry;
 };
 
+/**
+ * Snapshots a Firefox cookie database and selects `columns` (chosen by schema
+ * version) from the default container's rows. Listing and import both read
+ * through here, so they agree on the schema version and on which rows count.
+ */
+const queryFirefoxCookies = <Row>(
+  cookieDatabasePath: string,
+  columns: (schemaVersion: number) => string,
+  decode: (raw: unknown) => Effect.Effect<ReadonlyArray<Row>, Schema.SchemaError>,
+) =>
+  Effect.gen(function* () {
+    const readFailed = (cause: unknown) =>
+      new FirefoxCookieReadError({ cookieDatabasePath, cause });
+    const snapshotPath = yield* snapshotCookieDatabase(cookieDatabasePath).pipe(
+      Effect.mapError(readFailed),
+    );
+    return yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const [versionRow] = yield* decodeUserVersion(yield* sql`pragma user_version`);
+      const schemaVersion = versionRow?.user_version ?? 0;
+      // Only the default container. Firefox isolates cookies per container and
+      // per private window via `originAttributes` (`^userContextId=2`,
+      // `^privateBrowsingId=1`); Electron has no equivalent, so importing them
+      // all would collapse several identities onto one host/name/path and hand
+      // the profile an arbitrary container's session.
+      const rows = yield* decode(
+        yield* sql`select ${sql.literal(columns(schemaVersion))}
+          from moz_cookies
+         where originAttributes = ''`,
+      );
+      return { rows, schemaVersion };
+    }).pipe(
+      Effect.provide(NodeSqliteClient.layer({ filename: snapshotPath, readonly: true })),
+      Effect.mapError(readFailed),
+    );
+  });
+
 const MetadataRow = Schema.Struct({
   host: Schema.String,
   expiry: Schema.Number,
@@ -135,17 +172,11 @@ const decodeMetadataRows = Schema.decodeUnknownEffect(Schema.Array(MetadataRow))
  */
 export const readFirefoxCookieMetadata = Effect.fn("FirefoxCookies.readFirefoxCookieMetadata")(
   function* (cookieDatabasePath: string) {
-    const snapshotPath = yield* snapshotCookieDatabase(cookieDatabasePath);
-    const { rows, schemaVersion } = yield* Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      const [versionRow] = yield* decodeUserVersion(yield* sql`pragma user_version`);
-      const raw = yield* sql`
-        select host, expiry, isSecure, isHttpOnly, lastAccessed
-          from moz_cookies
-         where originAttributes = ''
-      `;
-      return { rows: yield* decodeMetadataRows(raw), schemaVersion: versionRow?.user_version ?? 0 };
-    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: snapshotPath, readonly: true })));
+    const { rows, schemaVersion } = yield* queryFirefoxCookies(
+      cookieDatabasePath,
+      () => "host, expiry, isSecure, isHttpOnly, lastAccessed",
+      decodeMetadataRows,
+    );
     return rows.map((row): CookieMetadata => ({
       host: row.host,
       secure: row.isSecure === 1,
@@ -154,64 +185,38 @@ export const readFirefoxCookieMetadata = Effect.fn("FirefoxCookies.readFirefoxCo
       lastAccessedAt: row.lastAccessed > 0 ? Math.floor(row.lastAccessed / 1000) : undefined,
     }));
   },
-  (effect, cookieDatabasePath) =>
-    effect.pipe(
-      Effect.mapError((cause) => new FirefoxCookieReadError({ cookieDatabasePath, cause })),
-    ),
 );
 
 /** `includeHost` narrows the read to the sites the user chose. */
-export const readFirefoxCookies = Effect.fn("FirefoxCookies.readFirefoxCookies")(
-  function* (cookieDatabasePath: string, includeHost: (host: string) => boolean) {
-    const snapshotPath = yield* snapshotCookieDatabase(cookieDatabasePath);
+export const readFirefoxCookies = Effect.fn("FirefoxCookies.readFirefoxCookies")(function* (
+  cookieDatabasePath: string,
+  includeHost: (host: string) => boolean,
+) {
+  const { rows, schemaVersion } = yield* queryFirefoxCookies(
+    cookieDatabasePath,
+    (schemaVersion) =>
+      schemaVersion >= FIREFOX_RAW_SAMESITE_FIRST_SCHEMA &&
+      schemaVersion <= FIREFOX_RAW_SAMESITE_LAST_SCHEMA
+        ? "host, name, value, path, expiry, isSecure, isHttpOnly, sameSite, rawSameSite"
+        : "host, name, value, path, expiry, isSecure, isHttpOnly, sameSite, null as rawSameSite",
+    decodeCookieRows,
+  );
 
-    const { rows, schemaVersion } = yield* Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      const [versionRow] = yield* decodeUserVersion(yield* sql`pragma user_version`);
-      const schemaVersion = versionRow?.user_version ?? 0;
-      const hasRawSameSite =
-        schemaVersion >= FIREFOX_RAW_SAMESITE_FIRST_SCHEMA &&
-        schemaVersion <= FIREFOX_RAW_SAMESITE_LAST_SCHEMA;
-      // Only the default container. Firefox isolates cookies per container and
-      // per private window via `originAttributes` (`^userContextId=2`,
-      // `^privateBrowsingId=1`); Electron has no equivalent, so importing them
-      // all would collapse several identities onto one host/name/path and hand
-      // the profile an arbitrary container's session.
-      const raw = hasRawSameSite
-        ? yield* sql`
-          select host, name, value, path, expiry, isSecure, isHttpOnly, sameSite, rawSameSite
-            from moz_cookies
-           where originAttributes = ''
-        `
-        : yield* sql`
-          select host, name, value, path, expiry, isSecure, isHttpOnly, sameSite,
-                 null as rawSameSite
-            from moz_cookies
-           where originAttributes = ''
-        `;
-      return { rows: yield* decodeCookieRows(raw), schemaVersion };
-    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: snapshotPath, readonly: true })));
-
-    return rows
-      .filter((row) => includeHost(row.host))
-      .map((row) => {
-        const secure = row.isSecure === 1;
-        const scope = cookieScope(row.host, row.path, secure);
-        return {
-          url: scope.url,
-          name: row.name,
-          value: row.value,
-          domain: scope.domain,
-          path: row.path,
-          secure,
-          httpOnly: row.isHttpOnly === 1,
-          expirationDate: expiryToSeconds(row.expiry, schemaVersion),
-          sameSite: sameSiteFromColumn(row.sameSite, row.rawSameSite),
-        } satisfies ImportedCookie;
-      });
-  },
-  (effect, cookieDatabasePath) =>
-    effect.pipe(
-      Effect.mapError((cause) => new FirefoxCookieReadError({ cookieDatabasePath, cause })),
-    ),
-);
+  return rows
+    .filter((row) => includeHost(row.host))
+    .map((row) => {
+      const secure = row.isSecure === 1;
+      const scope = cookieScope(row.host, row.path, secure);
+      return {
+        url: scope.url,
+        name: row.name,
+        value: row.value,
+        domain: scope.domain,
+        path: row.path,
+        secure,
+        httpOnly: row.isHttpOnly === 1,
+        expirationDate: expiryToSeconds(row.expiry, schemaVersion),
+        sameSite: sameSiteFromColumn(row.sameSite, row.rawSameSite),
+      } satisfies ImportedCookie;
+    });
+});

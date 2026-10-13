@@ -427,7 +427,8 @@ describe("readChromiumCookieDatabase", () => {
         everyHost,
       ).pipe(Effect.flip);
 
-      expect(error._tag).toBe("SchemaError");
+      expect(error.reason).toBe("readFailed");
+      expect((error.cause as { _tag?: string })._tag).toBe("SchemaError");
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 

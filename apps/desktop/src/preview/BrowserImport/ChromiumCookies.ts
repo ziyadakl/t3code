@@ -44,7 +44,6 @@ import {
 const AES_CBC_IV = Buffer.alloc(16, 0x20);
 const AES_GCM_NONCE_LENGTH = 12;
 const AES_GCM_TAG_LENGTH = 16;
-const isChromiumKeyError = Schema.is(ChromiumKeyError);
 
 /**
  * Every way the read can fail: the key failures, plus the ones this module
@@ -87,9 +86,11 @@ const CookieRow = Schema.Struct({
   is_secure: Schema.Number,
   is_httponly: Schema.Number,
   samesite: Schema.Number,
-  top_frame_site_key: Schema.String,
+  partitioned: Schema.Number,
 });
 const decodeCookieRows = Schema.decodeUnknownEffect(Schema.Array(CookieRow));
+const COOKIE_COLUMNS = `host_key, name, value, encrypted_value, path,
+  expires_utc / 1000000 as expires_seconds, is_secure, is_httponly, samesite`;
 const NonNegativeInt = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 const SchemaVersion = Schema.Union([
   NonNegativeInt,
@@ -231,41 +232,70 @@ export function decryptChromiumValue(
   return null;
 }
 
+/** Chromium 115's schema 15 added `top_frame_site_key`, the CHIPS partition. */
+const PARTITIONED_COOKIES_SCHEMA = 15;
+
 /**
- * Reads and decodes one snapshotted Chromium cookie database. `includeHost`
- * narrows the read to chosen sites; rows it rejects are dropped before any
- * decryption and are not reported as skipped.
+ * Snapshots a Chromium cookie database and selects `columns` from every row,
+ * plus `partitioned`. Listing and import both read through here, so they agree
+ * on the schema version and on which rows are partitioned (CHIPS): those
+ * belong to one top-level site, which an Electron partition cannot express, so
+ * the import skips them and the listing leaves them out.
  */
-export const readChromiumCookieDatabase = Effect.fn("ChromiumCookies.readChromiumCookieDatabase")(
-  function* (
-    snapshotPath: string,
-    keys: ChromiumKeyMaterial,
-    platform: NodeJS.Platform,
-    includeHost: (host: string) => boolean,
-  ) {
-    const result = yield* Effect.gen(function* () {
+const queryChromiumCookies = <Row extends { readonly partitioned: number }>(
+  cookieDatabasePath: string,
+  columns: string,
+  decode: (raw: unknown) => Effect.Effect<ReadonlyArray<Row>, Schema.SchemaError>,
+) =>
+  Effect.gen(function* () {
+    const readFailed = (cause: unknown) =>
+      new ChromiumCookieReadError({ reason: "readFailed", cookieDatabasePath, cause });
+    const snapshotPath = yield* snapshotCookieDatabase(cookieDatabasePath).pipe(
+      Effect.mapError(readFailed),
+    );
+    return yield* Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       const schemaVersion = yield* sql`select value from meta where key = 'version' limit 1`.pipe(
         Effect.flatMap(decodeSchemaVersion),
         Effect.map(([row]) => row.value),
       );
-      const raw =
-        schemaVersion >= 15
-          ? yield* sql`select host_key, name, value, encrypted_value, path,
-                expires_utc / 1000000 as expires_seconds, is_secure, is_httponly,
-                samesite, top_frame_site_key from cookies`
-          : yield* sql`select host_key, name, value, encrypted_value, path,
-                expires_utc / 1000000 as expires_seconds, is_secure, is_httponly,
-                samesite, '' as top_frame_site_key from cookies`;
-      const rows = yield* decodeCookieRows(raw);
-      return { rows: rows.filter((row) => includeHost(row.host_key)), schemaVersion };
-    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: snapshotPath, readonly: true })));
+      const partitioned =
+        schemaVersion >= PARTITIONED_COOKIES_SCHEMA ? "top_frame_site_key <> ''" : "0";
+      const rows = yield* decode(
+        yield* sql`select ${sql.literal(columns)}, ${sql.literal(partitioned)} as partitioned
+          from cookies`,
+      );
+      return { rows, schemaVersion };
+    }).pipe(
+      Effect.provide(NodeSqliteClient.layer({ filename: snapshotPath, readonly: true })),
+      Effect.mapError(readFailed),
+    );
+  });
+
+/**
+ * Reads and decrypts one Chromium cookie database. `includeHost` narrows the
+ * read to chosen sites; rows it rejects are dropped before any decryption and
+ * are not reported as skipped.
+ */
+export const readChromiumCookieDatabase = Effect.fn("ChromiumCookies.readChromiumCookieDatabase")(
+  function* (
+    cookieDatabasePath: string,
+    keys: ChromiumKeyMaterial,
+    platform: NodeJS.Platform,
+    includeHost: (host: string) => boolean,
+  ) {
+    const { rows: allRows, schemaVersion } = yield* queryChromiumCookies(
+      cookieDatabasePath,
+      COOKIE_COLUMNS,
+      decodeCookieRows,
+    );
+    const rows = allRows.filter((row) => includeHost(row.host_key));
 
     const cookies: ImportedCookie[] = [];
     let undecryptable = 0;
     const undecryptableHosts = new Set<string>();
-    for (const row of result.rows) {
-      if (row.top_frame_site_key !== "") {
+    for (const row of rows) {
+      if (row.partitioned === 1) {
         undecryptable += 1;
         undecryptableHosts.add(bareHost(row.host_key));
         continue;
@@ -273,13 +303,7 @@ export const readChromiumCookieDatabase = Effect.fn("ChromiumCookies.readChromiu
       const value =
         row.encrypted_value.length === 0
           ? row.value
-          : decryptChromiumValue(
-              row.encrypted_value,
-              keys,
-              row.host_key,
-              result.schemaVersion,
-              platform,
-            );
+          : decryptChromiumValue(row.encrypted_value, keys, row.host_key, schemaVersion, platform);
       if (value === null) {
         undecryptable += 1;
         undecryptableHosts.add(bareHost(row.host_key));
@@ -304,13 +328,17 @@ export const readChromiumCookieDatabase = Effect.fn("ChromiumCookies.readChromiu
     if (
       cookies.length === 0 &&
       keys.cbcV11Error !== undefined &&
-      result.rows.some(
+      rows.some(
         (row) =>
-          row.top_frame_site_key === "" &&
+          row.partitioned === 0 &&
           Buffer.from(row.encrypted_value.subarray(0, 3)).toString("latin1") === "v11",
       )
     ) {
-      return yield* keys.cbcV11Error;
+      return yield* new ChromiumCookieReadError({
+        reason: keys.cbcV11Error.reason,
+        cookieDatabasePath,
+        cause: keys.cbcV11Error,
+      });
     }
     return {
       cookies,
@@ -326,8 +354,12 @@ const MetadataRow = Schema.Struct({
   is_secure: Schema.Number,
   is_httponly: Schema.Number,
   last_access_ms: Schema.Number,
+  partitioned: Schema.Number,
 });
 const decodeMetadataRows = Schema.decodeUnknownEffect(Schema.Array(MetadataRow));
+// Divided in SQL: the microsecond values overflow a safe JS integer.
+const METADATA_COLUMNS = `host_key, expires_utc / 1000000 as expires_seconds, is_secure,
+  is_httponly, last_access_utc / 1000 as last_access_ms`;
 
 /** Chromium's 1601 epoch in milliseconds before the UNIX one. */
 const WEBKIT_EPOCH_OFFSET_MILLISECONDS = WEBKIT_EPOCH_OFFSET_SECONDS * 1000;
@@ -339,38 +371,24 @@ const WEBKIT_EPOCH_OFFSET_MILLISECONDS = WEBKIT_EPOCH_OFFSET_SECONDS * 1000;
  */
 export const readChromiumCookieMetadata = Effect.fn("ChromiumCookies.readChromiumCookieMetadata")(
   function* (cookieDatabasePath: string) {
-    const snapshotPath = yield* snapshotCookieDatabase(cookieDatabasePath);
-    const rows = yield* Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      const schemaVersion = yield* sql`select value from meta where key = 'version' limit 1`.pipe(
-        Effect.flatMap(decodeSchemaVersion),
-        Effect.map(([row]) => row.value),
-      );
-      // Divided in SQL: the microsecond values overflow a safe JS integer.
-      return yield* decodeMetadataRows(
-        schemaVersion >= 15
-          ? yield* sql`select host_key, expires_utc / 1000000 as expires_seconds, is_secure,
-                is_httponly, last_access_utc / 1000 as last_access_ms
-                from cookies where top_frame_site_key = ''`
-          : yield* sql`select host_key, expires_utc / 1000000 as expires_seconds, is_secure,
-                is_httponly, last_access_utc / 1000 as last_access_ms from cookies`,
-      );
-    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: snapshotPath, readonly: true })));
-    return rows.map((row): CookieMetadata => ({
-      host: row.host_key,
-      secure: row.is_secure === 1,
-      httpOnly: row.is_httponly === 1,
-      expiresAt: toUnixSeconds(row.expires_seconds),
-      lastAccessedAt:
-        row.last_access_ms > 0 ? row.last_access_ms - WEBKIT_EPOCH_OFFSET_MILLISECONDS : undefined,
-    }));
+    const { rows } = yield* queryChromiumCookies(
+      cookieDatabasePath,
+      METADATA_COLUMNS,
+      decodeMetadataRows,
+    );
+    return rows
+      .filter((row) => row.partitioned === 0)
+      .map((row): CookieMetadata => ({
+        host: row.host_key,
+        secure: row.is_secure === 1,
+        httpOnly: row.is_httponly === 1,
+        expiresAt: toUnixSeconds(row.expires_seconds),
+        lastAccessedAt:
+          row.last_access_ms > 0
+            ? row.last_access_ms - WEBKIT_EPOCH_OFFSET_MILLISECONDS
+            : undefined,
+      }));
   },
-  (effect, cookieDatabasePath) =>
-    effect.pipe(
-      Effect.mapError(
-        (cause) => new ChromiumCookieReadError({ reason: "readFailed", cookieDatabasePath, cause }),
-      ),
-    ),
 );
 
 export interface ChromiumCookieSource {
@@ -412,30 +430,10 @@ export const readChromiumCookies = Effect.fn("ChromiumCookies.readChromiumCookie
     ),
   );
 
-  const snapshotPath = yield* snapshotCookieDatabase(source.cookieDatabasePath).pipe(
-    Effect.mapError(
-      (cause) =>
-        new ChromiumCookieReadError({
-          reason: "readFailed",
-          cookieDatabasePath: source.cookieDatabasePath,
-          cause,
-        }),
-    ),
-  );
-
   return yield* readChromiumCookieDatabase(
-    snapshotPath,
+    source.cookieDatabasePath,
     keys,
     source.platform,
     source.includeHost,
-  ).pipe(
-    Effect.mapError(
-      (cause) =>
-        new ChromiumCookieReadError({
-          reason: isChromiumKeyError(cause) ? cause.reason : "readFailed",
-          cookieDatabasePath: source.cookieDatabasePath,
-          cause,
-        }),
-    ),
   );
 });
