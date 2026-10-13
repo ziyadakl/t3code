@@ -424,6 +424,88 @@ it.effect.each([
   }).pipe(Effect.provide(testLayer)),
 );
 
+it.effect.each([
+  ["sql", layerSql],
+  ["memory", ProjectionStore.layerMemory],
+] as const)(
+  "%s: auto-archive candidates are settled threads and orphaned subagent children",
+  ([, testLayer]) =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const subagentOf = (parent: ThreadId) => ({
+        lineage: {
+          parentThreadId: parent,
+          relationshipToParent: "subagent" as const,
+          rootThreadId: parent,
+        },
+      });
+      const settled = yield* createThread("archive-settled", {
+        settledOverride: "settled",
+        settledAt: old,
+      });
+      const busy = yield* createThread("archive-settled-busy", {
+        settledOverride: "settled",
+        settledAt: old,
+      });
+      yield* createRun(busy, "running");
+      yield* createThread("archive-open");
+      yield* createThread("archive-already", {
+        settledOverride: "settled",
+        settledAt: old,
+        archivedAt: old,
+      });
+      const live = yield* createThread("archive-live-parent");
+      const liveChild = yield* createThread("archive-live-child", subagentOf(live));
+      const archivedParent = yield* createThread("archive-archived-parent", { archivedAt: old });
+      const orphan = yield* createThread("archive-orphan", subagentOf(archivedParent));
+      const archivedChild = yield* createThread("archive-archived-child", {
+        ...subagentOf(archivedParent),
+        archivedAt: old,
+      });
+      const deletedParent = yield* createThread("archive-deleted-parent", { deletedAt: old });
+      const deletedOrphan = yield* createThread(
+        "archive-deleted-orphan",
+        subagentOf(deletedParent),
+      );
+      // A fork is not a helper: it outlives its parent.
+      yield* createThread("archive-fork", {
+        lineage: {
+          parentThreadId: archivedParent,
+          relationshipToParent: "fork",
+          rootThreadId: archivedParent,
+        },
+      });
+
+      const candidates = yield* store.getAutoArchiveCandidates();
+      assert.deepEqual(
+        new Map(candidates.map((thread) => [thread.id, [thread.orphaned, thread.busy]])),
+        new Map([
+          [settled, [false, false]],
+          [busy, [false, true]],
+          [orphan, [true, false]],
+          [deletedOrphan, [true, false]],
+        ]),
+      );
+
+      assert.deepEqual(
+        new Map(
+          (yield* store.getSubagentChildren(archivedParent)).map((child) => [
+            child.id,
+            child.archivedAt === null,
+          ]),
+        ),
+        new Map([
+          [orphan, true],
+          [archivedChild, false],
+        ]),
+      );
+      assert.deepEqual(
+        (yield* store.getSubagentChildren(live)).map((child) => child.id),
+        [liveChild],
+      );
+    }).pipe(Effect.provide(testLayer)),
+);
+
 it.effect(
   "reads settlement candidates and thread metadata without loading historical or archived payloads",
   () =>

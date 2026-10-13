@@ -86,6 +86,8 @@ export const SidebarAutoSettleAfterDays = Schema.Number.check(
 );
 export type SidebarAutoSettleAfterDays = typeof SidebarAutoSettleAfterDays.Type;
 const DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS: SidebarAutoSettleAfterDays = 3;
+/** Days a thread stays settled before it is archived; same range as auto-settle. */
+const DEFAULT_SIDEBAR_AUTO_ARCHIVE_SETTLED_AFTER_DAYS: SidebarAutoSettleAfterDays = 7;
 export const MIN_GLASS_OPACITY = 40;
 export const MAX_GLASS_OPACITY = 100;
 export const GlassOpacity = Schema.Int.check(
@@ -1315,6 +1317,9 @@ export const ServerSettings = Schema.Struct({
   sidebarAutoSettleAfterDays: Schema.NullOr(SidebarAutoSettleAfterDays).pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS)),
   ),
+  sidebarAutoArchiveSettledAfterDays: Schema.NullOr(SidebarAutoSettleAfterDays).pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_AUTO_ARCHIVE_SETTLED_AFTER_DAYS)),
+  ),
   snoozeLimitedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   autoResumeLimitedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   sidebarAutoSettleOnMerge: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
@@ -1690,6 +1695,7 @@ export const ServerSettingsPatch = Schema.Struct({
   deviceOnboardingCompleted: Schema.optionalKey(Schema.Boolean),
   deviceHosts: Schema.optionalKey(SshDeviceHostConfigs),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
+  sidebarAutoArchiveSettledAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
   autoResumeLimitedThreads: Schema.optionalKey(Schema.Boolean),
   snoozeLimitedThreads: Schema.optionalKey(Schema.Boolean),

@@ -194,6 +194,20 @@ export type ProjectionSettlementCandidate = Pick<
   | "pendingBackgroundTasks"
 > & { readonly latestUserAuthoredMessageAt: DateTime.Utc | null };
 
+/**
+ * An unarchived thread the auto-archive sweep may archive: one that is settled,
+ * or a subagent child whose parent is archived, deleted or missing.
+ */
+export type ProjectionAutoArchiveCandidate = Pick<
+  OrchestrationV2AppThread,
+  "id" | "lineage" | "settledOverride" | "settledAt" | "updatedAt" | "pinnedAt" | "snoozedUntil"
+> & {
+  /** Subagent child whose parent is archived, deleted or missing. */
+  readonly orphaned: boolean;
+  /** Has a live run or a pending runtime request. */
+  readonly busy: boolean;
+};
+
 const ProjectionCheckpointContext = Schema.Struct({
   runs: Schema.Array(
     OrchestrationV2RunJsonSchema.mapFields(({ id, ordinal, status }) => ({ id, ordinal, status })),
@@ -357,6 +371,17 @@ export interface ProjectionStoreV2Shape {
   readonly getSettlementCandidates: (
     threadId?: ThreadId,
   ) => Effect.Effect<ReadonlyArray<ProjectionSettlementCandidate>, ProjectionStoreV2Error>;
+  readonly getAutoArchiveCandidates: () => Effect.Effect<
+    ReadonlyArray<ProjectionAutoArchiveCandidate>,
+    ProjectionStoreV2Error
+  >;
+  /** Subagent children of `threadId` that are not deleted, archived or not. */
+  readonly getSubagentChildren: (
+    threadId: ThreadId,
+  ) => Effect.Effect<
+    ReadonlyArray<Pick<OrchestrationV2AppThread, "id" | "archivedAt">>,
+    ProjectionStoreV2Error
+  >;
   /**
    * Active (not deleted, not archived) threads with at least one pull request
    * link, in shell snapshot order, or only `threadId` when given. Skips run,
@@ -5341,6 +5366,88 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         )
         .pipe(Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })));
 
+    const getAutoArchiveCandidates: ProjectionStoreV2Shape["getAutoArchiveCandidates"] = () =>
+      Effect.gen(function* () {
+        const rows = yield* sql<{
+          readonly payload_json: string;
+          readonly orphaned: number;
+          readonly busy: number;
+        }>`
+          SELECT t.payload_json,
+            (
+              json_extract(t.payload_json, '$.lineage.relationshipToParent') = 'subagent'
+              AND (
+                parent.thread_id IS NULL
+                OR parent.deleted_at IS NOT NULL
+                OR json_extract(parent.payload_json, '$.archivedAt') IS NOT NULL
+              )
+            ) AS orphaned,
+            (
+              EXISTS (
+                SELECT 1 FROM orchestration_v2_projection_runs active
+                WHERE active.thread_id = t.thread_id
+                  AND active.status IN ('preparing', 'starting', 'running', 'waiting')
+              )
+              OR EXISTS (
+                SELECT 1 FROM orchestration_v2_projection_runtime_requests request
+                WHERE request.thread_id = t.thread_id AND request.status = 'pending'
+              )
+            ) AS busy
+          FROM orchestration_v2_projection_threads t
+          LEFT JOIN orchestration_v2_projection_threads parent
+            ON parent.thread_id = json_extract(t.payload_json, '$.lineage.parentThreadId')
+          WHERE t.deleted_at IS NULL
+            AND json_extract(t.payload_json, '$.archivedAt') IS NULL
+            AND (
+              (
+                json_extract(t.payload_json, '$.settledOverride') = 'settled'
+                AND json_extract(t.payload_json, '$.settledAt') IS NOT NULL
+              )
+              OR (
+                json_extract(t.payload_json, '$.lineage.relationshipToParent') = 'subagent'
+                AND (
+                  parent.thread_id IS NULL
+                  OR parent.deleted_at IS NOT NULL
+                  OR json_extract(parent.payload_json, '$.archivedAt') IS NOT NULL
+                )
+              )
+            )
+          ORDER BY t.updated_at ASC, t.thread_id ASC
+        `;
+        return yield* Effect.forEach(rows, (row) =>
+          decodeThreadPayload(row.payload_json).pipe(
+            Effect.map((thread): ProjectionAutoArchiveCandidate => ({
+              id: thread.id,
+              lineage: thread.lineage,
+              settledOverride: thread.settledOverride,
+              settledAt: thread.settledAt,
+              updatedAt: thread.updatedAt,
+              pinnedAt: thread.pinnedAt ?? null,
+              snoozedUntil: thread.snoozedUntil ?? null,
+              orphaned: row.orphaned === 1,
+              busy: row.busy === 1,
+            })),
+          ),
+        );
+      }).pipe(Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })));
+
+    const getSubagentChildren: ProjectionStoreV2Shape["getSubagentChildren"] = (threadId) =>
+      Effect.gen(function* () {
+        const rows = yield* sql<PayloadRow>`
+          SELECT payload_json
+          FROM orchestration_v2_projection_threads
+          WHERE deleted_at IS NULL
+            AND json_extract(payload_json, '$.lineage.parentThreadId') = ${threadId}
+            AND json_extract(payload_json, '$.lineage.relationshipToParent') = 'subagent'
+          ORDER BY created_at ASC, thread_id ASC
+        `;
+        return yield* Effect.forEach(rows, (row) =>
+          decodeThreadPayload(row.payload_json).pipe(
+            Effect.map((thread) => ({ id: thread.id, archivedAt: thread.archivedAt })),
+          ),
+        );
+      }).pipe(Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })));
+
     const getThreadsWithPullRequests: ProjectionStoreV2Shape["getThreadsWithPullRequests"] = (
       threadId,
     ) =>
@@ -5683,6 +5790,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getThreadShell,
       getThread,
       getSettlementCandidates,
+      getAutoArchiveCandidates,
+      getSubagentChildren,
       getThreadsWithPullRequests,
       getThreadProjection,
       getTurnStartContext,
@@ -5820,6 +5929,64 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                 left.id.localeCompare(right.id),
             );
         }),
+      getAutoArchiveCandidates: () =>
+        Ref.get(replayState).pipe(
+          Effect.map((state) =>
+            [...state.projections.values()]
+              .map(({ thread, runs, runtimeRequests }) => {
+                const parentThreadId = thread.lineage.parentThreadId;
+                const parent =
+                  parentThreadId === null
+                    ? undefined
+                    : state.projections.get(parentThreadId)?.thread;
+                const orphaned =
+                  thread.lineage.relationshipToParent === "subagent" &&
+                  (parent === undefined || parent.deletedAt !== null || parent.archivedAt !== null);
+                return { thread, runs, runtimeRequests, orphaned };
+              })
+              .filter(
+                ({ thread, orphaned }) =>
+                  thread.deletedAt === null &&
+                  thread.archivedAt === null &&
+                  (orphaned || (thread.settledOverride === "settled" && thread.settledAt !== null)),
+              )
+              .toSorted(
+                (left, right) =>
+                  DateTime.toEpochMillis(left.thread.updatedAt) -
+                    DateTime.toEpochMillis(right.thread.updatedAt) ||
+                  left.thread.id.localeCompare(right.thread.id),
+              )
+              .map(
+                ({ thread, runs, runtimeRequests, orphaned }): ProjectionAutoArchiveCandidate => ({
+                  id: thread.id,
+                  lineage: thread.lineage,
+                  settledOverride: thread.settledOverride,
+                  settledAt: thread.settledAt,
+                  updatedAt: thread.updatedAt,
+                  pinnedAt: thread.pinnedAt ?? null,
+                  snoozedUntil: thread.snoozedUntil ?? null,
+                  orphaned,
+                  busy:
+                    runs.some(isActivityRunForShell) ||
+                    runtimeRequests.some((request) => request.status === "pending"),
+                }),
+              ),
+          ),
+        ),
+      getSubagentChildren: (threadId) =>
+        Ref.get(replayState).pipe(
+          Effect.map((state) =>
+            [...state.projections.values()]
+              .map(({ thread }) => thread)
+              .filter(
+                (thread) =>
+                  thread.deletedAt === null &&
+                  thread.lineage.parentThreadId === threadId &&
+                  thread.lineage.relationshipToParent === "subagent",
+              )
+              .map((thread) => ({ id: thread.id, archivedAt: thread.archivedAt })),
+          ),
+        ),
       getThreadsWithPullRequests: (threadId) =>
         Ref.get(replayState).pipe(
           Effect.map((state) =>

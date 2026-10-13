@@ -158,6 +158,7 @@ import * as RuntimeLayer from "./orchestration-v2/runtimeLayer.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as ResourceCleanupService from "./orchestration-v2/ResourceCleanupService.ts";
+import * as ThreadArchiveService from "./orchestration-v2/ThreadArchiveService.ts";
 import * as ThreadSettlementService from "./orchestration-v2/ThreadSettlementService.ts";
 import * as ThreadPullRequestService from "./orchestration-v2/ThreadPullRequestService.ts";
 import * as RunFinalizationService from "./orchestration-v2/RunFinalizationService.ts";
@@ -487,6 +488,12 @@ const layerThreadSettlementWorker = Layer.effectDiscard(
   ThreadSettlementService.make.pipe(Effect.flatMap((service) => service.start())),
 ).pipe(Layer.provide(layerPullRequestService), Layer.provide(ProjectionStoreV2.layer));
 
+// Archives long-settled threads, and archives subagent children with their
+// parent, through the orchestrator so sessions detach as for a user's archive.
+const layerThreadArchiveWorker = Layer.effectDiscard(
+  ThreadArchiveService.make.pipe(Effect.flatMap((service) => service.start())),
+).pipe(Layer.provide(ProjectionStoreV2.layer));
+
 const layerThreadPullRequestWorker = Layer.effectDiscard(
   ThreadPullRequestService.make.pipe(Effect.flatMap((service) => service.start())),
 ).pipe(Layer.provide(layerPullRequestService));
@@ -528,6 +535,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   // Asks T3 Connect to deliver webhooks it held while this environment was offline.
   HeldHooksWaker.layer,
   layerThreadSettlementWorker,
+  layerThreadArchiveWorker,
   Layer.effectDiscard(StorageCleanup.make.pipe(Effect.flatMap((service) => service.start()))).pipe(
     Layer.provide(ProjectionStoreV2.layer),
   ),
