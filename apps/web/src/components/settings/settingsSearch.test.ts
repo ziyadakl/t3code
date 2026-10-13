@@ -115,6 +115,12 @@ describe("searchSettings", () => {
     expect(searchSettings("administrative access")[0]?.id).toBe("connections-environment");
   });
 
+  it("finds the sidebar project group settings", () => {
+    expect(searchSettings("fold threads by project")[0]?.id).toBe("sidebar-project-groups");
+    expect(searchSettings("float to the top")[0]?.id).toBe("sidebar-float-to-top");
+    expect(searchSettings("needs you")[0]?.id).toBe("sidebar-float-to-top");
+  });
+
   it("lists thread confirmations in panel order", () => {
     expect(searchSettings("confirmation").map((item) => item.id)).toEqual([
       "unpin-confirmation",

@@ -364,6 +364,20 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["hide fold running monitoring threads inbox sidebar shelf"],
   },
   {
+    id: "sidebar-project-groups",
+    title: "Group threads by project",
+    to: "/settings/general",
+    searchTerms: ["fold collapse threads project headers groups sidebar flat list layout"],
+  },
+  {
+    id: "sidebar-float-to-top",
+    title: "Float to the top",
+    to: "/settings/general",
+    searchTerms: [
+      "needs you statuses done input approval failed woke limited waiting sidebar groups",
+    ],
+  },
+  {
     id: "auto-settle-inactive-threads",
     title: "Auto-settle inactive threads",
     to: "/settings/general",
