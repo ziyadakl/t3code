@@ -14,8 +14,20 @@ describe("groupSites", () => {
   it("counts a site's cookies across its hosts", () => {
     const sites = groupSites(
       [
-        { host: ".example.com", secure: false, httpOnly: false, expiresAt: undefined },
-        { host: "docs.example.com", secure: false, httpOnly: false, expiresAt: undefined },
+        {
+          host: ".example.com",
+          secure: false,
+          httpOnly: false,
+          expiresAt: undefined,
+          lastAccessedAt: undefined,
+        },
+        {
+          host: "docs.example.com",
+          secure: false,
+          httpOnly: false,
+          expiresAt: undefined,
+          lastAccessedAt: undefined,
+        },
       ],
       { now: 0 },
     );
@@ -25,7 +37,12 @@ describe("groupSites", () => {
   });
 
   const NOW = 1_800_000_000_000;
-  const session = { secure: true, httpOnly: true, expiresAt: 1_900_000_000 };
+  const session = {
+    secure: true,
+    httpOnly: true,
+    expiresAt: 1_900_000_000,
+    lastAccessedAt: undefined,
+  };
 
   it("calls a site signed in only for a live HttpOnly, Secure, persistent cookie", () => {
     const sites = groupSites(

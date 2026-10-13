@@ -56,7 +56,7 @@ export interface CookieMetadata {
   /** Seconds since the UNIX epoch, or undefined for a session cookie. */
   readonly expiresAt: number | undefined;
   /** Epoch milliseconds; undefined when the engine does not record it. */
-  readonly lastAccessedAt?: number | undefined;
+  readonly lastAccessedAt: number | undefined;
 }
 
 /**

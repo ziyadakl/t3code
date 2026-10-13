@@ -303,10 +303,7 @@ export const readSafariCookies = Effect.fn("SafariCookies.readSafariCookies")(fu
   return yield* readJar(cookiePath, (contents) => parseBinaryCookies(contents, includeHost));
 });
 
-/**
- * The jar's flags and expiries, for listing its sites. Safari records no last
- * access time, so none is reported.
- */
+/** The jar's flags and expiries, for listing its sites. */
 export const readSafariCookieMetadata = Effect.fn("SafariCookies.readSafariCookieMetadata")(
   function* (cookiePath: string) {
     return yield* readJar(cookiePath, (contents) =>
@@ -315,6 +312,8 @@ export const readSafariCookieMetadata = Effect.fn("SafariCookies.readSafariCooki
         secure: record.secure,
         httpOnly: record.httpOnly,
         expiresAt: record.expiresAt,
+        // Safari records no last access time.
+        lastAccessedAt: undefined,
       })),
     );
   },
