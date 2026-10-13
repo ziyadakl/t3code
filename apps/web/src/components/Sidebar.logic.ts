@@ -7,6 +7,7 @@ import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests
 import * as React from "react";
 import {
   isAtomCommandInterrupted,
+  squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
 import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit/sortable";
@@ -519,6 +520,11 @@ export async function deleteSelectedThreadEntries<
   return { deletedThreadKeys, firstFailure };
 }
 
+/**
+ * Archives sequentially, like the single-row action run once per thread: a
+ * failed archive stops the batch, and threads already archived leave the
+ * selection while the rest stay selected for a retry.
+ */
 export async function archiveSelectedThreadEntries<
   TEntry extends { readonly threadKey: string },
   TResult extends { readonly _tag: "Success" | "Failure" },
@@ -549,6 +555,42 @@ export async function archiveSelectedThreadEntries<
   }
 
   return { archivedThreadKeys, mutationFailure: null, followupFailures };
+}
+
+function failureMessage(failure: AsyncResult.Failure<unknown, unknown>): string {
+  const error = squashAtomCommandFailure(failure);
+  return error instanceof Error ? error.message : "An error occurred.";
+}
+
+/**
+ * Runs a bulk archive (see archiveSelectedThreadEntries) and turns its outcome
+ * into error reports and selection updates, shared by both sidebars.
+ */
+export async function archiveThreadsAndReport<
+  TEntry extends { readonly threadKey: string },
+>(input: {
+  entries: readonly TEntry[];
+  archive: (entry: TEntry, onArchived: () => void) => Promise<AtomCommandResult<unknown, unknown>>;
+  reportError: (title: string, description: string) => void;
+  removeFromSelection: (threadKeys: readonly string[]) => void;
+  onAllArchived: () => void;
+}): Promise<void> {
+  const outcome = await archiveSelectedThreadEntries({
+    entries: input.entries,
+    archive: input.archive,
+  });
+  for (const failure of outcome.followupFailures) {
+    if (isAtomCommandInterrupted(failure)) continue;
+    input.reportError("Thread archived, but navigation failed", failureMessage(failure));
+  }
+  if (outcome.mutationFailure) {
+    input.removeFromSelection(outcome.archivedThreadKeys);
+    if (!isAtomCommandInterrupted(outcome.mutationFailure)) {
+      input.reportError("Failed to archive threads", failureMessage(outcome.mutationFailure));
+    }
+    return;
+  }
+  input.onAllArchived();
 }
 
 export function buildMultiSelectThreadContextMenuItems(input: {
@@ -632,12 +674,14 @@ export function buildBulkUnpinContextMenuItem(input: {
  * those targets, and the item stays visible but disabled when there are none,
  * like the single-row item on a running thread.
  */
+function isBulkArchivable(thread: Pick<SidebarThreadSummary, "archivedAt" | "runtime">): boolean {
+  return thread.archivedAt === null && threadRuntimeCanArchive(thread.runtime);
+}
+
 export function buildBulkArchiveContextMenuItem<
   T extends Pick<SidebarThreadSummary, "archivedAt" | "runtime">,
 >(input: { threads: readonly T[] }): { item: ContextMenuItem<"archive">; targets: T[] } {
-  const targets = input.threads.filter(
-    (thread) => thread.archivedAt === null && threadRuntimeCanArchive(thread.runtime),
-  );
+  const targets = input.threads.filter(isBulkArchivable);
   return {
     item: {
       id: "archive",
@@ -646,6 +690,20 @@ export function buildBulkArchiveContextMenuItem<
     },
     targets,
   };
+}
+
+/**
+ * Re-reads the archive targets picked when the menu opened, so a thread that
+ * started running (or was archived, or vanished) while the confirm dialog was
+ * open is skipped instead of stopping the batch.
+ */
+export function refreshBulkArchiveTargets<
+  T extends Pick<SidebarThreadSummary, "archivedAt" | "runtime">,
+>(targets: readonly T[], current: (target: T) => T | undefined): T[] {
+  return targets.flatMap((target) => {
+    const latest = current(target);
+    return latest && isBulkArchivable(latest) ? [latest] : [];
+  });
 }
 
 export interface ThreadStatusPill {
