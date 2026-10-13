@@ -265,6 +265,17 @@ export function clearProjectSettingsOverrides(
   return Object.keys(next).length === 0 ? null : next;
 }
 
+/** Whether any rule can remove a worktree. `worktreeKeepWhen` only narrows them. */
+export function worktreeCleanupEnabled(rules: WorktreeCleanupRules): boolean {
+  return (
+    rules.worktreeAfterDays !== null ||
+    rules.worktreeAfterArchivedDays !== null ||
+    rules.worktreeOnMerge ||
+    rules.worktreeOnDelete ||
+    rules.worktreeUnchanged
+  );
+}
+
 /** Worktree rules are project-scoped; artifact and log retention stays environment-wide. */
 export function resolveWorktreeCleanup(
   settings: ServerSettings,
@@ -276,6 +287,7 @@ export function resolveWorktreeCleanup(
     return {
       worktreeKeepWhen: settings.storageCleanup.worktreeKeepWhen,
       worktreeAfterDays: null,
+      worktreeAfterArchivedDays: null,
       worktreeOnMerge: false,
       worktreeOnDelete: false,
       worktreeUnchanged: false,
@@ -283,6 +295,7 @@ export function resolveWorktreeCleanup(
   const {
     worktreeKeepWhen,
     worktreeAfterDays,
+    worktreeAfterArchivedDays,
     worktreeOnMerge,
     worktreeOnDelete,
     worktreeUnchanged,
@@ -290,6 +303,7 @@ export function resolveWorktreeCleanup(
   return {
     worktreeKeepWhen,
     worktreeAfterDays,
+    worktreeAfterArchivedDays,
     worktreeOnMerge,
     worktreeOnDelete,
     worktreeUnchanged,

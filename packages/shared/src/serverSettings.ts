@@ -507,6 +507,7 @@ export function applyServerSettingsPatch(
                   rules: {
                     worktreeKeepWhen: next.storageCleanup.worktreeKeepWhen,
                     worktreeAfterDays: next.storageCleanup.worktreeAfterDays,
+                    worktreeAfterArchivedDays: next.storageCleanup.worktreeAfterArchivedDays,
                     worktreeOnMerge: next.storageCleanup.worktreeOnMerge,
                     worktreeOnDelete: next.storageCleanup.worktreeOnDelete,
                     worktreeUnchanged: next.storageCleanup.worktreeUnchanged,

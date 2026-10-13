@@ -3,7 +3,7 @@ import type {
   StorageCleanupSettings,
   WorktreeCleanupRules,
 } from "@t3tools/contracts";
-import { resolveWorktreeCleanup } from "@t3tools/shared/projectSettings";
+import { resolveWorktreeCleanup, worktreeCleanupEnabled } from "@t3tools/shared/projectSettings";
 import { useMemo, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/reactivity";
@@ -269,18 +269,14 @@ function CleanupSection() {
   const hasRules = supported.some((environment) => {
     const settings = environment.serverConfig?.settings;
     if (!settings) return false;
-    const enabled = (rules: WorktreeCleanupRules) =>
-      rules.worktreeAfterDays !== null ||
-      rules.worktreeOnMerge ||
-      rules.worktreeOnDelete ||
-      rules.worktreeUnchanged;
     return (
       settings.storageCleanup.browserArtifactsAfterDays !== null ||
       settings.storageCleanup.logsAfterDays !== null ||
-      enabled(resolveWorktreeCleanup(settings, null)) ||
+      worktreeCleanupEnabled(resolveWorktreeCleanup(settings, null)) ||
       Object.values(settings.projectSettingsOverrides).some(
         (override) =>
-          override.worktreeCleanup?.mode === "custom" && enabled(override.worktreeCleanup.rules),
+          override.worktreeCleanup?.mode === "custom" &&
+          worktreeCleanupEnabled(override.worktreeCleanup.rules),
       )
     );
   });
@@ -538,6 +534,27 @@ export function StorageSettingsPanel() {
                 />
               }
             />
+            {connectedEnvironments.every(
+              (environment) =>
+                environment.serverConfig?.environment.capabilities
+                  .storageCleanupArchivedWorktrees === true,
+            ) && (
+              <SettingsRow
+                title="Delete worktrees of archived threads"
+                status={ruleStatus("worktreeAfterArchivedDays")}
+                description="Remove a worktree once its thread has been archived for this many days. Archived threads are also inactive, so this only removes sooner when its days are fewer than Delete inactive worktrees. Branches and thread history are kept."
+                serverScoped={!isProjectScope}
+                control={
+                  <RetentionControl
+                    label="Delete worktrees of archived threads"
+                    value={settings.worktreeAfterArchivedDays}
+                    onChange={(worktreeAfterArchivedDays) =>
+                      updateWorktree({ worktreeAfterArchivedDays })
+                    }
+                  />
+                }
+              />
+            )}
             <SettingsRow
               title="Delete merged worktrees"
               status={ruleStatus("worktreeOnMerge")}

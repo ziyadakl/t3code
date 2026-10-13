@@ -15,7 +15,7 @@ import type {
   StorageCleanupReport,
   StorageCleanupReportEntry,
 } from "@t3tools/contracts";
-import { resolveWorktreeCleanup } from "@t3tools/shared/projectSettings";
+import { resolveWorktreeCleanup, worktreeCleanupEnabled } from "@t3tools/shared/projectSettings";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -64,12 +64,6 @@ function cleanupFailureReason(error: { readonly message: string }) {
     ? `${error.command}: ${error.detail.split(/\r?\n/)[0]}${error.reason ? ` (${error.reason})` : ""}`
     : (error.message.split(/\r?\n/)[0] ?? error.message);
 }
-
-const worktreeCleanupEnabled = (rules: WorktreeCleanupRules) =>
-  rules.worktreeAfterDays !== null ||
-  rules.worktreeOnMerge ||
-  rules.worktreeOnDelete ||
-  rules.worktreeUnchanged;
 
 function anyWorktreePolicy(
   settings: ServerSettings,
@@ -126,6 +120,66 @@ export function storageCleanupActivityAt(thread: OrchestrationV2ThreadShell): nu
       thread.latestRunCompletedAt,
     ].flatMap((value) => (value == null ? [] : [DateTime.toEpochMillis(value)])),
   );
+}
+
+const archivedAtMillis = (thread: Pick<OrchestrationV2ThreadShell, "archivedAt">) =>
+  thread.archivedAt === null ? null : DateTime.toEpochMillis(thread.archivedAt);
+
+/** Whole days since `at`; zero when a skewed clock puts `at` in the future. */
+const daysSince = (at: number, now: number) => Math.max(0, Math.floor((now - at) / DAY_MS));
+
+/**
+ * What the deleted-thread and day rules decide about one worktree, before the
+ * merged and unchanged rules (which need git) get a say. `removalReason` is
+ * null when neither removes it; `keepReason` is the report text when no rule
+ * at all does. Unarchiving clears `archivedAt`, so the archive rule only counts
+ * an archived thread; since archived threads are also inactive, it fires first
+ * only when its days are fewer.
+ */
+export function worktreeTimeRuleVerdict(
+  thread: {
+    readonly deleted: boolean;
+    readonly activityAt: number;
+    readonly archivedAt: number | null;
+  },
+  rules: Pick<
+    WorktreeCleanupRules,
+    "worktreeAfterDays" | "worktreeAfterArchivedDays" | "worktreeOnMerge" | "worktreeUnchanged"
+  >,
+  now: number,
+): { readonly removalReason: string | null; readonly keepReason: string } {
+  const dayRules = thread.deleted
+    ? []
+    : [
+        rules.worktreeAfterDays === null
+          ? null
+          : { label: "inactive", limit: rules.worktreeAfterDays, since: thread.activityAt },
+        rules.worktreeAfterArchivedDays === null || thread.archivedAt === null
+          ? null
+          : { label: "archived", limit: rules.worktreeAfterArchivedDays, since: thread.archivedAt },
+      ].filter((rule) => rule !== null);
+  const remaining = (rule: (typeof dayRules)[number]) => rule.limit - daysSince(rule.since, now);
+  // Inactivity is listed first, so it names the removal when both have fired.
+  const fired = dayRules.find((rule) => rule.since < now - rule.limit * DAY_MS);
+  // The countdown shown is whichever day rule is closest to firing.
+  const closest = dayRules.reduce<(typeof dayRules)[number] | null>(
+    (best, rule) => (best === null || remaining(rule) <= remaining(best) ? rule : best),
+    null,
+  );
+  return {
+    removalReason: thread.deleted
+      ? "thread was deleted"
+      : fired
+        ? `${fired.label} for ${daysSince(fired.since, now)} days`
+        : null,
+    keepReason: closest
+      ? `${closest.label} for ${daysSince(closest.since, now)} of ${closest.limit} days`
+      : rules.worktreeOnMerge
+        ? "not merged"
+        : rules.worktreeAfterArchivedDays !== null && !rules.worktreeUnchanged
+          ? "not archived"
+          : "has commits beyond the default branch",
+  };
 }
 
 /**
@@ -477,15 +531,17 @@ const make = Effect.gen(function* () {
         const changes = yield* localChangesReason(worktreePath, settings);
         if (changes !== null) return keep(changes);
         const head = yield* git.resolveCommit({ cwd: worktreePath, revision: "HEAD" });
-        const old =
-          !deleted &&
-          settings.worktreeAfterDays !== null &&
-          storageCleanupActivityAt(thread) < now - settings.worktreeAfterDays * DAY_MS;
-        let eligible = deleted || old;
-        let removalReason = deleted
-          ? "thread was deleted"
-          : `inactive for ${Math.floor((now - storageCleanupActivityAt(thread)) / DAY_MS)} days`;
-        if (!eligible && (settings.worktreeUnchanged || settings.worktreeOnMerge)) {
+        const verdict = worktreeTimeRuleVerdict(
+          {
+            deleted,
+            activityAt: deleted ? 0 : storageCleanupActivityAt(thread),
+            archivedAt: archivedAtMillis(thread),
+          },
+          settings,
+          now,
+        );
+        let removalReason = verdict.removalReason;
+        if (removalReason === null && (settings.worktreeUnchanged || settings.worktreeOnMerge)) {
           const repositoryCwd = path.resolve(project.workspaceRoot);
           const remote = yield* git.resolvePrimaryRemoteName(repositoryCwd);
           const branch = yield* git.resolveDefaultBranchName(repositoryCwd, remote);
@@ -512,30 +568,25 @@ const make = Effect.gen(function* () {
             allowNonZeroExit: true,
           });
           const integrated = ancestor.exitCode === 0;
-          eligible = integrated && settings.worktreeUnchanged;
-          if (eligible) removalReason = "no commits beyond the default branch";
-          if (!eligible && settings.worktreeOnMerge && thread.branch !== null) {
+          if (integrated && settings.worktreeUnchanged)
+            removalReason = "no commits beyond the default branch";
+          else if (settings.worktreeOnMerge && thread.branch !== null) {
             const pullRequest = yield* gitManager.branchPullRequest(
               { cwd: worktreePath, branch: thread.branch },
               { refresh: true },
             );
-            eligible = storageCleanupPullRequestMerged(pullRequest, {
-              branch: thread.branch,
-              defaultBranch: branch,
-              headSha: head.commitSha,
-              integrated,
-            });
-            if (eligible) removalReason = "pull request was merged";
+            if (
+              storageCleanupPullRequestMerged(pullRequest, {
+                branch: thread.branch,
+                defaultBranch: branch,
+                headSha: head.commitSha,
+                integrated,
+              })
+            )
+              removalReason = "pull request was merged";
           }
         }
-        if (!eligible)
-          return keep(
-            !deleted && settings.worktreeAfterDays !== null
-              ? `inactive for ${Math.floor((now - storageCleanupActivityAt(thread)) / DAY_MS)} of ${settings.worktreeAfterDays} days`
-              : settings.worktreeOnMerge
-                ? "not merged"
-                : "has commits beyond the default branch",
-          );
+        if (removalReason === null) return keep(verdict.keepReason);
         // Threads, queued deletion work and provider sessions as they are now, so a
         // queued turn, resumed session or new thread sharing this path cancels
         // the removal.
@@ -566,7 +617,8 @@ const make = Effect.gen(function* () {
             latest.length !== 1 ||
             latest[0]!.id !== thread.id ||
             !storageCleanupThreadIdle(latest[0]!, now) ||
-            storageCleanupActivityAt(latest[0]!) !== storageCleanupActivityAt(thread)
+            storageCleanupActivityAt(latest[0]!) !== storageCleanupActivityAt(thread) ||
+            archivedAtMillis(latest[0]!) !== archivedAtMillis(thread)
           )
             return "thread activity or shared worktree changed since check";
           // Sessions can outlive their run and can be shared across app threads.

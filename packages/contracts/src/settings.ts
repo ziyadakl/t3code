@@ -993,6 +993,10 @@ export const WorktreeCleanupRules = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed("uncommitted-changes")),
   ),
   worktreeAfterDays: StorageRetentionDays,
+  /** Days a thread stays archived before its worktree is removed. Older stored rules omit it. */
+  worktreeAfterArchivedDays: StorageRetentionDays.pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   worktreeOnMerge: Schema.Boolean,
   worktreeOnDelete: Schema.Boolean,
   worktreeUnchanged: Schema.Boolean,
@@ -1133,6 +1137,9 @@ export const StorageCleanupSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed("uncommitted-changes")),
   ),
   worktreeAfterDays: StorageRetentionDays.pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  worktreeAfterArchivedDays: StorageRetentionDays.pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   worktreeOnMerge: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   worktreeOnDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   worktreeUnchanged: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
@@ -1587,6 +1594,7 @@ export const ServerSettingsPatch = Schema.Struct({
           rules: Schema.Struct({
             worktreeKeepWhen: Schema.optionalKey(WorktreeKeepWhen),
             worktreeAfterDays: Schema.optionalKey(StorageRetentionDays),
+            worktreeAfterArchivedDays: Schema.optionalKey(StorageRetentionDays),
             worktreeOnMerge: Schema.optionalKey(Schema.Boolean),
             worktreeOnDelete: Schema.optionalKey(Schema.Boolean),
             worktreeUnchanged: Schema.optionalKey(Schema.Boolean),
@@ -1599,6 +1607,7 @@ export const ServerSettingsPatch = Schema.Struct({
     Schema.Struct({
       worktreeKeepWhen: Schema.optionalKey(WorktreeKeepWhen),
       worktreeAfterDays: Schema.optionalKey(StorageRetentionDays),
+      worktreeAfterArchivedDays: Schema.optionalKey(StorageRetentionDays),
       worktreeOnMerge: Schema.optionalKey(Schema.Boolean),
       worktreeOnDelete: Schema.optionalKey(Schema.Boolean),
       worktreeUnchanged: Schema.optionalKey(Schema.Boolean),
