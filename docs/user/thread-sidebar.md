@@ -167,7 +167,7 @@ the same settings.
 
 Archiving a thread also archives the helper threads its agent started, and unarchiving it brings
 back the ones archived with it; a helper you archived earlier stays archived. A helper that is still
-working is left alone and archived after it finishes. Helpers whose parent thread is archived or
+working is left alone and archived once it has been idle for a day. Helpers whose parent thread is archived or
 deleted are archived even with auto-archive off. If you unarchive one to read it, it is archived
 again a day later unless you unarchive its parent.
 
