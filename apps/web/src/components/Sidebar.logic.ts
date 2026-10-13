@@ -1451,6 +1451,22 @@ export function sortProjectsForSidebar<
   );
 }
 
+/** Maps a thread's physical project (machine + project id) to the logical
+    project key that groups the same code across machines. */
+function buildLogicalProjectKeyLookup(
+  projects: ReadonlyArray<Pick<LogicalSidebarProject, "projectKey" | "memberProjectRefs">>,
+): (thread: { readonly environmentId: string; readonly projectId: string }) => string | undefined {
+  const projectKeyByRef = new Map(
+    projects.flatMap((project) =>
+      project.memberProjectRefs.map(
+        (projectRef) =>
+          [`${projectRef.environmentId}\0${projectRef.projectId}`, project.projectKey] as const,
+      ),
+    ),
+  );
+  return (thread) => projectKeyByRef.get(`${thread.environmentId}\0${thread.projectId}`);
+}
+
 export function sortLogicalProjectsForSidebar<
   TProject extends LogicalSidebarProject,
   TThread extends ScopedSidebarThread,
@@ -1459,18 +1475,11 @@ export function sortLogicalProjectsForSidebar<
   threads: readonly TThread[],
   sortOrder: SidebarProjectSortOrder,
 ): TProject[] {
-  const groupKeyByProjectRef = new Map(
-    projects.flatMap((project) =>
-      project.memberProjectRefs.map(
-        (projectRef) =>
-          [`${projectRef.environmentId}\0${projectRef.projectId}`, project.projectKey] as const,
-      ),
-    ),
-  );
+  const projectKeyOf = buildLogicalProjectKeyLookup(projects);
   const threadsByProjectKey = new Map<string, TThread[]>();
   for (const thread of threads) {
     if (thread.archivedAt !== null) continue;
-    const projectKey = groupKeyByProjectRef.get(`${thread.environmentId}\0${thread.projectId}`);
+    const projectKey = projectKeyOf(thread);
     if (!projectKey) continue;
     const existing = threadsByProjectKey.get(projectKey);
     if (existing) {
@@ -1502,6 +1511,89 @@ export function sortSidebarV2ProjectGroups<
     filterSidebarV2VisibleThreads(threads, null),
     sortOrder,
   );
+}
+
+export interface SidebarThreadAttention {
+  readonly isUnread: boolean;
+  readonly isWoke: boolean;
+}
+
+export interface SidebarActiveProjectGroup<TThread> {
+  /** Logical project key; null for the "No project" group. */
+  readonly projectKey: string | null;
+  readonly displayName: string;
+  readonly threads: readonly TThread[];
+  /** Threads inside the group (floating ones excluded) per top status. A
+      read, calm thread has no top status and is not counted. */
+  readonly statusCounts: Readonly<Partial<Record<SidebarV2TopStatusKind, number>>>;
+}
+
+export interface SidebarGroupedActiveModel<TThread> {
+  readonly floating: readonly TThread[];
+  readonly groups: readonly SidebarActiveProjectGroup<TThread>[];
+}
+
+/**
+ * Splits the active (non-working) threads into the "Needs you" part and one
+ * group per logical project. `activeThreads` must already be in inbox order;
+ * floating threads and each group's threads keep that order.
+ */
+export function buildSidebarGroupedActiveModel<
+  TThread extends SidebarThreadStatusInput & {
+    readonly environmentId: string;
+    readonly projectId: string;
+  },
+>(input: {
+  readonly activeThreads: readonly TThread[];
+  readonly projects: ReadonlyArray<
+    Pick<LogicalSidebarProject, "projectKey" | "memberProjectRefs"> & {
+      readonly displayName: string;
+    }
+  >;
+  readonly floatStatuses: ReadonlySet<SidebarV2TopStatusKind>;
+  readonly resolveAttention: (thread: TThread) => SidebarThreadAttention;
+}): SidebarGroupedActiveModel<TThread> {
+  const projectKeyOf = buildLogicalProjectKeyLookup(input.projects);
+  const displayNameByKey = new Map(
+    input.projects.map((project) => [project.projectKey, project.displayName]),
+  );
+  const floating: TThread[] = [];
+  const groupsByKey = new Map<
+    string | null,
+    {
+      projectKey: string | null;
+      displayName: string;
+      threads: TThread[];
+      statusCounts: Partial<Record<SidebarV2TopStatusKind, number>>;
+    }
+  >();
+  for (const thread of input.activeThreads) {
+    const topStatus = resolveSidebarV2TopStatus({
+      status: resolveSidebarThreadStatus(thread),
+      ...input.resolveAttention(thread),
+    });
+    if (topStatus !== null && input.floatStatuses.has(topStatus)) {
+      floating.push(thread);
+      continue;
+    }
+    const projectKey = projectKeyOf(thread) ?? null;
+    let group = groupsByKey.get(projectKey);
+    if (!group) {
+      group = {
+        projectKey,
+        displayName:
+          (projectKey === null ? undefined : displayNameByKey.get(projectKey)) ?? "No project",
+        threads: [],
+        statusCounts: {},
+      };
+      groupsByKey.set(projectKey, group);
+    }
+    group.threads.push(thread);
+    if (topStatus !== null) {
+      group.statusCounts[topStatus] = (group.statusCounts[topStatus] ?? 0) + 1;
+    }
+  }
+  return { floating, groups: [...groupsByKey.values()] };
 }
 
 /**

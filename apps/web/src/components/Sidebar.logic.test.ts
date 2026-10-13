@@ -7,6 +7,7 @@ import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import {
   animateSidebarLayoutChanges,
+  buildSidebarGroupedActiveModel,
   filterToEnvironment,
   isDraftSessionInSidebarScope,
   resolveSidebarEnvironmentFilter,
@@ -2533,5 +2534,196 @@ describe("sidebarProjectScopeTriggerLabel", () => {
         environmentFilterLabel: "Work box",
       }),
     ).toBe("Project filter paused: the saved project is not on Work box");
+  });
+});
+
+describe("buildSidebarGroupedActiveModel", () => {
+  const DEFAULT_FLOAT = new Set(["done", "input", "approval", "failed"] as const);
+  const alpha = {
+    projectKey: "alpha",
+    displayName: "Alpha",
+    memberProjectRefs: [
+      { environmentId: localEnvironmentId, projectId: ProjectId.make("p-alpha") },
+    ],
+  };
+  const beta = {
+    projectKey: "beta",
+    displayName: "Beta",
+    memberProjectRefs: [{ environmentId: localEnvironmentId, projectId: ProjectId.make("p-beta") }],
+  };
+
+  // Threads are handed in already in today's inbox order (newest return first).
+  function thread(
+    id: string,
+    projectId: string,
+    overrides: ThreadFixtureOverrides & { unread?: boolean; woke?: boolean } = {},
+  ) {
+    const { unread = false, woke = false, ...rest } = overrides;
+    return {
+      ...makeThreadFixture({
+        id: ThreadId.make(id),
+        environmentId: localEnvironmentId,
+        projectId: ProjectId.make(projectId),
+        runtime: null,
+        ...rest,
+      }),
+      unread,
+      woke,
+    };
+  }
+  const attention = (t: { unread: boolean; woke: boolean }) => ({
+    isUnread: t.unread,
+    isWoke: t.woke,
+  });
+  const ids = (threads: ReadonlyArray<{ id: string }>) => threads.map((t) => t.id);
+  const failedRuntime = (lastErrorClass: "usage_limit" | null = null) => ({
+    status: "failed" as const,
+    activeRunId: null,
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    providerName: null,
+    lastError: "boom",
+    lastErrorClass,
+    updatedAt: "2026-03-09T10:00:00.000Z",
+  });
+
+  it("floats an unread Done thread and keeps a read one in its group", () => {
+    const model = buildSidebarGroupedActiveModel({
+      activeThreads: [
+        thread("unread-done", "p-alpha", { unread: true }),
+        thread("read-done", "p-alpha"),
+      ],
+      projects: [alpha],
+      floatStatuses: DEFAULT_FLOAT,
+      resolveAttention: attention,
+    });
+
+    expect(ids(model.floating)).toEqual(["unread-done"]);
+    expect(model.groups.map((g) => [g.projectKey, g.displayName, ids(g.threads)])).toEqual([
+      ["alpha", "Alpha", ["read-done"]],
+    ]);
+  });
+
+  it("keeps Woke threads folded by default but counts them on the header", () => {
+    const model = buildSidebarGroupedActiveModel({
+      activeThreads: [
+        thread("woke-1", "p-alpha", { woke: true }),
+        thread("woke-2", "p-alpha", { woke: true }),
+        thread("failed", "p-alpha", { runtime: failedRuntime() }),
+        thread("read", "p-alpha"),
+      ],
+      projects: [alpha],
+      floatStatuses: DEFAULT_FLOAT,
+      resolveAttention: attention,
+    });
+
+    expect(ids(model.floating)).toEqual(["failed"]);
+    expect(ids(model.groups[0]!.threads)).toEqual(["woke-1", "woke-2", "read"]);
+    // The floating Failed thread is not counted twice.
+    expect(model.groups[0]!.statusCounts).toEqual({ woke: 2 });
+  });
+
+  it("shows no counts on a group with nothing unread", () => {
+    const model = buildSidebarGroupedActiveModel({
+      activeThreads: [thread("read-1", "p-alpha"), thread("read-2", "p-alpha")],
+      projects: [alpha],
+      floatStatuses: DEFAULT_FLOAT,
+      resolveAttention: attention,
+    });
+
+    expect(model.groups[0]!.statusCounts).toEqual({});
+  });
+
+  it("follows a custom float set: Woke floats, Failed stays in its group and is counted", () => {
+    const model = buildSidebarGroupedActiveModel({
+      activeThreads: [
+        thread("woke", "p-alpha", { woke: true }),
+        thread("failed", "p-alpha", { runtime: failedRuntime() }),
+        thread("limited", "p-alpha", { runtime: failedRuntime("usage_limit") }),
+      ],
+      projects: [alpha],
+      floatStatuses: new Set(["done", "input", "approval", "woke"] as const),
+      resolveAttention: attention,
+    });
+
+    expect(ids(model.floating)).toEqual(["woke"]);
+    expect(ids(model.groups[0]!.threads)).toEqual(["failed", "limited"]);
+    expect(model.groups[0]!.statusCounts).toEqual({ failed: 1, limited: 1 });
+  });
+
+  it("floats threads in inbox order across projects", () => {
+    const model = buildSidebarGroupedActiveModel({
+      activeThreads: [
+        thread("beta-input", "p-beta", { hasPendingUserInput: true }),
+        thread("alpha-approval", "p-alpha", { hasPendingApprovals: true }),
+        thread("beta-done", "p-beta", { unread: true }),
+      ],
+      projects: [alpha, beta],
+      floatStatuses: DEFAULT_FLOAT,
+      resolveAttention: attention,
+    });
+
+    expect(ids(model.floating)).toEqual(["beta-input", "alpha-approval", "beta-done"]);
+    expect(model.groups).toEqual([]);
+  });
+
+  it("orders groups by their newest thread, with No project placed by the same rule", () => {
+    const model = buildSidebarGroupedActiveModel({
+      activeThreads: [
+        thread("beta-new", "p-beta"),
+        thread("orphan", "p-deleted"),
+        thread("alpha-only", "p-alpha"),
+        thread("beta-old", "p-beta"),
+      ],
+      projects: [alpha, beta],
+      floatStatuses: DEFAULT_FLOAT,
+      resolveAttention: attention,
+    });
+
+    expect(model.groups.map((g) => [g.projectKey, g.displayName, ids(g.threads)])).toEqual([
+      ["beta", "Beta", ["beta-new", "beta-old"]],
+      [null, "No project", ["orphan"]],
+      // A one-thread project still gets its own group.
+      ["alpha", "Alpha", ["alpha-only"]],
+    ]);
+  });
+
+  it("ranks a group by the threads still inside it, not by one that floated", () => {
+    const model = buildSidebarGroupedActiveModel({
+      activeThreads: [
+        thread("alpha-done", "p-alpha", { unread: true }),
+        thread("beta", "p-beta"),
+        thread("alpha-read", "p-alpha"),
+      ],
+      projects: [alpha, beta],
+      floatStatuses: DEFAULT_FLOAT,
+      resolveAttention: attention,
+    });
+
+    expect(model.groups.map((g) => g.projectKey)).toEqual(["beta", "alpha"]);
+  });
+
+  it("puts the same project on two machines into one group", () => {
+    const remoteEnvironmentId = EnvironmentId.make("environment-remote");
+    const shared = {
+      projectKey: "shared",
+      displayName: "Shared",
+      memberProjectRefs: [
+        { environmentId: localEnvironmentId, projectId: ProjectId.make("p-local") },
+        { environmentId: remoteEnvironmentId, projectId: ProjectId.make("p-remote") },
+      ],
+    };
+    const model = buildSidebarGroupedActiveModel({
+      activeThreads: [
+        thread("on-remote", "p-remote", { environmentId: remoteEnvironmentId, woke: true }),
+        thread("on-local", "p-local"),
+      ],
+      projects: [shared],
+      floatStatuses: DEFAULT_FLOAT,
+      resolveAttention: attention,
+    });
+
+    expect(model.groups.map((g) => [g.projectKey, ids(g.threads), g.statusCounts])).toEqual([
+      ["shared", ["on-remote", "on-local"], { woke: 1 }],
+    ]);
   });
 });
