@@ -150,10 +150,10 @@ export const BrowserImportInput = Schema.Struct({
   targetProfileId: BrowserProfileId,
   /**
    * Registrable domains to import, as listed by `BrowserImportSite.domain`.
-   * Absent imports every cookie; present imports only cookies whose host
-   * belongs to one of these domains.
+   * Only cookies whose host belongs to one of these domains are imported, so
+   * an empty list imports nothing.
    */
-  domains: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  domains: Schema.Array(TrimmedNonEmptyString),
 });
 export type BrowserImportInput = typeof BrowserImportInput.Type;
 
@@ -163,7 +163,7 @@ export const DesktopPreviewImportCookiesInputSchema = Schema.Struct({
   sourceId: BrowserImportSourceId,
   sourceProfileDirectory: TrimmedNonEmptyString,
   targetProfileId: BrowserProfileId,
-  domains: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  domains: Schema.Array(TrimmedNonEmptyString),
 });
 
 export const BrowserImportResult = Schema.Struct({

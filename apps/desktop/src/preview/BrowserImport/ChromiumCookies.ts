@@ -241,7 +241,7 @@ export const readChromiumCookieDatabase = Effect.fn("ChromiumCookies.readChromiu
     snapshotPath: string,
     keys: ChromiumKeyMaterial,
     platform: NodeJS.Platform,
-    includeHost: (host: string) => boolean = () => true,
+    includeHost: (host: string) => boolean,
   ) {
     const result = yield* Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -382,7 +382,7 @@ export interface ChromiumCookieSource {
   /** Supplied by the caller from `HostProcessPlatform` rather than read here. */
   readonly platform: NodeJS.Platform;
   /** Narrows the read to chosen sites before anything is decrypted. */
-  readonly includeHost?: (host: string) => boolean;
+  readonly includeHost: (host: string) => boolean;
 }
 
 export const readChromiumCookies = Effect.fn("ChromiumCookies.readChromiumCookies")(function* (

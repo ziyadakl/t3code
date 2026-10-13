@@ -214,6 +214,28 @@ describe("BrowserImport.importCookies", () => {
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
+  it.effect("imports nothing when no site is chosen", () =>
+    Effect.gen(function* () {
+      const written: Array<string> = [];
+      const { importer, home } = yield* withImporter(recordingSession(written));
+      const directory = yield* seedFirefox(home);
+
+      const result = yield* importer.importCookies({
+        input: {
+          sourceId: "firefox",
+          sourceProfileDirectory: directory,
+          targetProfileId: "default",
+          domains: [],
+        },
+        scope: "persist:t3code-preview-test",
+        persistent: true,
+      });
+
+      assert.deepEqual(written, []);
+      assert.deepEqual(result, { imported: 0, skipped: 0, skippedDomains: [] });
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
   it.effect("rejects a source profile the browser never reported", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -230,6 +252,7 @@ describe("BrowserImport.importCookies", () => {
             sourceId: "helium",
             sourceProfileDirectory: "../../../../secrets",
             targetProfileId: "default",
+            domains: [],
           },
           scope: "persist:t3code-preview-test",
           persistent: true,
@@ -257,6 +280,7 @@ describe("BrowserImport.importCookies", () => {
               sourceId: "helium",
               sourceProfileDirectory: "Default",
               targetProfileId: "default",
+              domains: [],
             },
             scope: "persist:t3code-preview-test",
             persistent: true,

@@ -348,9 +348,8 @@ export const make = Effect.gen(function* BrowserImportMake() {
 
     // Chosen sites are matched on the same registrable domain the listing
     // grouped by, and applied by each reader before anything is decrypted.
-    const chosen = input.input.domains === undefined ? undefined : new Set(input.input.domains);
-    const includeHost =
-      chosen === undefined ? undefined : (host: string) => chosen.has(siteDomain(host));
+    const chosen = new Set(input.input.domains);
+    const includeHost = (host: string) => chosen.has(siteDomain(host));
 
     // The success side is normalized to one shape, so the skipped tally
     // survives either engine — Firefox and Safari store plaintext, so nothing
@@ -385,7 +384,7 @@ export const make = Effect.gen(function* BrowserImportMake() {
                   }
                 : {}),
               platform,
-              ...(includeHost === undefined ? {} : { includeHost }),
+              includeHost,
             }),
     );
 

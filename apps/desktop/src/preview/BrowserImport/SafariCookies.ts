@@ -195,7 +195,7 @@ function parseBinaryCookieRecords(buffer: Buffer): ReadonlyArray<BinaryCookieRec
 /** `includeHost` narrows the result to the sites the user chose. */
 export function parseBinaryCookies(
   buffer: Buffer,
-  includeHost: (host: string) => boolean = () => true,
+  includeHost: (host: string) => boolean,
 ): ReadonlyArray<ImportedCookie> {
   return parseBinaryCookieRecords(buffer)
     .filter((record) => includeHost(record.host))
@@ -298,7 +298,7 @@ const readJar = <A>(cookiePath: string, parse: (contents: Buffer) => A) =>
 /** `includeHost` narrows the read to the sites the user chose. */
 export const readSafariCookies = Effect.fn("SafariCookies.readSafariCookies")(function* (
   cookiePath: string,
-  includeHost: (host: string) => boolean = () => true,
+  includeHost: (host: string) => boolean,
 ) {
   return yield* readJar(cookiePath, (contents) => parseBinaryCookies(contents, includeHost));
 });

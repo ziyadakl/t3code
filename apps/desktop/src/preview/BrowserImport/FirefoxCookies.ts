@@ -162,7 +162,7 @@ export const readFirefoxCookieMetadata = Effect.fn("FirefoxCookies.readFirefoxCo
 
 /** `includeHost` narrows the read to the sites the user chose. */
 export const readFirefoxCookies = Effect.fn("FirefoxCookies.readFirefoxCookies")(
-  function* (cookieDatabasePath: string, includeHost: (host: string) => boolean = () => true) {
+  function* (cookieDatabasePath: string, includeHost: (host: string) => boolean) {
     const snapshotPath = yield* snapshotCookieDatabase(cookieDatabasePath);
 
     const { rows, schemaVersion } = yield* Effect.gen(function* () {
@@ -210,7 +210,7 @@ export const readFirefoxCookies = Effect.fn("FirefoxCookies.readFirefoxCookies")
         } satisfies ImportedCookie;
       });
   },
-  (effect, cookieDatabasePath, _includeHost?: (host: string) => boolean) =>
+  (effect, cookieDatabasePath) =>
     effect.pipe(
       Effect.mapError((cause) => new FirefoxCookieReadError({ cookieDatabasePath, cause })),
     ),

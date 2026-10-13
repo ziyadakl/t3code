@@ -99,6 +99,7 @@ describe("preview IPC methods", () => {
         sourceId: "helium",
         sourceProfileDirectory: "Default",
         targetProfileId,
+        domains: [],
       });
 
     return Effect.gen(function* () {
@@ -121,7 +122,6 @@ describe("preview IPC methods", () => {
         domains: ["github.com"],
       });
       expect(received[2]?.input.domains).toEqual(["github.com"]);
-      expect(received[0]?.input).not.toHaveProperty("domains");
     }).pipe(Effect.provideService(BrowserImport.BrowserImport, browserImport));
   });
 

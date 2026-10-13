@@ -12,6 +12,9 @@ import * as NodeSqlite from "node:sqlite";
 import { readFirefoxCookieMetadata, readFirefoxCookies } from "./FirefoxCookies.ts";
 import { parseFirefoxProfiles } from "./Sources.ts";
 
+/** Reads every cookie: these tests are about decoding, not site choice. */
+const everyHost = () => true;
+
 const parsePosixFirefoxProfiles = (ini: string, root = "/home/user/.mozilla/firefox") =>
   Effect.gen(function* () {
     const path = yield* Path.Path;
@@ -104,11 +107,15 @@ describe("readFirefoxCookies", () => {
           isHttpOnly: 0,
           sameSite: 0,
         };
-        const modern = yield* readFirefoxCookies(yield* writeFirefoxCookieDatabase([row], 16));
+        const modern = yield* readFirefoxCookies(
+          yield* writeFirefoxCookieDatabase([row], 16),
+          everyHost,
+        );
         expect(modern[0]?.expirationDate).toBe(1_800_000_000);
 
         const legacy = yield* readFirefoxCookies(
           yield* writeFirefoxCookieDatabase([{ ...row, expiry: 1_800_000_000 }], 15),
+          everyHost,
         );
         expect(legacy[0]?.expirationDate).toBe(1_800_000_000);
       }),
@@ -142,7 +149,7 @@ describe("readFirefoxCookies", () => {
           },
         ]);
 
-        const cookies = yield* readFirefoxCookies(file);
+        const cookies = yield* readFirefoxCookies(file, everyHost);
 
         expect(cookies).toEqual([
           {
@@ -197,6 +204,7 @@ describe("readFirefoxCookies", () => {
             { ...row, name: "unset", sameSite: 256 },
             { ...row, name: "none", sameSite: 0 },
           ]),
+          everyHost,
         );
         expect(cookies.map(({ name, sameSite }) => ({ name, sameSite }))).toEqual([
           { name: "unset", sameSite: "unspecified" },
@@ -228,6 +236,7 @@ describe("readFirefoxCookies", () => {
             ],
             9,
           ),
+          everyHost,
         );
         expect(cookies.map(({ name, sameSite }) => ({ name, sameSite }))).toEqual([
           { name: "legacy", sameSite: "unspecified" },
@@ -262,6 +271,7 @@ describe("readFirefoxCookies", () => {
             ],
             14,
           ),
+          everyHost,
         );
         expect(cookies.map(({ name, sameSite }) => ({ name, sameSite }))).toEqual([
           { name: "defaulted", sameSite: "unspecified" },
@@ -313,7 +323,7 @@ describe("readFirefoxCookies", () => {
           },
         ]);
 
-        const cookies = yield* readFirefoxCookies(file);
+        const cookies = yield* readFirefoxCookies(file, everyHost);
 
         expect(cookies.map((cookie) => cookie.value)).toEqual(["default-container"]);
       }),
@@ -338,7 +348,7 @@ describe("readFirefoxCookies", () => {
         ]);
         const before = yield* fileSystem.stat(file);
 
-        yield* readFirefoxCookies(file);
+        yield* readFirefoxCookies(file, everyHost);
 
         // The browser's own file is snapshotted, never opened for writing.
         const after = yield* fileSystem.stat(file);
