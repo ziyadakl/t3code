@@ -32,7 +32,7 @@ import {
   readChromiumCookieMetadata,
   readChromiumCookies,
 } from "./ChromiumCookies.ts";
-import type { CookieReadResult } from "./CookieDatabase.ts";
+import type { CookieMetadata, CookieReadResult, ImportedCookie } from "./CookieDatabase.ts";
 import {
   FirefoxCookieReadError,
   readFirefoxCookieMetadata,
@@ -52,6 +52,7 @@ import {
   isSourceRunning,
   listSourceProfiles,
   sourcePathContext,
+  type BrowserImportEngine,
   type BrowserImportPathContext,
   type BrowserImportSourceDefinition,
 } from "./Sources.ts";
@@ -127,6 +128,23 @@ const unavailableReason = Effect.fn("BrowserImport.unavailableReason")(function*
     if (jar !== undefined && (yield* safariAccessDenied(jar))) return "needsFullDiskAccess";
   }
   return undefined;
+});
+
+type CookieStoreReadError =
+  | ChromiumCookieReadError
+  | FirefoxCookieReadError
+  | SafariCookieReadError;
+type CookieStoreServices =
+  | FileSystem.FileSystem
+  | Path.Path
+  | Scope.Scope
+  | ChildProcessSpawner.ChildProcessSpawner;
+
+/** A plaintext engine's cookies, in the shape the Chromium read reports. */
+const plaintextRead = (cookies: ReadonlyArray<ImportedCookie>): CookieReadResult => ({
+  cookies,
+  undecryptable: 0,
+  undecryptableHosts: [],
 });
 
 /** The host a constructed cookie URL points at, for naming what was skipped. */
@@ -271,14 +289,57 @@ export const make = Effect.gen(function* BrowserImportMake() {
     return { definition, databasePath };
   });
 
+  /**
+   * How each engine reads a profile's store: its plaintext metadata for
+   * listing, and its cookies for import. Firefox and Safari store plaintext,
+   * so nothing there is ever undecryptable.
+   */
+  const engines: Record<
+    BrowserImportEngine,
+    {
+      readonly readMetadata: (
+        databasePath: string,
+      ) => Effect.Effect<ReadonlyArray<CookieMetadata>, CookieStoreReadError, CookieStoreServices>;
+      readonly readCookies: (
+        definition: BrowserImportSourceDefinition,
+        databasePath: string,
+        includeHost: (host: string) => boolean,
+      ) => Effect.Effect<CookieReadResult, CookieStoreReadError, CookieStoreServices>;
+    }
+  > = {
+    chromium: {
+      readMetadata: readChromiumCookieMetadata,
+      readCookies: (definition, databasePath, includeHost) => {
+        const userDataDirectory = definition.userDataDirectory(pathContext);
+        return readChromiumCookies({
+          cookieDatabasePath: databasePath,
+          keychainService: definition.keychainService,
+          keychainAccount: definition.keychainAccount,
+          linuxSecretApplication: definition.linuxSecretApplication,
+          ...(platform === "win32" && userDataDirectory !== undefined
+            ? { windowsLocalStatePath: pathContext.path.join(userDataDirectory, "Local State") }
+            : {}),
+          platform,
+          includeHost,
+        });
+      },
+    },
+    firefox: {
+      readMetadata: readFirefoxCookieMetadata,
+      readCookies: (_definition, databasePath, includeHost) =>
+        readFirefoxCookies(databasePath, includeHost).pipe(Effect.map(plaintextRead)),
+    },
+    safari: {
+      readMetadata: readSafariCookieMetadata,
+      readCookies: (_definition, databasePath, includeHost) =>
+        readSafariCookies(databasePath, includeHost).pipe(Effect.map(plaintextRead)),
+    },
+  };
+
   /** Runs a read against the source's store and maps each engine's failure. */
   const readStore = <A>(
     definition: BrowserImportSourceDefinition,
-    read: Effect.Effect<
-      A,
-      ChromiumCookieReadError | FirefoxCookieReadError | SafariCookieReadError,
-      FileSystem.FileSystem | Path.Path | Scope.Scope | ChildProcessSpawner.ChildProcessSpawner
-    >,
+    read: Effect.Effect<A, CookieStoreReadError, CookieStoreServices>,
   ) =>
     read.pipe(
       Effect.scoped,
@@ -313,11 +374,7 @@ export const make = Effect.gen(function* BrowserImportMake() {
     );
     const metadata = yield* readStore(
       definition,
-      definition.engine === "safari"
-        ? readSafariCookieMetadata(databasePath)
-        : definition.engine === "firefox"
-          ? readFirefoxCookieMetadata(databasePath)
-          : readChromiumCookieMetadata(databasePath),
+      engines[definition.engine].readMetadata(databasePath),
     );
     return groupSites(metadata, {
       now: yield* Clock.currentTimeMillis,
@@ -351,41 +408,9 @@ export const make = Effect.gen(function* BrowserImportMake() {
     const chosen = new Set(input.input.domains);
     const includeHost = (host: string) => chosen.has(siteDomain(host));
 
-    // The success side is normalized to one shape, so the skipped tally
-    // survives either engine — Firefox and Safari store plaintext, so nothing
-    // there is ever unreadable.
-    const userDataDirectory = definition.userDataDirectory(pathContext);
     const result = yield* readStore(
       definition,
-      definition.engine === "safari"
-        ? readSafariCookies(databasePath, includeHost).pipe(
-            Effect.map((cookies): CookieReadResult => ({
-              cookies,
-              undecryptable: 0,
-              undecryptableHosts: [],
-            })),
-          )
-        : definition.engine === "firefox"
-          ? readFirefoxCookies(databasePath, includeHost).pipe(
-              Effect.map((cookies): CookieReadResult => ({
-                cookies,
-                undecryptable: 0,
-                undecryptableHosts: [],
-              })),
-            )
-          : readChromiumCookies({
-              cookieDatabasePath: databasePath,
-              keychainService: definition.keychainService,
-              keychainAccount: definition.keychainAccount,
-              linuxSecretApplication: definition.linuxSecretApplication,
-              ...(platform === "win32" && userDataDirectory !== undefined
-                ? {
-                    windowsLocalStatePath: pathContext.path.join(userDataDirectory, "Local State"),
-                  }
-                : {}),
-              platform,
-              includeHost,
-            }),
+      engines[definition.engine].readCookies(definition, databasePath, includeHost),
     );
 
     const session = yield* browserSession
