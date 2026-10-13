@@ -50,6 +50,7 @@ import { openPreviewSession } from "./openPreviewSession";
 import { PreviewChromeRow } from "./PreviewChromeRow";
 import { PreviewEmptyState } from "./PreviewEmptyState";
 import { PreviewMoreMenu, type PreviewMoreMenuActions } from "./PreviewMoreMenu";
+import { usePreviewCookieImport } from "~/components/browserImport/usePreviewCookieImport";
 import {
   commitBrowserViewportChange,
   subscribeBrowserViewportChange,
@@ -287,6 +288,19 @@ export function PreviewView({
     if (isServerTab) serverSurfaceRef.current?.reload();
     else if (previewBridge && runtimeTabId) void previewBridge.refresh(runtimeTabId);
   }, [isServerTab, runtimeTabId]);
+
+  // Imports write into this machine's partition for the tab's profile, which a
+  // server-run tab never reads.
+  const cookieImport = usePreviewCookieImport({
+    available: !serverOwnsRendering,
+    environmentId: threadRef.environmentId,
+    profileId: activeProfileId,
+    profilePersistent:
+      browserDefaults.profiles.find((profile) => profile.id === activeProfileId)?.kind ===
+      "persistent",
+    currentUrl: url || undefined,
+    reload: handleRefresh,
+  });
 
   /** Appearance and zoom of a server tab, through the server for every client. */
   const adjustServerTab = useCallback(
@@ -912,6 +926,7 @@ export function PreviewView({
               }
               actions={moreMenuActions}
               profileName={activeProfileName}
+              cookieImport={cookieImport.menu}
               zoomFactor={
                 serverOwnsRendering ? serverZoomFactor : (desktopOverlay?.zoomFactor ?? 1)
               }
@@ -927,6 +942,8 @@ export function PreviewView({
           ) : null
         }
       />
+
+      {cookieImport.banner}
 
       <div ref={serverBodyRef} className="relative min-h-0 flex-1 overflow-hidden">
         {runtimeTabId && snapshot && isServerTab ? (
@@ -1016,6 +1033,7 @@ export function PreviewView({
           </div>
         ) : null}
       </div>
+      {cookieImport.wizard}
     </div>
   );
 }

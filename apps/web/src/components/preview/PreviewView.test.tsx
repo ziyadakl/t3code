@@ -246,6 +246,9 @@ vi.mock("./PreviewMoreMenu", () => ({
     return null;
   },
 }));
+vi.mock("~/components/browserImport/usePreviewCookieImport", () => ({
+  usePreviewCookieImport: () => ({ menu: undefined, banner: null, wizard: null }),
+}));
 vi.mock("./PreviewUnreachable", () => ({ PreviewUnreachable: () => null }));
 vi.mock("./ZoomIndicator", () => ({ ZoomIndicator: () => null }));
 vi.mock("./AgentBrowserCursor", () => ({

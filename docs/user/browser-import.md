@@ -7,6 +7,9 @@ Open **Settings → Integrations → Browser profiles → Add profile**, then ch
 **Import from**. Close the source browser before importing, and allow an operating-system keyring
 unlock prompt if one appears.
 
+You can also start from the preview: open its **⋮** menu and choose **Import cookies from browser**.
+The cookies go into the profile the tab uses, and the page reloads once they arrive.
+
 This is a one-time copy. Later login changes stay separate between the two browsers, and some
 sites may still require you to sign in again.
 
