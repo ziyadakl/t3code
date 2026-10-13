@@ -10,8 +10,7 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 import { resolveScratchProjectScopeKey } from "@t3tools/client-runtime/state/project-grouping";
 
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
-import { withoutArchivedProjects } from "@t3tools/client-runtime/state/projects";
-import { useProjects } from "../../state/entities";
+import { useUnarchivedProjectsWithThreads } from "../../state/entities";
 import { environmentThreadShells } from "../../state/threads";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
@@ -42,7 +41,6 @@ export function HomeRouteScreen() {
   const headerWidth = nativePrimaryColumn ? (columnMetrics?.width ?? windowWidth) : windowWidth;
   const { layout, panes, primarySidebarSearchQuery, setPrimarySidebarSearchQuery } =
     useAdaptiveWorkspaceLayout();
-  const allProjects = useProjects();
   // Streaming turns rewrite thread shells many times a second. While a Thread
   // covers Home, rebuilding this list is invisible work.
   const visible = useHomeRouteVisible();
@@ -51,10 +49,7 @@ export function HomeRouteScreen() {
     visible,
   );
   // Archived projects and their threads stay off Home.
-  const { projects, threads } = useMemo(
-    () => withoutArchivedProjects(allProjects, allThreads),
-    [allProjects, allThreads],
-  );
+  const { projects, threads } = useUnarchivedProjectsWithThreads(allThreads);
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const navigation = useNavigation();

@@ -89,14 +89,18 @@ export function useNavigationThreadShells(): ReadonlyArray<EnvironmentThreadShel
   return useAtomValue(environmentThreadShells.navigationThreadShellsAtom);
 }
 
-/** Navigation lists without archived projects or their threads. */
-export function useUnarchivedNavigationProjectsAndThreads(): {
+/** Projects and the given threads, without archived projects or their threads. */
+export function useUnarchivedProjectsWithThreads(threads: ReadonlyArray<EnvironmentThreadShell>): {
   readonly projects: ReadonlyArray<EnvironmentProject>;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
 } {
   const projects = useProjects();
-  const threads = useNavigationThreadShells();
   return useMemo(() => withoutArchivedProjects(projects, threads), [projects, threads]);
+}
+
+/** Navigation lists without archived projects or their threads. */
+export function useUnarchivedNavigationProjectsAndThreads() {
+  return useUnarchivedProjectsWithThreads(useNavigationThreadShells());
 }
 
 export function useProject(ref: ScopedProjectRef | null): EnvironmentProject | null {

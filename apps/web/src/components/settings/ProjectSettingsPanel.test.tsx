@@ -76,6 +76,7 @@ vi.mock("~/state/environments", () => ({
 vi.mock("~/state/entities", () => ({
   useProjects: () => state.projects,
   useThreadShells: () => [],
+  useUnarchivedProjectsAndThreads: () => ({ projects: state.projects, threads: [] }),
 }));
 vi.mock("~/state/projects", () => ({
   projectEnvironment: { update: "update", delete: "delete" },

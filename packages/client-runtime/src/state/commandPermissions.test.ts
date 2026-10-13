@@ -106,6 +106,23 @@ describe("command permissions", () => {
     ),
   );
 
+  it.effect("requires the destination operate grant to resume an agent session", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const resume = createCommandPermissions(runtime, WS_METHODS.agentSessionsResume);
+        registry.set(sessions(env), AsyncResult.success(grant(false)));
+        expect(registry.get(resume.permissionAtom(env))).toBe(false);
+        expect((yield* resume.authorize(registry, env).pipe(Effect.flip))._tag).toBe(
+          "EnvironmentAuthorizationError",
+        );
+        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        expect(registry.get(resume.permissionAtom(env))).toBe(true);
+        yield* resume.authorize(registry, env);
+      }),
+    ),
+  );
+
   it.effect("uses the target grant for both availability and execution", () =>
     Effect.scoped(
       Effect.gen(function* () {
