@@ -210,13 +210,18 @@ describe("searchSlashCommandItems", () => {
       Extract<ComposerCommandItem, { type: "slash-command" | "provider-slash-command" | "skill" }>
     >;
 
-    expect(slashCommandItemsForPromptPosition(items, false).map((item) => item.id)).toEqual([
+    expect(slashCommandItemsForPromptPosition(items, "line-start").map((item) => item.id)).toEqual([
       "slash:model",
       "skill:claudeAgent:unslop",
     ]);
-    expect(slashCommandItemsForPromptPosition(items, true).map((item) => item.id)).toEqual([
+    expect(
+      slashCommandItemsForPromptPosition(items, "prompt-start").map((item) => item.id),
+    ).toEqual([
       "slash:model",
       "provider-slash-command:claudeAgent:compact",
+      "skill:claudeAgent:unslop",
+    ]);
+    expect(slashCommandItemsForPromptPosition(items, "mid-line").map((item) => item.id)).toEqual([
       "skill:claudeAgent:unslop",
     ]);
   });

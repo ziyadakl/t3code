@@ -9,6 +9,8 @@ import {
   type ComposerPromptSegment,
 } from "./composer-editor-mentions";
 
+import { SKILL_NAME_SOURCE } from "@t3tools/shared/composerInlineTokens";
+
 import { resolveShortcutCommand, type ShortcutEventLike } from "./keybindings";
 
 export type ComposerTriggerKind = "path" | "pull-request" | "slash-command" | "skill";
@@ -20,7 +22,11 @@ export interface ComposerTrigger {
   query: string;
   rangeStart: number;
   rangeEnd: number;
+  /** A slash command typed after other text on its line, where only skills run. */
+  inline?: true;
 }
+
+const INLINE_SLASH_COMMAND_PATTERN = new RegExp(`^\\/((?:${SKILL_NAME_SOURCE})?)$`, "u");
 
 export function formatAssistantCitationForComposer(citation: AssistantCitation, comment = "") {
   return `${serializeAssistantCitation(withAssistantCitationComment(citation, comment))} `;
@@ -261,6 +267,16 @@ export function detectComposerTrigger(text: string, cursorInput: number): Compos
 
   const tokenStart = tokenStartForCursor(text, cursor);
   const token = text.slice(tokenStart, cursor);
+  const inlineSlashMatch = INLINE_SLASH_COMMAND_PATTERN.exec(token);
+  if (inlineSlashMatch) {
+    return {
+      kind: "slash-command",
+      query: inlineSlashMatch[1] ?? "",
+      rangeStart: tokenStart,
+      rangeEnd: cursor,
+      inline: true,
+    };
+  }
   const pullRequestMatch = /^#([\p{L}\p{N}][\p{L}\p{N}_-]*)?$/u.exec(token);
   if (pullRequestMatch) {
     return {
