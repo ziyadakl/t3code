@@ -8939,14 +8939,21 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     queryRunner.open({
                       threadId: input.threadId,
                       providerSessionId: input.providerSessionId,
-                      options: makeClaudeQueryOptions({
-                        modelSelection: rewindInput.modelSelection,
-                        nativeThreadId,
-                        resume: true,
-                        cwd: rewindInput.runtimePolicy.cwd,
-                        settings: adapterOptions.settings,
-                        environment: adapterOptions.environment,
-                      }),
+                      options: {
+                        ...makeClaudeQueryOptions({
+                          modelSelection: rewindInput.modelSelection,
+                          nativeThreadId,
+                          resume: true,
+                          cwd: rewindInput.runtimePolicy.cwd,
+                          settings: adapterOptions.settings,
+                          environment: adapterOptions.environment,
+                        }),
+                        // This process only restores files. Loading the user's
+                        // and project's settings runs their SessionStart hooks,
+                        // and Claude withholds init until they finish: one
+                        // project hook held a restore preview for 7.5 s.
+                        settingSources: [],
+                      },
                     }),
                     rewind,
                     (session) => session.close.pipe(Effect.ignore),

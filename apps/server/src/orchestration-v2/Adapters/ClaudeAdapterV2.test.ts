@@ -13966,7 +13966,64 @@ describe("ClaudeAdapterV2 file restore", () => {
   );
 
   it.effect(
-    "restores files through the thread's open Claude process without starting another",
+    "opens a restore-only Claude process without the user's settings and hooks, but a turn with them",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const sdk = { opened: [], rewinds: [] } as {
+            opened: Array<ClaudeAdapterV2.ClaudeAgentSdkQueryOptions>;
+            rewinds: Array<{ userMessageId: string; dryRun: boolean }>;
+          };
+          const adapter = yield* makeFileRestoreAdapter(sdk);
+          const threadId = ThreadId.make("thread-claude-rewind-files-settings");
+          const runtime = yield* adapter.openSession({
+            threadId,
+            providerSessionId: ProviderSessionId.make(
+              "provider-session-claude-rewind-files-settings",
+            ),
+            modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+            runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+          });
+          const providerThread = yield* runtime.ensureThread({
+            threadId,
+            modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+            runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+          });
+          const restore = (dryRun: boolean) =>
+            runtime.rewindFiles!({
+              providerThread,
+              nativeUserMessageId: "user-uuid-3",
+              dryRun,
+              modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+              runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+            });
+          yield* restore(true);
+          yield* restore(false);
+          yield* runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId,
+              providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("attempt-claude-rewind-files-settings"),
+              text: "Edit the notes.",
+              attachments: [],
+              runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+            }),
+          );
+
+          assert.equal(sdk.opened.length, 3);
+          const [previewOptions, restoreOptions, turnOptions] = sdk.opened;
+          // A project SessionStart hook held a restore preview for 7.5 s:
+          // a process that only restores files loads no settings files.
+          assert.deepEqual(previewOptions?.settingSources, []);
+          assert.deepEqual(restoreOptions?.settingSources, []);
+          assert.isUndefined(turnOptions?.settingSources);
+        }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      ),
+  );
+
+  it.effect(
+    "previews and restores files through a running turn's Claude process without starting another",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -13999,17 +14056,24 @@ describe("ClaudeAdapterV2 file restore", () => {
             }),
           );
 
-          const restored = yield* runtime.rewindFiles!({
-            providerThread,
-            nativeUserMessageId: "user-uuid-1",
-            dryRun: false,
-            modelSelection: CLAUDE_TEST_MODEL_SELECTION,
-            runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
-          });
+          const restore = (dryRun: boolean) =>
+            runtime.rewindFiles!({
+              providerThread,
+              nativeUserMessageId: "user-uuid-1",
+              dryRun,
+              modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+              runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+            });
+          const preview = yield* restore(true);
+          const restored = yield* restore(false);
 
+          assert.deepEqual(preview.filesChanged, ["/workspace/notes.md"]);
           assert.isTrue(restored.canRewind);
           assert.equal(sdk.opened.length, 1);
-          assert.deepEqual(sdk.rewinds, [{ userMessageId: "user-uuid-1", dryRun: false }]);
+          assert.deepEqual(sdk.rewinds, [
+            { userMessageId: "user-uuid-1", dryRun: true },
+            { userMessageId: "user-uuid-1", dryRun: false },
+          ]);
         }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
       ),
   );
