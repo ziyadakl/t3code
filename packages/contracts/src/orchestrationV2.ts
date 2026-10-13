@@ -1099,6 +1099,13 @@ export const OrchestrationV2ProviderTurn = Schema.Struct({
    */
   nativeUserMessageId: Schema.optional(TrimmedNonEmptyString),
   /**
+   * Claude: the uuid this turn's prompt was sent with, recorded when the turn
+   * starts. Rewinding the conversation can resume after it even when the turn
+   * stopped before Claude echoed it. Not a file snapshot key: only an echoed
+   * prompt (nativeUserMessageId) has one.
+   */
+  nativePromptId: Schema.optional(TrimmedNonEmptyString),
+  /**
    * Imported Claude turns only, when the prompt is not its transcript's
    * first: where the session resumes to keep the transcript before the
    * prompt, a turn id or a user message id. A rewind to before this turn

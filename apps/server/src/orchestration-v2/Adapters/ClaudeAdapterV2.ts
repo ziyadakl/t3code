@@ -1544,8 +1544,10 @@ export const resolveClaudeRollbackResumeSessionAt = Effect.fn(
       // A turn that ended before Claude replied (stopped, failed) recorded no
       // assistant uuid. Prompt uuids are random, so the session resumes just
       // after the prompt uuid its provider turn recorded.
-      if (target.providerTurn.nativeUserMessageId !== undefined) {
-        return target.providerTurn.nativeUserMessageId;
+      const promptId =
+        target.providerTurn.nativeUserMessageId ?? target.providerTurn.nativePromptId;
+      if (promptId !== undefined) {
+        return promptId;
       }
       // Turns from builds that recorded no prompt uuid sent one derived from
       // the attempt.
@@ -4337,6 +4339,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           ...(input.context.nativeUserMessageId === null
             ? {}
             : { nativeUserMessageId: input.context.nativeUserMessageId }),
+          // Recorded from the start, so a turn stopped before Claude echoes
+          // its prompt can still be rewound.
+          ...(input.context.promptUuid === null
+            ? {}
+            : { nativePromptId: input.context.promptUuid }),
           ordinal: input.context.providerTurnOrdinal,
           status: input.status,
           startedAt: input.context.startedAt,
@@ -7972,7 +7979,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           // first one of a prompted turn names the uuid its files are
           // checkpointed by; nothing else reads these frames.
           if (message.type === "user" && "isReplay" in message && message.isReplay === true) {
-            if (context?.promptUuid != null && context.nativeUserMessageId === context.promptUuid) {
+            if (context?.promptUuid != null && context.nativeUserMessageId === null) {
               context.nativeUserMessageId = message.uuid;
             }
             return;
@@ -8721,9 +8728,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               nativeThreadId,
               nativeTurnId,
               nativeMessageCursor: null,
-              // Recorded now, so a turn stopped before Claude echoes its
-              // prompt can still be rewound; the echo may replace it.
-              nativeUserMessageId: promptUuid,
+              nativeUserMessageId: null,
               providerTurnId,
               providerTurnOrdinal,
               startedAt,

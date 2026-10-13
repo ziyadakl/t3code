@@ -73,6 +73,7 @@ import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 
 import { attachmentRelativePath } from "../../attachmentStore.ts";
+import { runFileCheckpointTurn } from "../ThreadRewindTargets.ts";
 import * as ServerConfig from "../../config.ts";
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
@@ -2708,6 +2709,57 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           providerThreadTurns: [target, laterTurn],
         }),
         promptUuid,
+      );
+    }).pipe(Effect.scoped, Effect.provide(ADAPTER_TEST_LAYER)),
+  );
+
+  it.effect("restores code only from a turn whose prompt Claude echoed", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeWakeHarness;
+      const runId = RunId.make("run-claude-retried-after-stop");
+      const firstAttemptId = RunAttemptId.make("attempt-claude-stopped-before-echo");
+      const secondAttemptId = RunAttemptId.make("attempt-claude-echoed-retry");
+      yield* harness.runtime.startTurn(
+        makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: firstAttemptId,
+          text: "Create notes.txt",
+          attachments: [],
+        }),
+      );
+      const providerTurns = () =>
+        harness.events.flatMap((event) =>
+          event.type === "provider_turn.updated" ? [event.providerTurn] : [],
+        );
+      yield* awaitUntil(() => providerTurns().length > 0, "running provider turn");
+      // No replay echo arrives: the attempt is stopped before Claude answers,
+      // so Claude kept no file snapshot for its prompt.
+      const stopped = {
+        ...providerTurns().at(-1)!,
+        status: "interrupted",
+      } as OrchestrationV2ProviderTurn;
+      const echoedRetry = {
+        ...stopped,
+        id: ProviderTurnId.make("provider-turn-echoed-retry"),
+        runAttemptId: secondAttemptId,
+        nativeUserMessageId: "echoed-retry-prompt-uuid",
+        ordinal: stopped.ordinal + 1,
+        status: "completed",
+      } as OrchestrationV2ProviderTurn;
+      const attempts = [
+        { id: firstAttemptId, runId },
+        { id: secondAttemptId, runId },
+      ] as never;
+
+      assert.isUndefined(
+        runFileCheckpointTurn({ attempts, providerTurns: [stopped] }, runId),
+        "a turn stopped before its echo has no file snapshot to restore",
+      );
+      assert.equal(
+        runFileCheckpointTurn({ attempts, providerTurns: [stopped, echoedRetry] }, runId)?.id,
+        echoedRetry.id,
       );
     }).pipe(Effect.scoped, Effect.provide(ADAPTER_TEST_LAYER)),
   );
