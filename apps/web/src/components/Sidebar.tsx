@@ -194,6 +194,7 @@ import {
   archiveThreadsAndReport,
   buildBulkArchiveContextMenuItem,
   refreshBulkArchiveTargets,
+  resolveBulkArchiveCompletion,
   buildBulkUnpinContextMenuItem,
   deleteSelectedThreadEntries,
   filterSidebarProjectScopeItems,
@@ -4654,7 +4655,18 @@ export default function Sidebar() {
           reportError: (title, description) =>
             toastManager.add(stackedThreadToast({ type: "error", title, description })),
           removeFromSelection,
-          onAllArchived: clearSelection,
+          onAllArchived: (archivedThreadKeys) => {
+            const completion = resolveBulkArchiveCompletion({
+              archivedThreadKeys,
+              skippedCount: archivableThreads.length - stillArchivable.length,
+            });
+            if (completion.selection === "clear") {
+              clearSelection();
+              return;
+            }
+            removeFromSelection(archivedThreadKeys);
+            toastManager.add(stackedThreadToast({ type: "warning", ...completion.notice }));
+          },
         });
         return;
       }

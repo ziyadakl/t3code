@@ -573,7 +573,7 @@ export async function archiveThreadsAndReport<
   archive: (entry: TEntry, onArchived: () => void) => Promise<AtomCommandResult<unknown, unknown>>;
   reportError: (title: string, description: string) => void;
   removeFromSelection: (threadKeys: readonly string[]) => void;
-  onAllArchived: () => void;
+  onAllArchived: (archivedThreadKeys: readonly string[]) => void;
 }): Promise<void> {
   const outcome = await archiveSelectedThreadEntries({
     entries: input.entries,
@@ -590,7 +590,7 @@ export async function archiveThreadsAndReport<
     }
     return;
   }
-  input.onAllArchived();
+  input.onAllArchived(outcome.archivedThreadKeys);
 }
 
 export function buildMultiSelectThreadContextMenuItems(input: {
@@ -689,6 +689,41 @@ export function buildBulkArchiveContextMenuItem<
       disabled: targets.length === 0,
     },
     targets,
+  };
+}
+
+/**
+ * Decides how a bulk archive that ran to the end updates the selection. When
+ * refreshBulkArchiveTargets skipped threads, only the archived ones leave the
+ * selection and a notice says what was skipped.
+ */
+export function resolveBulkArchiveCompletion(input: {
+  archivedThreadKeys: readonly string[];
+  skippedCount: number;
+}):
+  | { selection: "clear" }
+  | { selection: "keep-skipped"; notice: { title: string; description: string } } {
+  const { archivedThreadKeys, skippedCount } = input;
+  if (skippedCount === 0) return { selection: "clear" };
+  if (archivedThreadKeys.length === 0) {
+    return {
+      selection: "keep-skipped",
+      notice: {
+        title: "Nothing archived",
+        description: "The selected threads started running or were already archived.",
+      },
+    };
+  }
+  const archivedCount = archivedThreadKeys.length;
+  return {
+    selection: "keep-skipped",
+    notice: {
+      title: `Archived ${archivedCount} thread${archivedCount === 1 ? "" : "s"}`,
+      description:
+        skippedCount === 1
+          ? "1 was skipped because it started running or was already archived."
+          : `${skippedCount} were skipped because they started running or were already archived.`,
+    },
   };
 }
 

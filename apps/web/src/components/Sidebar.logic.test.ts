@@ -17,6 +17,7 @@ import {
   buildBulkTitleRegenerationContextMenuItem,
   buildBulkArchiveContextMenuItem,
   refreshBulkArchiveTargets,
+  resolveBulkArchiveCompletion,
   buildBulkUnpinContextMenuItem,
   buildMultiSelectThreadContextMenuItems,
   createThreadJumpHintVisibilityController,
@@ -339,7 +340,7 @@ describe("archiveThreadsAndReport", () => {
     });
     expect(errors).toEqual([]);
     expect(removeFromSelection).not.toHaveBeenCalled();
-    expect(onAllArchived).toHaveBeenCalledTimes(1);
+    expect(onAllArchived).toHaveBeenCalledWith(["one", "two", "three"]);
   });
 
   it("reports a failed archive and keeps only the unarchived threads selected", async () => {
@@ -423,6 +424,36 @@ describe("buildBulkArchiveContextMenuItem", () => {
     });
     expect(item).toEqual({ id: "archive", label: "Archive (0)", disabled: true });
     expect(targets).toEqual([]);
+  });
+});
+
+describe("resolveBulkArchiveCompletion", () => {
+  it("clears the selection when nothing was skipped", () => {
+    expect(
+      resolveBulkArchiveCompletion({ archivedThreadKeys: ["one", "two"], skippedCount: 0 }),
+    ).toEqual({ selection: "clear" });
+  });
+
+  it("deselects only the archived threads and counts the skipped ones", () => {
+    expect(
+      resolveBulkArchiveCompletion({ archivedThreadKeys: ["one", "two"], skippedCount: 1 }),
+    ).toEqual({
+      selection: "keep-skipped",
+      notice: {
+        title: "Archived 2 threads",
+        description: "1 was skipped because it started running or was already archived.",
+      },
+    });
+  });
+
+  it("keeps the selection and says so when nothing was left to archive", () => {
+    expect(resolveBulkArchiveCompletion({ archivedThreadKeys: [], skippedCount: 3 })).toEqual({
+      selection: "keep-skipped",
+      notice: {
+        title: "Nothing archived",
+        description: "The selected threads started running or were already archived.",
+      },
+    });
   });
 });
 
