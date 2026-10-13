@@ -28,7 +28,8 @@ const ORPHAN_GRACE_MS = DAY_MS;
  * missing is archived once it has been untouched for a day, whatever the
  * setting: it is the backlog of the parent cascade, and the day lets a user
  * unarchive one to read it. Pinned, snoozed, running and blocked threads are
- * never archived by the sweep.
+ * never archived by the sweep, nor (filtered out by the candidate query) a
+ * thread an enabled scheduled task posts into.
  */
 export function resolveAutoArchiveReason(
   thread: ProjectionStore.ProjectionAutoArchiveCandidate,

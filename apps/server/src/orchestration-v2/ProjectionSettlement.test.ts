@@ -520,6 +520,50 @@ it.effect.each([
     }).pipe(Effect.provide(testLayer)),
 );
 
+// SQL only: the in-memory store has no scheduled tasks, so it never has one to skip.
+it.effect("auto-archive skips threads an enabled scheduled task posts into", () =>
+  Effect.gen(function* () {
+    const store = yield* ProjectionStore.ProjectionStoreV2;
+    const sql = yield* SqlClient.SqlClient;
+    const bindTask = (taskId: string, threadId: ThreadId, enabled: boolean) => sql`
+      INSERT INTO scheduled_tasks (
+        task_id, title, prompt, enabled, schedule_json, project_id, thread_id,
+        workspace_strategy_json, model_selection_json, runtime_mode, interaction_mode,
+        created_by, creation_source, created_at, updated_at, last_run_status, run_count
+      ) VALUES (
+        ${taskId}, 'monthly', 'report', ${enabled ? 1 : 0}, '{}', 'project:settlement', ${threadId},
+        '{}', '{}', 'full-access', 'default', 'user', 'web', '2026-01-01T00:00:00Z',
+        '2026-01-01T00:00:00Z', 'never', 0
+      )
+    `;
+    const settledScheduled = yield* createThread("scheduled-settled", {
+      settledOverride: "settled",
+      settledAt: old,
+    });
+    yield* bindTask("task:enabled", settledScheduled, true);
+    const settledPaused = yield* createThread("scheduled-paused", {
+      settledOverride: "settled",
+      settledAt: old,
+    });
+    yield* bindTask("task:paused", settledPaused, false);
+    const deletedParent = yield* createThread("scheduled-deleted-parent", { deletedAt: old });
+    const orphanScheduled = yield* createThread("scheduled-orphan", {
+      lineage: {
+        parentThreadId: deletedParent,
+        relationshipToParent: "subagent",
+        rootThreadId: deletedParent,
+      },
+    });
+    yield* bindTask("task:orphan", orphanScheduled, true);
+
+    const candidates = yield* store.getAutoArchiveCandidates();
+    assert.deepEqual(
+      candidates.map((thread) => thread.id),
+      [settledPaused],
+    );
+  }).pipe(Effect.provide(layerSql)),
+);
+
 it.effect(
   "reads settlement candidates and thread metadata without loading historical or archived payloads",
   () =>

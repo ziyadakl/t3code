@@ -168,8 +168,8 @@ and older servers keep their previous values. Changing a rule does not reopen
 already settled threads.
 
 Threads that stay settled for seven days are archived. Any change to a settled thread, including
-unarchiving it, restarts that count. Pinned, snoozed, and working threads are never archived
-automatically. Change the number of days or turn this off with **Auto-archive settled threads** in
+unarchiving it, restarts that count. Pinned, snoozed, and working threads, and threads a scheduled
+task posts into, are never archived automatically. Change the number of days or turn this off with **Auto-archive settled threads** in
 the same settings.
 
 Archiving a thread also archives the helper threads its agent started, and unarchiving it brings

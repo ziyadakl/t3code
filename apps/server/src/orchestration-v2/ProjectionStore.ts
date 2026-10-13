@@ -213,7 +213,8 @@ export type ProjectionSettlementCandidate = Pick<
 
 /**
  * An unarchived thread the auto-archive sweep may archive: one that is settled,
- * or a subagent child whose parent is archived, deleted or missing.
+ * or a subagent child whose parent is archived, deleted or missing. A thread an
+ * enabled scheduled task posts into is never a candidate.
  */
 export type ProjectionAutoArchiveCandidate = Pick<OrchestrationV2AppThread, "id" | "updatedAt"> & {
   readonly pinnedAt: DateTime.Utc | null;
@@ -5671,10 +5672,17 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             WHERE t.deleted_at IS NULL
               AND json_extract(t.payload_json, '$.archivedAt') IS NULL
           ) candidate
-          WHERE candidate.orphaned
-            OR (
-              json_extract(candidate.payload_json, '$.settledOverride') = 'settled'
-              AND json_extract(candidate.payload_json, '$.settledAt') IS NOT NULL
+          WHERE (
+              candidate.orphaned
+              OR (
+                json_extract(candidate.payload_json, '$.settledOverride') = 'settled'
+                AND json_extract(candidate.payload_json, '$.settledAt') IS NOT NULL
+              )
+            )
+            -- Archived, it would refuse every later run of the task.
+            AND NOT EXISTS (
+              SELECT 1 FROM scheduled_tasks task
+              WHERE task.thread_id = candidate.thread_id AND task.enabled = 1
             )
           ORDER BY candidate.updated_at ASC, candidate.thread_id ASC
         `;
@@ -6226,6 +6234,7 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                 left.id.localeCompare(right.id),
             );
         }),
+      // Scheduled tasks live only in SQL, so no thread here has one to exclude.
       getAutoArchiveCandidates: () =>
         Ref.get(replayState).pipe(
           Effect.map((state) =>
