@@ -164,18 +164,37 @@ export type SidebarListMarker =
   | "pinned-divider"
   | "working-header"
   | "snoozed-header"
-  | "settled-header";
+  | "settled-header"
+  /** Fork (grouped layout): the "Needs you" label above floating rows. */
+  | "needs-you-header";
 
 export function sidebarMarkerId(marker: SidebarListMarker): string {
   return `${SIDEBAR_MARKER_PREFIX}${marker}`;
 }
 
+/** Fork (grouped layout): a project group's header, carrying what it shows. */
+export interface SidebarProjectGroupHeaderItem {
+  readonly kind: "marker";
+  readonly marker: "project-group";
+  /** Where the group's fold state is stored; unique per group. */
+  readonly foldKey: string;
+  readonly open: boolean;
+  /** Logical project key; null for the "No project" group. */
+  readonly projectKey: string | null;
+  readonly displayName: string;
+  readonly statusCounts: Readonly<Partial<Record<SidebarV2TopStatusKind, number>>>;
+}
+
 export type SidebarListItem =
   | { readonly kind: "thread"; readonly key: string; readonly section: SidebarSection }
-  | { readonly kind: "marker"; readonly marker: SidebarListMarker };
+  | { readonly kind: "marker"; readonly marker: SidebarListMarker }
+  | SidebarProjectGroupHeaderItem;
 
 export function sidebarListItemId(item: SidebarListItem): string {
-  return item.kind === "thread" ? item.key : sidebarMarkerId(item.marker);
+  if (item.kind === "thread") return item.key;
+  return item.marker === "project-group"
+    ? `${SIDEBAR_MARKER_PREFIX}project-group:${item.foldKey}`
+    : sidebarMarkerId(item.marker);
 }
 
 /** The section a slot belongs to, read off the markers around it: from
@@ -1569,6 +1588,22 @@ export function sortProjectsForSidebar<
   );
 }
 
+/** Maps a thread's physical project (machine + project id) to the logical
+    project key that groups the same code across machines. */
+export function buildLogicalProjectKeyLookup(
+  projects: ReadonlyArray<Pick<LogicalSidebarProject, "projectKey" | "memberProjectRefs">>,
+): (thread: { readonly environmentId: string; readonly projectId: string }) => string | undefined {
+  const projectKeyByRef = new Map(
+    projects.flatMap((project) =>
+      project.memberProjectRefs.map(
+        (projectRef) =>
+          [`${projectRef.environmentId}\0${projectRef.projectId}`, project.projectKey] as const,
+      ),
+    ),
+  );
+  return (thread) => projectKeyByRef.get(`${thread.environmentId}\0${thread.projectId}`);
+}
+
 export function sortLogicalProjectsForSidebar<
   TProject extends LogicalSidebarProject,
   TThread extends ScopedSidebarThread,
@@ -1577,18 +1612,11 @@ export function sortLogicalProjectsForSidebar<
   threads: readonly TThread[],
   sortOrder: SidebarProjectSortOrder,
 ): TProject[] {
-  const groupKeyByProjectRef = new Map(
-    projects.flatMap((project) =>
-      project.memberProjectRefs.map(
-        (projectRef) =>
-          [`${projectRef.environmentId}\0${projectRef.projectId}`, project.projectKey] as const,
-      ),
-    ),
-  );
+  const projectKeyOf = buildLogicalProjectKeyLookup(projects);
   const threadsByProjectKey = new Map<string, TThread[]>();
   for (const thread of threads) {
     if (thread.archivedAt !== null) continue;
-    const projectKey = groupKeyByProjectRef.get(`${thread.environmentId}\0${thread.projectId}`);
+    const projectKey = projectKeyOf(thread);
     if (!projectKey) continue;
     const existing = threadsByProjectKey.get(projectKey);
     if (existing) {

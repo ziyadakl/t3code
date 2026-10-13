@@ -75,6 +75,8 @@ export interface SettingsSearchItem {
   readonly secondary?: boolean;
   readonly requiresThreadAutoSettlement?: boolean;
   readonly requiresThreadAutoArchive?: boolean;
+  // Its row only renders while the sidebar groups threads by project.
+  readonly requiresSidebarProjectGroups?: boolean;
 }
 
 export interface SettingsSearchAvailability {
@@ -88,6 +90,7 @@ export interface SettingsSearchAvailability {
   readonly hasThreadAutoSettlement: boolean;
   readonly hasThreadAutoArchive: boolean;
   readonly managedTunnelActive?: boolean;
+  readonly sidebarProjectGroupsEnabled?: boolean;
 }
 
 /**
@@ -362,6 +365,21 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Working section (beta)",
     to: "/settings/general",
     searchTerms: ["hide fold running monitoring threads inbox sidebar shelf"],
+  },
+  {
+    id: "sidebar-project-groups",
+    title: "Group threads by project",
+    to: "/settings/general",
+    searchTerms: ["fold collapse threads project headers groups sidebar flat list layout"],
+  },
+  {
+    id: "sidebar-float-to-top",
+    title: "Float to the top",
+    to: "/settings/general",
+    searchTerms: [
+      "needs you statuses done input approval failed woke limited waiting sidebar groups",
+    ],
+    requiresSidebarProjectGroups: true,
   },
   {
     id: "auto-settle-inactive-threads",
@@ -1171,7 +1189,8 @@ export function filterAvailableSettingsSearchItems(
       (!item.wslAvailableOnly || availability.isWslSettingsRowVisible) &&
       (!item.requiresThreadAutoSettlement || availability.hasThreadAutoSettlement) &&
       (!item.requiresThreadAutoArchive || availability.hasThreadAutoArchive) &&
-      (!item.managedTunnelOnly || availability.managedTunnelActive === true),
+      (!item.managedTunnelOnly || availability.managedTunnelActive === true) &&
+      (!item.requiresSidebarProjectGroups || availability.sidebarProjectGroupsEnabled === true),
   );
 }
 

@@ -13,6 +13,7 @@ import {
   ProviderDriverKind,
   type ProviderInstanceId,
   type ScopedThreadRef,
+  type SidebarFloatToTopStatus,
   type SidebarProjectGroupingMode,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
@@ -240,6 +241,18 @@ const BACKGROUND_ACTIVITY_PROFILE_DESCRIPTIONS: Record<BackgroundActivityProfile
 const ADVANCED_BACKGROUND_ACTIVITY_DESCRIPTION = "Uses custom intervals.";
 
 const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
+const SIDEBAR_FLOAT_TO_TOP_STATUS_OPTIONS: ReadonlyArray<{
+  readonly status: SidebarFloatToTopStatus;
+  readonly label: string;
+}> = [
+  { status: "done", label: "Done" },
+  { status: "input", label: "Needs input" },
+  { status: "approval", label: "Needs approval" },
+  { status: "failed", label: "Failed" },
+  { status: "woke", label: "Woke" },
+  { status: "limited", label: "Limited" },
+  { status: "waiting", label: "Waiting" },
+];
 const BACKGROUND_ACTIVITY_BOOLEAN_OVERRIDES: ReadonlyArray<{
   readonly key:
     | "pauseWhenHostLocked"
@@ -579,6 +592,16 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled
         ? ["Working section"]
         : []),
+      ...(settings.sidebarProjectGroupsEnabled !==
+      DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupsEnabled
+        ? ["Group threads by project"]
+        : []),
+      ...(!Equal.equals(
+        settings.sidebarFloatToTopStatuses,
+        DEFAULT_UNIFIED_SETTINGS.sidebarFloatToTopStatuses,
+      )
+        ? ["Float to the top"]
+        : []),
       ...(settings.sidebarAutoSettleAfterDays !==
       DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
         ? ["Auto-settle inactive threads"]
@@ -720,6 +743,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarProjectGroupingMode,
       settings.sidebarProjectSortOrder,
       settings.sidebarWorkingShelfEnabled,
+      settings.sidebarProjectGroupsEnabled,
+      settings.sidebarFloatToTopStatuses,
       settings.sidebarThreadPreviewCount,
       settings.showSkillsInSlashMenu,
       settings.timestampFormat,
@@ -820,6 +845,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       sidebarProjectSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder,
       sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
+      sidebarProjectGroupsEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupsEnabled,
+      sidebarFloatToTopStatuses: DEFAULT_UNIFIED_SETTINGS.sidebarFloatToTopStatuses,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
       sidebarAutoArchiveSettledAfterDays:
@@ -2420,6 +2447,76 @@ export function GeneralSettingsPanel() {
             />
           }
         />
+
+        <SettingsRow
+          {...searchableSetting("sidebar-project-groups")}
+          description="Fold active threads under one header per project. Turn off for a flat list."
+          resetAction={
+            settings.sidebarProjectGroupsEnabled !==
+            DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupsEnabled ? (
+              <SettingResetButton
+                label="project groups"
+                onClick={() =>
+                  updateSettings({
+                    sidebarProjectGroupsEnabled:
+                      DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupsEnabled,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.sidebarProjectGroupsEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ sidebarProjectGroupsEnabled: Boolean(checked) })
+              }
+              aria-label="Group threads by project"
+            />
+          }
+        />
+
+        {settings.sidebarProjectGroupsEnabled ? (
+          <SettingsRow
+            {...searchableSetting("sidebar-float-to-top")}
+            description="Threads with these statuses sit above the project groups until the status clears."
+            resetAction={
+              !Equal.equals(
+                settings.sidebarFloatToTopStatuses,
+                DEFAULT_UNIFIED_SETTINGS.sidebarFloatToTopStatuses,
+              ) ? (
+                <SettingResetButton
+                  label="float to the top"
+                  onClick={() =>
+                    updateSettings({
+                      sidebarFloatToTopStatuses: DEFAULT_UNIFIED_SETTINGS.sidebarFloatToTopStatuses,
+                    })
+                  }
+                />
+              ) : null
+            }
+          >
+            <div className="mt-3 grid max-w-2xl gap-x-6 gap-y-2 pb-3.5 sm:grid-cols-2">
+              {SIDEBAR_FLOAT_TO_TOP_STATUS_OPTIONS.map(({ status, label }) => (
+                <label key={status} className="flex items-center justify-between gap-3">
+                  <span className="text-sm">{label}</span>
+                  <Switch
+                    checked={settings.sidebarFloatToTopStatuses[status]}
+                    onCheckedChange={(checked) =>
+                      updateSettings({
+                        sidebarFloatToTopStatuses: {
+                          ...settings.sidebarFloatToTopStatuses,
+                          [status]: Boolean(checked),
+                        },
+                      })
+                    }
+                    aria-label={`Float ${label} threads to the top`}
+                  />
+                </label>
+              ))}
+            </div>
+          </SettingsRow>
+        ) : null}
 
         {supportsAutoSettlement ? (
           <>
