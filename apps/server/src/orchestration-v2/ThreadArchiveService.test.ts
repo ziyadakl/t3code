@@ -7,6 +7,7 @@ import {
   ThreadId,
   type OrchestrationV2Command,
   type OrchestrationV2DomainEvent,
+  type OrchestrationV2StoredEvent,
   type ServerSettings as ContractServerSettings,
   type ServerSettingsPatch,
 } from "@t3tools/contracts";
@@ -24,6 +25,7 @@ import { TestClock } from "effect/testing";
 
 import * as ServerActivation from "../serverActivation.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as EventStore from "./EventStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ThreadArchiveService from "./ThreadArchiveService.ts";
@@ -127,6 +129,8 @@ const makeHarness = Effect.fn("makeThreadArchiveHarness")(function* (options: Ha
   const commands = yield* Ref.make<ReadonlyArray<ArchiveCommand>>([]);
   const sweeps = yield* Queue.unbounded<void>();
   const childReads = yield* Queue.unbounded<ThreadId>();
+  // The event log the service reads a parent's last archive time from.
+  const eventLog = yield* Ref.make<ReadonlyArray<OrchestrationV2StoredEvent>>([]);
 
   const updateSettings = (patch: ServerSettingsPatch) =>
     Effect.gen(function* () {
@@ -149,6 +153,22 @@ const makeHarness = Effect.fn("makeThreadArchiveHarness")(function* (options: Ha
         Queue.offer(sweeps, undefined).pipe(Effect.as(options.candidates ?? [])),
       getSubagentChildren: (threadId) =>
         Queue.offer(childReads, threadId).pipe(Effect.as(options.children?.[threadId] ?? [])),
+    }),
+    Layer.mock(EventStore.EventStoreV2)({
+      read: (input) =>
+        Stream.unwrap(
+          Ref.get(eventLog).pipe(
+            Effect.map((stored) =>
+              Stream.fromIterable(
+                stored.filter(
+                  ({ event }) =>
+                    (input?.threadId === undefined || event.threadId === input.threadId) &&
+                    (input?.eventType === undefined || event.type === input.eventType),
+                ),
+              ),
+            ),
+          ),
+        ),
     }),
     Layer.mock(Orchestrator.OrchestratorV2)({
       streamDomainEvents: Stream.fromPubSub(domainEvents),
@@ -186,6 +206,10 @@ const makeHarness = Effect.fn("makeThreadArchiveHarness")(function* (options: Ha
   const cascade = (event: OrchestrationV2DomainEvent) =>
     Effect.gen(function* () {
       const service = yield* ThreadArchiveService.ThreadArchiveServiceV2;
+      yield* Ref.update(eventLog, (stored) => [
+        ...stored,
+        { sequence: stored.length + 1, commandId: null, event },
+      ]);
       yield* PubSub.publish(domainEvents, event);
       yield* Queue.take(childReads);
       yield* service.drain;
@@ -204,8 +228,8 @@ const makeHarness = Effect.fn("makeThreadArchiveHarness")(function* (options: Ha
 function threadEvent(
   type: "thread.archived" | "thread.unarchived" | "thread.deleted",
   threadId: ThreadId,
+  now = at(0),
 ): OrchestrationV2DomainEvent {
-  const now = at(0);
   const providerInstanceId = ProviderInstanceId.make("codex");
   return {
     id: EventId.make(`event:${type}:${threadId}`),
@@ -288,7 +312,7 @@ describe("ThreadArchiveServiceV2 worker", () => {
     ),
   );
 
-  it.effect("archives and unarchives a thread's idle subagent children with it", () =>
+  it.effect("archives a thread's idle subagent children with it", () =>
     Effect.scoped(
       Effect.gen(function* () {
         yield* TestClock.setTime(NOW_MS);
@@ -310,15 +334,40 @@ describe("ThreadArchiveServiceV2 worker", () => {
           ]);
 
           yield* Ref.set(fixture.commands, []);
-          yield* fixture.cascade(threadEvent("thread.unarchived", parent));
-          expect(summarize(yield* Ref.get(fixture.commands))).toEqual([
-            ["thread.unarchive", "child-archived"],
-          ]);
-
-          yield* Ref.set(fixture.commands, []);
           yield* fixture.cascade(threadEvent("thread.deleted", parent));
           expect(summarize(yield* Ref.get(fixture.commands))).toEqual([
             ["thread.archive", "child-open"],
+          ]);
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
+
+  it.effect("unarchiving a thread restores only the children archived with it", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(NOW_MS);
+        const parent = ThreadId.make("parent");
+        const fixture = yield* makeHarness({
+          children: {
+            parent: [
+              { id: ThreadId.make("child-open"), archivedAt: null, busy: false },
+              { id: ThreadId.make("child-with-parent"), archivedAt: at(-60_000), busy: false },
+              { id: ThreadId.make("child-archived-before"), archivedAt: at(-DAY_MS), busy: false },
+            ],
+          },
+        });
+        yield* Effect.gen(function* () {
+          yield* fixture.start;
+          // An earlier archive and unarchive of the parent, then the current archive.
+          yield* fixture.cascade(threadEvent("thread.archived", parent, at(-2 * DAY_MS)));
+          yield* fixture.cascade(threadEvent("thread.unarchived", parent, at(-2 * DAY_MS)));
+          yield* fixture.cascade(threadEvent("thread.archived", parent, at(-60_000)));
+          yield* Ref.set(fixture.commands, []);
+
+          yield* fixture.cascade(threadEvent("thread.unarchived", parent));
+          expect(summarize(yield* Ref.get(fixture.commands))).toEqual([
+            ["thread.unarchive", "child-with-parent"],
           ]);
         }).pipe(Effect.provide(fixture.layer));
       }),

@@ -6,12 +6,14 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import * as ServerSettings from "../serverSettings.ts";
 import { forkParked } from "../serverActivation.ts";
+import * as EventStore from "./EventStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 
@@ -65,6 +67,7 @@ type ArchiveJob =
 export const make = Effect.gen(function* () {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
+  const eventStore = yield* EventStore.EventStoreV2;
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const crypto = yield* Crypto.Crypto;
 
@@ -115,25 +118,45 @@ export const make = Effect.gen(function* () {
 
   // Each child's own archived or unarchived event cascades to its children,
   // so one level per pass reaches every descendant. A running child is never
-  // archived here; the orphan sweep archives it once it is idle.
+  // archived here; the orphan sweep archives it once it is idle. Unarchiving
+  // restores only the children archived at or after the parent's last archive,
+  // so a child archived earlier for its own reasons stays archived.
   const cascade = Effect.fn("ThreadArchiveServiceV2.cascade")(function* (
     threadId: ThreadId,
     archive: boolean,
   ) {
     const children = yield* projections.getSubagentChildren(threadId);
-    const type = archive ? "thread.archive" : "thread.unarchive";
-    const reason = archive ? "archive-with-parent" : "unarchive-with-parent";
+    if (archive) {
+      yield* Effect.forEach(
+        children.filter((child) => child.archivedAt === null && !child.busy),
+        (child) => dispatch("thread.archive", child.id, "archive-with-parent"),
+        { concurrency: 8, discard: true },
+      );
+      return;
+    }
+    if (children.every((child) => child.archivedAt === null)) return;
+    // No archive on record (an imported thread): restore nothing rather than guess.
+    const lastArchive = yield* eventStore
+      .read({ threadId, eventType: "thread.archived" })
+      .pipe(Stream.runLast);
+    if (Option.isNone(lastArchive)) return;
+    const parentArchivedAt = lastArchive.value.event.occurredAt;
     yield* Effect.forEach(
-      children.filter((child) =>
-        archive ? child.archivedAt === null && !child.busy : child.archivedAt !== null,
+      children.filter(
+        (child) =>
+          child.archivedAt !== null &&
+          DateTime.toEpochMillis(child.archivedAt) >= DateTime.toEpochMillis(parentArchivedAt),
       ),
-      (child) => dispatch(type, child.id, reason),
+      (child) => dispatch("thread.unarchive", child.id, "unarchive-with-parent"),
       { concurrency: 8, discard: true },
     );
   });
 
   const worker = yield* makeDrainableWorker((job: ArchiveJob) =>
-    (job.type === "sweep" ? sweep() : cascade(job.threadId, job.archive)).pipe(
+    Effect.gen(function* () {
+      if (job.type === "sweep") return yield* sweep();
+      return yield* cascade(job.threadId, job.archive);
+    }).pipe(
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause)
           ? Effect.failCause(cause)
