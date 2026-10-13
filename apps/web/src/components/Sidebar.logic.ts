@@ -283,6 +283,33 @@ export type SidebarThreadDropPlan =
 /** What dropping in `to` does to a thread lifted from `from`, for the badge
     on the lifted row. Null while reordering inside one section and for the
     working and snoozed shelves, which cannot be drop targets. */
+/** What a row's hover action settles toward: cards settle, settled rows un-settle, snoozed rows wake. */
+export type SidebarSweepAction = "settle" | "unsettle" | "unsnooze";
+
+export type SidebarRowQuickAction = "discard-draft" | "snooze" | "settle" | "unsettle" | "wake";
+
+/**
+ * The hover quick actions a thread row offers, in display order. Decided by the
+ * row's section action alone, never by its look, so a slim grouped row offers
+ * exactly what the full card does.
+ */
+export function resolveSidebarRowQuickActions(input: {
+  variantAction: SidebarSweepAction;
+  settlementSupported: boolean;
+  snoozeSupported: boolean;
+  /** Capability, operator access and thread state all allow a snooze now. */
+  canSnoozeNow: boolean;
+  hasUnsentDraft: boolean;
+}): readonly SidebarRowQuickAction[] {
+  if (input.variantAction === "unsnooze") return input.snoozeSupported ? ["wake"] : [];
+  if (input.variantAction === "unsettle") return input.settlementSupported ? ["unsettle"] : [];
+  const actions: SidebarRowQuickAction[] = [];
+  if (input.hasUnsentDraft) actions.push("discard-draft");
+  if (input.canSnoozeNow) actions.push("snooze");
+  if (input.settlementSupported) actions.push("settle");
+  return actions;
+}
+
 export type SidebarDropVerb = "pin" | "unpin" | "settle" | "unsettle" | "wake";
 
 export function resolveSidebarDropVerb(
