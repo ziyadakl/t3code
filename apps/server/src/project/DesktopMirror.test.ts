@@ -7,7 +7,7 @@ import {
   type OrchestrationV2AppThread,
   type OrchestrationV2ServerCommand,
 } from "@t3tools/contracts";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -393,7 +393,7 @@ describe("DesktopMirror.syncOnce", () => {
                 ServerSettingsService.layerTest(),
                 NodeSqliteClient.layer({ filename: ":memory:" }),
                 NodeCrypto.layer,
-                Layer.succeed(HostProcessPlatform, "darwin"),
+                Layer.succeed(HostProcess.Platform, "darwin"),
               ),
             ),
           ),
@@ -423,7 +423,7 @@ describe("DesktopMirror.syncOnce", () => {
                   NodeSqliteClient.layer({ filename: ":memory:" }),
                   NodeCrypto.layer,
                   // The mirror is off by default off macOS.
-                  Layer.succeed(HostProcessPlatform, "linux"),
+                  Layer.succeed(HostProcess.Platform, "linux"),
                 ),
               ),
             ),

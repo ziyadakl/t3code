@@ -1,3 +1,5 @@
+import { AuthSettingsWriteScope } from "@t3tools/contracts";
+import { readEnvironmentScope, useEnvironmentsWithScope } from "../../state/session";
 import { ThreadDaysField } from "./components/ThreadDaysField";
 import { ScreenScrollView as ScrollView } from "../../components/ScreenScrollView";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
@@ -62,6 +64,7 @@ const AUTO_ARCHIVE_DEFAULT_DAYS = DEFAULT_SERVER_SETTINGS.sidebarAutoArchiveSett
 function AutoSettleSettingsRows() {
   const { selectedTargets, projectGroups, selectedProjectKey } = useSettingsEnvironmentFilter();
   const selectedProject = projectGroups.find((group) => group.key === selectedProjectKey);
+  const writableEnvironments = useEnvironmentsWithScope(selectedTargets, AuthSettingsWriteScope);
   const projectSelected = selectedProjectKey !== null;
   const [pendingWrites, setPendingWrites] = useState(0);
   const writeInFlight = useRef(false);
@@ -78,6 +81,9 @@ function AutoSettleSettingsRows() {
     syncEnvironments,
     projectSelected ? (selectedProject?.members.map((member) => member.project) ?? []) : null,
   );
+  const canWriteSettings =
+    syncTargets.length > 0 &&
+    syncTargets.every((target) => writableEnvironments.has(target.environment.environmentId));
   const displayTargets =
     pendingWrites > 0 && pendingTargets !== null ? pendingTargets : syncTargets;
   const reference = displayTargets[0] ?? null;
@@ -93,7 +99,13 @@ function AutoSettleSettingsRows() {
       snoozeLimitedThreads?: boolean;
     },
   ) => {
-    if (writeInFlight.current) return;
+    if (
+      writeInFlight.current ||
+      !syncTargets.every((target) =>
+        readEnvironmentScope(target.environment.environmentId, AuthSettingsWriteScope),
+      )
+    )
+      return;
     const writes = planMobileScopedSettingsPatch(syncTargets, projectSelected, patch);
     if (writes.length === 0) return;
     writeInFlight.current = true;
@@ -136,7 +148,8 @@ function AutoSettleSettingsRows() {
     (target) =>
       target.environment.serverConfig.environment.capabilities.projectSettingsOverrides === true,
   );
-  const disabled = pendingWrites > 0 || (projectSelected && !supportsProjectOverrides);
+  const disabled =
+    !canWriteSettings || pendingWrites > 0 || (projectSelected && !supportsProjectOverrides);
   const hasProjectOverrides =
     projectSelected &&
     syncTargets.some(
@@ -145,7 +158,13 @@ function AutoSettleSettingsRows() {
         target.sources.sidebarAutoSettleAfterDays === "project",
     );
   const clearProjectOverrides = () => {
-    if (writeInFlight.current) return;
+    if (
+      writeInFlight.current ||
+      !syncTargets.every((target) =>
+        readEnvironmentScope(target.environment.environmentId, AuthSettingsWriteScope),
+      )
+    )
+      return;
     const writes = planMobileScopedSettingsClear(syncTargets, [
       "sidebarAutoSettleOnMerge",
       "sidebarAutoSettleAfterDays",
@@ -177,6 +196,7 @@ function AutoSettleSettingsRows() {
           hasOverrides={hasProjectOverrides}
           supportsOverrides={supportsProjectOverrides}
           pending={pendingWrites > 0}
+          disabled={!canWriteSettings}
           onClear={clearProjectOverrides}
         />
       ) : null}

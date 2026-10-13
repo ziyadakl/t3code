@@ -1,6 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -291,7 +291,7 @@ it.layer(NodeServices.layer)("Claude session sources", (it) => {
           desktopStoreDir: store,
           workspaceRoot: "/Work/App",
           includeArchived: false,
-        }).pipe(Effect.provideService(HostProcessPlatform, platform));
+        }).pipe(Effect.provideService(HostProcess.Platform, platform));
 
       // macOS file systems are case-insensitive, so these are one project.
       expect((yield* listCased("darwin")).map((row) => row.providerSessionId)).toEqual([
