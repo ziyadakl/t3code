@@ -135,17 +135,22 @@ export const BrowserImportSite = Schema.Struct({
 });
 export type BrowserImportSite = typeof BrowserImportSite.Type;
 
-export const BrowserImportSitesInput = Schema.Struct({
+/** Which profile of which source browser a request reads from. */
+const SourceProfileFields = {
   sourceId: BrowserImportSourceId,
+  /** As listed by `BrowserImportSourceProfile.directory`. */
   sourceProfileDirectory: TrimmedNonEmptyString,
+};
+
+export const BrowserImportSitesInput = Schema.Struct({
+  ...SourceProfileFields,
   /** URL of the preview tab asking, so its site can be marked `current`. */
   currentUrl: Schema.optional(Schema.String),
 });
 export type BrowserImportSitesInput = typeof BrowserImportSitesInput.Type;
 
 export const BrowserImportInput = Schema.Struct({
-  sourceId: BrowserImportSourceId,
-  sourceProfileDirectory: TrimmedNonEmptyString,
+  ...SourceProfileFields,
   /** T3 Code profile the cookies are written into. */
   targetProfileId: BrowserProfileId,
   /**
@@ -160,8 +165,7 @@ export type BrowserImportInput = typeof BrowserImportInput.Type;
 /** IPC payload: the import input plus the environment the partition belongs to. */
 export const DesktopPreviewImportCookiesInputSchema = Schema.Struct({
   environmentId: TrimmedNonEmptyString,
-  sourceId: BrowserImportSourceId,
-  sourceProfileDirectory: TrimmedNonEmptyString,
+  ...SourceProfileFields,
   targetProfileId: BrowserProfileId,
   domains: Schema.Array(TrimmedNonEmptyString),
 });
