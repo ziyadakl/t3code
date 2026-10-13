@@ -63,10 +63,7 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 
-import {
-  resolveSidebarFloatToTopStatusSet,
-  type TimestampFormat,
-} from "@t3tools/contracts/settings";
+import type { TimestampFormat } from "@t3tools/contracts/settings";
 import {
   AlarmClockIcon,
   AlarmClockOffIcon,
@@ -177,7 +174,7 @@ import {
   resolveActiveThreadRouteRef,
   resolveThreadRouteTarget,
 } from "../threadRoutes";
-import { formatRelativeTimeLabel, parseTimestampDate } from "../timestampFormat";
+import { formatRelativeTimeLabel } from "../timestampFormat";
 import type { SidebarThreadSummary } from "../types";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
@@ -199,7 +196,6 @@ import {
   filterSidebarProjectScopeItems,
   formatWorkingDurationLabel,
   firstValidTimestampMs,
-  hasUnseenCompletion,
   isSidebarNestedLinkClick,
   isSidebarThreadWorking,
   isTrailingDoubleClick,
@@ -214,7 +210,7 @@ import {
   resolveSidebarRowAccessibility,
   type SidebarDropVerb,
   resolveSidebarThreadStatus,
-  resolveThreadLastVisitedAt,
+  resolveSidebarV2TopStatus,
   searchSidebarThreads,
   shouldCreateNewThreadInCurrentProject,
   shouldNavigateAfterThreadPark,
@@ -233,18 +229,13 @@ import {
   useSidebarRowSubscriptionLease,
   type SidebarListItem,
   type SidebarListMarker,
+  type SidebarProjectGroupHeaderItem,
   type SidebarSection,
   filterToEnvironment,
   isDraftSessionInSidebarScope,
   resolveSidebarEnvironmentFilter,
   sidebarProjectScopeTriggerLabel,
   sidebarSearchEnvironmentIds,
-  buildSidebarGroupedActiveModel,
-  buildSidebarGroupedActiveRows,
-  resolveSidebarThreadAttention,
-  sidebarProjectGroupFoldKey,
-  sidebarProjectGroupFoldKeyOfMarker,
-  toggleSidebarProjectGroupOpen,
 } from "./Sidebar.logic";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
@@ -295,7 +286,15 @@ import {
 import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { SidebarEnvironmentFilter } from "./sidebar/SidebarEnvironmentFilter";
-import { SidebarNeedsYouHeader, SidebarProjectGroupHeader } from "./sidebar/SidebarProjectGroups";
+import {
+  SidebarNeedsYouHeader,
+  SidebarProjectGroupHeader,
+  useSidebarProjectGroups,
+} from "./sidebar/SidebarProjectGroups";
+import {
+  resolveSidebarThreadAttention,
+  SIDEBAR_TOP_STATUS_DISPLAY,
+} from "./sidebar/projectGroups.logic";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuShortcut, MenuTrigger } from "./ui/menu";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
@@ -322,11 +321,6 @@ const SETTLED_TAIL_PAGE_COUNT = 25;
 const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar:snoozed-expanded";
 const WORKING_SHELF_EXPANDED_KEY = "t3code:sidebar:working-expanded";
-// Fork (grouped layout): the fold keys of the project groups the user opened.
-// A group not listed is folded, so new projects start folded.
-const PROJECT_GROUPS_EXPANDED_KEY = "t3code:sidebar:project-groups-expanded";
-const NO_OPEN_PROJECT_GROUPS: readonly string[] = [];
-const OpenProjectGroupsSchema = Schema.Array(Schema.String);
 
 // Working beta: when this client saw each thread leave the Working shelf.
 // Module scope keeps the inbox order across routes that unmount the sidebar.
@@ -712,13 +706,17 @@ const draftPenClassName = "size-3 shrink-0 text-warning-foreground";
 // picked up, and a marker is the sortable `over` when the pointer is on it,
 // which resolveSidebarDropTarget turns into the section the gap sits in.
 function SortableSidebarMarker(props: {
-  marker: SidebarListMarker;
+  // Fork (grouped layout): or a project group's header item.
+  marker: SidebarListMarker | SidebarProjectGroupHeaderItem;
   className?: string;
   children?: ReactNode;
   "data-testid"?: string;
 }) {
   const { setNodeRef, transform, transition } = useSortable({
-    id: sidebarMarkerId(props.marker),
+    id:
+      typeof props.marker === "string"
+        ? sidebarMarkerId(props.marker)
+        : sidebarListItemId(props.marker),
     disabled: { draggable: true },
     animateLayoutChanges: animateSidebarLayoutChanges,
   });
@@ -731,7 +729,10 @@ function SortableSidebarMarker(props: {
       style={{
         transform: CSS.Translate.toString(transform),
         // A newly revealed target must not slide from its hidden position.
-        transition: props.marker.endsWith("-placeholder") ? "none" : transition,
+        transition:
+          typeof props.marker === "string" && props.marker.endsWith("-placeholder")
+            ? "none"
+            : transition,
         visibility: transform?.scaleY === 0 ? "hidden" : undefined,
       }}
     >
@@ -1262,7 +1263,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const { leaseLiveStatus, rowRef } = useSidebarRowSubscriptionLease(props.isActive);
   const isRegeneratingTitle = thread.titleRegeneration != null;
   const localLastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
-  const lastVisitedAt = resolveThreadLastVisitedAt(thread.lastVisitedAt, localLastVisitedAt);
   const isSelected = useThreadSelectionStore((state) => state.selectedThreadKeys.has(threadKey));
   const openPrLink = useOpenPrLink();
   const runningTerminalIds = useThreadRunningTerminalIds({
@@ -1311,23 +1311,20 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
 
   // Same semantics as the legacy sidebar (never-visited counts as read):
   // switching sidebars must not light up every historical thread as unread.
-  const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt });
-  const status = resolveSidebarThreadStatus(thread);
-  const isInFlight =
-    status === "working" || status === "waiting" || status === "approval" || status === "input";
   // A woken thread reappears at its original position (the sort is
   // deliberately static), so the pill has to carry the weight. Snoozing is
   // an explicit act, so the pill clears only when the user re-engages:
   // reading a completion-triggered wake, clicking the pill, sending a
   // message, settling, archiving, or a change request state that settles the
-  // thread. Timer wakes survive a mere visit. An unparseable visit timestamp
-  // counts as never-visited, so corrupt local data cannot eat the wake signal.
-  const lastVisitedDate = lastVisitedAt === undefined ? null : parseTimestampDate(lastVisitedAt);
-  const wokeAtDate = props.wokeAt === null ? null : parseTimestampDate(props.wokeAt);
-  const isWoke =
-    wokeAtDate !== null &&
-    (lastVisitedDate === null || lastVisitedDate < wokeAtDate) &&
-    thread.settledOverride !== "settled";
+  // thread. Timer wakes survive a mere visit.
+  const { isUnread, isWoke } = resolveSidebarThreadAttention({
+    thread,
+    localLastVisitedAt,
+    wokeAt: props.wokeAt,
+  });
+  const status = resolveSidebarThreadStatus(thread);
+  const isInFlight =
+    status === "working" || status === "waiting" || status === "approval" || status === "input";
   // Background work always recedes when it is not selected: an unread parent
   // completion must not pull a still-working thread back into the foreground.
   // Ready and action-required rows keep their unread and wake prominence.
@@ -1338,64 +1335,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     isActive: props.isActive,
     isSelected,
   });
-  // Status hues follow the system-wide convention set by sidebar v1 and the
-  // mobile Live Activity/widgets (amber approval, indigo input, sky working)
-  // so a thread reads the same color everywhere it surfaces.
+  const topStatusKind = resolveSidebarV2TopStatus({ status, isUnread, isWoke });
   const topStatus =
-    status === "working"
-      ? {
-          // A native /goal keeps the agent going across turns until it is met.
-          label: thread.goal?.status === "active" ? "Goal" : "Working",
-          icon: "working" as const,
-          // No shimmer: a label that animates forever is noise in a sidebar
-          // full of them (and repaints every vsync on high-refresh displays).
-          className: "text-info",
-        }
-      : status === "waiting"
-        ? {
-            // Waiting is calm background presence (post-settle background
-            // roster), not active progress, so the label keeps full strength.
-            label: "Waiting",
-            icon: null,
-            className: "text-muted-foreground",
-          }
-        : status === "approval"
-          ? {
-              label: "Approval",
-              icon: "approval" as const,
-              className: "text-warning-foreground",
-            }
-          : status === "input"
-            ? {
-                label: "Input",
-                icon: "input" as const,
-                className: "text-indigo-600 dark:text-indigo-300",
-              }
-            : status === "limited"
-              ? {
-                  label: "Limited",
-                  icon: "failed" as const,
-                  className: "text-warning",
-                }
-              : status === "failed"
-                ? {
-                    label: "Failed",
-                    icon: "failed" as const,
-                    className: "text-error",
-                  }
-                : isWoke
-                  ? {
-                      label: "Woke",
-                      icon: "woke" as const,
-                      className: "text-warning",
-                    }
-                  : isUnread
-                    ? {
-                        label: "Done",
-                        icon: "done" as const,
-                        className: "text-success",
-                      }
-                    : null;
+    topStatusKind === null
+      ? null
+      : topStatusKind === "working" && thread.goal?.status === "active"
+        ? // A native /goal keeps the agent going across turns until it is met.
+          { ...SIDEBAR_TOP_STATUS_DISPLAY.working, label: "Goal" }
+        : SIDEBAR_TOP_STATUS_DISPLAY[topStatusKind];
   const isWokeStatus = topStatus?.icon === "woke";
 
   const branchMismatch = resolveLocalCheckoutBranchMismatch({
@@ -2487,7 +2434,9 @@ export default function Sidebar() {
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const workingShelfEnabled = useClientSettings((s) => s.sidebarWorkingShelfEnabled);
   const projectGroupsEnabled = useClientSettings((s) => s.sidebarProjectGroupsEnabled);
-  const floatToTopStatuses = useClientSettings((s) => s.sidebarFloatToTopStatuses);
+  // Fork: the inbox keeps a user-arranged order only while it is neither
+  // time-ordered (Working beta) nor grouped by project, where rows hold places.
+  const inboxArrangeable = !workingShelfEnabled && !projectGroupsEnabled;
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const {
     settleThread,
@@ -3262,69 +3211,15 @@ export default function Sidebar() {
   }, [routeThreadKey, workingShelfExpanded, workingThreads]);
 
   // Fork (grouped layout): "Needs you" plus one foldable group per project.
-  const [openProjectGroups, setOpenProjectGroups] = useLocalStorage(
-    PROJECT_GROUPS_EXPANDED_KEY,
-    NO_OPEN_PROJECT_GROUPS,
-    OpenProjectGroupsSchema,
-  );
-  const toggleProjectGroup = useCallback(
-    (foldKey: string) =>
-      setOpenProjectGroups((keys) => toggleSidebarProjectGroupOpen(keys, foldKey)),
-    [setOpenProjectGroups],
-  );
-  const threadLastVisitedAtById = useUiStateStore((state) => state.threadLastVisitedAtById);
-  const groupedActive = useMemo(() => {
-    if (!projectGroupsEnabled) return null;
-    const model = buildSidebarGroupedActiveModel({
-      activeThreads,
-      projects: projectGroups,
-      floatStatuses: resolveSidebarFloatToTopStatusSet(floatToTopStatuses),
-      resolveAttention: (thread) =>
-        resolveSidebarThreadAttention({
-          thread,
-          localLastVisitedAt:
-            threadLastVisitedAtById[
-              scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))
-            ],
-          wokeAt: threadWokeAt(thread, { now: snoozeNow }),
-        }),
-    });
-    return {
-      model,
-      ...buildSidebarGroupedActiveRows({
-        model,
-        openFoldKeys: openProjectGroups,
-        routeThreadKey,
-        threadKey: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-      }),
-    };
-  }, [
+  const projectGroupsLayout = useSidebarProjectGroups({
     activeThreads,
-    floatToTopStatuses,
-    openProjectGroups,
-    projectGroups,
-    projectGroupsEnabled,
+    projects: allProjectGroups,
     routeThreadKey,
     snoozeNow,
-    threadLastVisitedAtById,
-  ]);
-  const projectGroupByFoldKey = useMemo(
-    () =>
-      new Map(
-        (groupedActive?.model.groups ?? []).map((group) => [
-          sidebarProjectGroupFoldKey(group.projectKey),
-          {
-            group,
-            project:
-              group.projectKey === null
-                ? null
-                : (projectGroups.find((project) => project.projectKey === group.projectKey) ??
-                  null),
-          },
-        ]),
-      ),
-    [groupedActive, projectGroups],
-  );
+    observedReturnAt: inboxReturns.returnedAt,
+  });
+  const groupedActive = projectGroupsLayout.grouped;
+  const openProjectGroupForDrop = projectGroupsLayout.openGroupForDrop;
   // Folded group rows don't render, so they leave keyboard order and jump hints.
   const renderedActiveThreads = groupedActive?.visibleThreads ?? activeThreads;
 
@@ -4118,7 +4013,9 @@ export default function Sidebar() {
   const sidebarListOrderKey = useMemo(
     () =>
       sidebarListItems
-        .map((item) => (item.kind === "thread" ? `${item.key}:${item.section}` : item.marker))
+        .map((item) =>
+          item.kind === "thread" ? `${item.key}:${item.section}` : sidebarListItemId(item),
+        )
         .join("\0"),
     [sidebarListItems],
   );
@@ -4162,10 +4059,12 @@ export default function Sidebar() {
     ]).map(key);
   }, [dragState, settledThreads, threadByKey]);
   // Working beta: the inbox is time-ordered too, so the preview shows the
-  // slot a drop will land in, not the slot under the pointer.
+  // slot a drop will land in, not the slot under the pointer. Grouped, the
+  // inbox has no flat order to land in.
   const draggedActiveOrder = useMemo(() => {
     const thread = dragState === null ? undefined : threadByKey.get(dragState.activeKey);
-    if (!workingShelfEnabled || dragState === null || thread === undefined) return undefined;
+    if (!workingShelfEnabled || projectGroupsEnabled || dragState === null || thread === undefined)
+      return undefined;
     const key = (candidate: EnvironmentThreadShell) =>
       scopedThreadKey(scopeThreadRef(candidate.environmentId, candidate.id));
     return sortInboxThreadsByReturn(
@@ -4175,7 +4074,7 @@ export default function Sidebar() {
       ],
       inboxReturns.returnedAt,
     ).map(key);
-  }, [activeThreads, dragState, threadByKey, workingShelfEnabled]);
+  }, [activeThreads, dragState, projectGroupsEnabled, threadByKey, workingShelfEnabled]);
   const sidebarSortingStrategy = useMemo(
     () =>
       createSidebarSortingStrategy({
@@ -4184,6 +4083,7 @@ export default function Sidebar() {
         boundaryLabelHeight: SIDEBAR_DRAG_LABEL_HEIGHT,
         settledOrder: draggedSettledOrder,
         ...(draggedActiveOrder === undefined ? {} : { activeOrder: draggedActiveOrder }),
+        inboxArrangeable,
         settledExpanded: settledShelfExpanded,
         settledVisibleCount,
         routeThreadKey,
@@ -4192,6 +4092,7 @@ export default function Sidebar() {
     [
       draggedActiveOrder,
       draggedSettledOrder,
+      inboxArrangeable,
       isContextDrag,
       routeThreadKey,
       settledShelfExpanded,
@@ -4247,8 +4148,7 @@ export default function Sidebar() {
             activeOrder: activeKeys,
             activeKeysById,
             activeReorderableKeys: activeReorderableThreadKeys,
-            // Grouped, the inbox has no arrangeable order either.
-            activeTimeOrdered: workingShelfEnabled || projectGroupsEnabled,
+            activeTimeOrdered: !inboxArrangeable,
           }).kind !== "none"
         );
       },
@@ -4267,11 +4167,10 @@ export default function Sidebar() {
     draggedFromSection,
     dragActivationY,
     draggableThreadKeys,
+    inboxArrangeable,
     pinnedKeys,
-    projectGroupsEnabled,
     sidebarListItems,
     threadByKey,
-    workingShelfEnabled,
   ]);
   const handleThreadDragEnd = useCallback(
     (event: DragEndEvent) => {
@@ -4299,8 +4198,7 @@ export default function Sidebar() {
         activeOrder: activeKeys,
         activeKeysById,
         activeReorderableKeys: activeReorderableThreadKeys,
-        // Grouped, the inbox has no arrangeable order either.
-        activeTimeOrdered: workingShelfEnabled || projectGroupsEnabled,
+        activeTimeOrdered: !inboxArrangeable,
       });
       if (plan.kind === "none") return;
       if (plan.kind === "settle" && settlingThreadKeysRef.current.has(activeKey)) return;
@@ -4338,6 +4236,12 @@ export default function Sidebar() {
         assignedKeys: new Map(assignments.map(({ id, orderKey }) => [id, orderKey])),
       };
       setOptimisticDrop(drop);
+      // Fork (grouped layout): a thread back from a shelf must not vanish into a folded group.
+      if (
+        target.section === "active" &&
+        (activeSection === "settled" || activeSection === "snoozed")
+      )
+        openProjectGroupForDrop(applySidebarThreadDrop(activeThread, "active", drop.occurredAt));
       void (async () => {
         const run = async (
           operation: Promise<AtomCommandResult<unknown, unknown>>,
@@ -4445,8 +4349,8 @@ export default function Sidebar() {
       unpinThread,
       unsettleThread,
       unsnoozeThread,
-      projectGroupsEnabled,
-      workingShelfEnabled,
+      inboxArrangeable,
+      openProjectGroupForDrop,
     ],
   );
   // One snooze per thread at a time — same double-dispatch guard as settle.
@@ -5716,29 +5620,32 @@ export default function Sidebar() {
                           onDraftContextMenu={handleDraftContextMenu}
                         />,
                       ];
+                      // Rows under a project group header are one-line rows.
+                      let underGroupHeader = false;
                       for (const item of sidebarListItems) {
                         if (item.kind === "thread") {
                           items.push(
                             renderThreadRow(
                               threadByKey.get(item.key)!,
                               item.section,
-                              item.compact === true,
+                              underGroupHeader,
                             ),
                           );
                           continue;
                         }
-                        const groupFoldKey = sidebarProjectGroupFoldKeyOfMarker(item.marker);
-                        if (groupFoldKey !== null) {
-                          const entry = projectGroupByFoldKey.get(groupFoldKey);
-                          if (entry === undefined) continue;
+                        underGroupHeader = item.marker === "project-group";
+                        if (item.marker === "project-group") {
+                          const { foldKey, projectKey } = item;
                           items.push(
-                            <SortableSidebarMarker key={item.marker} marker={item.marker}>
+                            <SortableSidebarMarker key={sidebarListItemId(item)} marker={item}>
                               <SidebarProjectGroupHeader
-                                displayName={entry.group.displayName}
-                                project={entry.project}
-                                open={openProjectGroups.includes(groupFoldKey)}
-                                statusCounts={entry.group.statusCounts}
-                                onToggle={() => toggleProjectGroup(groupFoldKey)}
+                                header={item}
+                                project={
+                                  projectKey === null
+                                    ? null
+                                    : (projectGroupsLayout.projectByKey.get(projectKey) ?? null)
+                                }
+                                onToggle={() => projectGroupsLayout.toggleGroup(foldKey)}
                               />
                             </SortableSidebarMarker>,
                           );

@@ -680,13 +680,16 @@ describe("sidebar drag projection", () => {
   });
 
   describe("grouped layout", () => {
-    const groupHeader = marker("project-group:alpha");
-    const compact = (key: string): SidebarListItem => ({
-      kind: "thread",
-      key,
-      section: "active",
-      compact: true,
-    });
+    const groupHeader: SidebarListItem = {
+      kind: "marker",
+      marker: "project-group",
+      foldKey: "alpha",
+      open: true,
+      projectKey: "alpha",
+      displayName: "Alpha",
+      statusCounts: {},
+    };
+    const groupHeaderId = sidebarListItemId(groupHeader);
     const items = [
       pinnedHeader,
       thread("p", "pinned"),
@@ -694,30 +697,31 @@ describe("sidebar drag projection", () => {
       marker("needs-you-header"),
       thread("f", "active"),
       groupHeader,
-      compact("a1"),
-      compact("a2"),
+      thread("a1", "active"),
+      thread("a2", "active"),
       settledHeader,
       marker("settled-placeholder"),
     ];
-    const input = { items, settledOrder: [], settledExpanded: false };
+    // Grouped, the inbox has no arrangeable order and no time order to project.
+    const input = { items, settledOrder: [], settledExpanded: false, inboxArrangeable: false };
 
     it("keeps the group headers in place while a row inside a group moves within the inbox", () => {
       const result = preview(input, "a1", "a2");
       expect(result.get(sidebarMarkerId("needs-you-header"))).toEqual(stationary);
-      expect(result.get(sidebarMarkerId("project-group:alpha"))).toEqual(stationary);
+      expect(result.get(groupHeaderId)).toEqual(stationary);
       expect(result.get("a2")).toEqual(stationary);
     });
 
     it("closes the gap under a group header when its row leaves for Settled", () => {
       const result = preview(input, "a1", sidebarMarkerId("settled-placeholder"));
-      expect(result.get(sidebarMarkerId("project-group:alpha"))).toEqual(stationary);
+      expect(result.get(groupHeaderId)).toEqual(stationary);
       expect(result.get("a2")?.y).toBe(-83);
     });
 
     it("opens a gap under Needs you for an unpinned row, keeping the groups visible", () => {
       const result = preview(input, "p", "f");
       expect(result.get(sidebarMarkerId("needs-you-header"))?.scaleY).toBe(1);
-      expect(result.get(sidebarMarkerId("project-group:alpha"))?.scaleY).toBe(1);
+      expect(result.get(groupHeaderId)?.scaleY).toBe(1);
       // f moves down by the arriving card, which the pinned slot no longer holds.
       expect(result.get("f")?.y).toBe(0);
     });

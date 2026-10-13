@@ -4,26 +4,115 @@
  * legacy sidebar's project header look. The rows themselves are the
  * sidebar's own thread rows; Sidebar.tsx places these pieces in its list.
  */
+import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
+import { threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
+import { resolveSidebarFloatToTopStatusSet } from "@t3tools/contracts/settings";
+import * as Schema from "effect/Schema";
 import { FolderIcon, ChevronRightIcon } from "lucide-react";
-import { Fragment } from "react";
+import { Fragment, useCallback, useMemo } from "react";
+import { useLocalStorage } from "../../hooks/useLocalStorage";
+import { useClientSettings } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
+import { useUiStateStore } from "../../uiStateStore";
 import { ProjectFavicon, type ProjectFaviconProject } from "../ProjectFavicon";
-import { resolveSidebarProjectGroupCounts } from "../Sidebar.logic";
+import type { SidebarProjectGroupHeaderItem } from "../Sidebar.logic";
 import { SidebarMenuButton } from "../ui/sidebar";
+import {
+  buildSidebarGroupedActiveModel,
+  buildSidebarGroupedActiveRows,
+  resolveSidebarProjectGroupCounts,
+  resolveSidebarThreadAttention,
+  sidebarProjectGroupToOpenOnDrop,
+  toggleSidebarProjectGroupOpen,
+  type SidebarCountedStatus,
+} from "./projectGroups.logic";
 
-// The same hues as the row's status badge, so a count reads as the badge it stands for.
-const COUNT_CLASS_NAME: Record<
-  ReturnType<typeof resolveSidebarProjectGroupCounts>[number]["status"],
-  string
-> = {
-  approval: "text-warning-foreground",
-  input: "text-indigo-600 dark:text-indigo-300",
-  failed: "text-error",
-  limited: "text-warning",
-  woke: "text-warning",
-  done: "text-success",
-  waiting: "text-muted-foreground",
-};
+// The fold keys of the project groups the user opened. A group not listed is
+// folded, so new projects start folded.
+const PROJECT_GROUPS_EXPANDED_KEY = "t3code:sidebar:project-groups-expanded";
+const NO_OPEN_PROJECT_GROUPS: readonly string[] = [];
+const OpenProjectGroupsSchema = Schema.Array(Schema.String);
+
+type GroupedProject = Parameters<typeof buildSidebarGroupedActiveModel>[0]["projects"][number] &
+  ProjectFaviconProject;
+
+/**
+ * The grouped layout's state for the sidebar: null when grouping is off.
+ * `projects` must span every machine, so a thread kept visible from a
+ * filtered-out machine still finds its project.
+ */
+export function useSidebarProjectGroups<TProject extends GroupedProject>(input: {
+  readonly activeThreads: readonly EnvironmentThreadShell[];
+  readonly projects: readonly TProject[];
+  readonly routeThreadKey: string | null;
+  readonly snoozeNow: string;
+  readonly observedReturnAt?: (thread: EnvironmentThreadShell) => number | undefined;
+}) {
+  const { activeThreads, projects, routeThreadKey, snoozeNow, observedReturnAt } = input;
+  const enabled = useClientSettings((s) => s.sidebarProjectGroupsEnabled);
+  const floatToTopStatuses = useClientSettings((s) => s.sidebarFloatToTopStatuses);
+  const threadLastVisitedAtById = useUiStateStore((state) => state.threadLastVisitedAtById);
+  const [openFoldKeys, setOpenFoldKeys] = useLocalStorage(
+    PROJECT_GROUPS_EXPANDED_KEY,
+    NO_OPEN_PROJECT_GROUPS,
+    OpenProjectGroupsSchema,
+  );
+  const modelInput = useMemo(
+    () => ({
+      projects,
+      // A status the contracts' "Float to the top" record lacks fails to compile here.
+      floatStatuses: resolveSidebarFloatToTopStatusSet(
+        floatToTopStatuses satisfies Record<SidebarCountedStatus, boolean>,
+      ),
+      resolveAttention: (thread: EnvironmentThreadShell) =>
+        resolveSidebarThreadAttention({
+          thread,
+          localLastVisitedAt: threadLastVisitedAtById[threadKeyOf(thread)],
+          wokeAt: threadWokeAt(thread, { now: snoozeNow }),
+        }),
+      ...(observedReturnAt === undefined ? {} : { observedReturnAt }),
+    }),
+    [floatToTopStatuses, observedReturnAt, projects, snoozeNow, threadLastVisitedAtById],
+  );
+  const grouped = useMemo(() => {
+    if (!enabled) return null;
+    const model = buildSidebarGroupedActiveModel({ ...modelInput, activeThreads });
+    return {
+      model,
+      ...buildSidebarGroupedActiveRows({
+        model,
+        openFoldKeys,
+        routeThreadKey,
+        threadKey: threadKeyOf,
+      }),
+    };
+  }, [activeThreads, enabled, modelInput, openFoldKeys, routeThreadKey]);
+  const projectKeys = useMemo(() => projects.map((project) => project.projectKey), [projects]);
+  const toggleGroup = useCallback(
+    (foldKey: string) =>
+      setOpenFoldKeys((keys) => toggleSidebarProjectGroupOpen(keys, foldKey, projectKeys)),
+    [projectKeys, setOpenFoldKeys],
+  );
+  /** Opens the folded group a thread dropped into the inbox lands in. */
+  const openGroupForDrop = useCallback(
+    (thread: EnvironmentThreadShell) => {
+      if (!enabled) return;
+      const foldKey = sidebarProjectGroupToOpenOnDrop({ ...modelInput, thread, openFoldKeys });
+      if (foldKey !== null) toggleGroup(foldKey);
+    },
+    [enabled, modelInput, openFoldKeys, toggleGroup],
+  );
+  const projectByKey = useMemo(
+    () => new Map(projects.map((project) => [project.projectKey, project])),
+    [projects],
+  );
+  return { grouped, toggleGroup, openGroupForDrop, projectByKey };
+}
+
+function threadKeyOf(thread: Pick<EnvironmentThreadShell, "environmentId" | "id">): string {
+  return scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+}
 
 export function SidebarNeedsYouHeader(props: { empty: boolean }) {
   return (
@@ -42,17 +131,16 @@ export function SidebarNeedsYouHeader(props: { empty: boolean }) {
 }
 
 export function SidebarProjectGroupHeader(props: {
-  displayName: string;
+  header: SidebarProjectGroupHeaderItem;
   /** Null for the "No project" group, which shows a folder instead. */
   project: ProjectFaviconProject | null;
-  open: boolean;
-  statusCounts: Parameters<typeof resolveSidebarProjectGroupCounts>[0];
   onToggle: () => void;
 }) {
-  const counts = resolveSidebarProjectGroupCounts(props.statusCounts, { open: props.open });
+  const { header } = props;
+  const counts = resolveSidebarProjectGroupCounts(header.statusCounts, { open: header.open });
   return (
     <SidebarMenuButton
-      aria-expanded={props.open}
+      aria-expanded={header.open}
       data-testid="sidebar-project-group-header"
       onClick={props.onToggle}
     >
@@ -60,7 +148,7 @@ export function SidebarProjectGroupHeader(props: {
         aria-hidden
         className={cn(
           "-ml-0.5 size-3.5 shrink-0 text-muted-foreground/70 transition-transform duration-150",
-          props.open && "rotate-90",
+          header.open && "rotate-90",
         )}
       />
       <span className="flex shrink-0">
@@ -71,7 +159,7 @@ export function SidebarProjectGroupHeader(props: {
         )}
       </span>
       <span className="min-w-0 flex-1 truncate text-sm font-medium text-sidebar-foreground/90">
-        {props.displayName}
+        {header.displayName}
       </span>
       {counts.length > 0 ? (
         <span className="flex shrink-0 items-center gap-1 text-xs font-medium tabular-nums">
@@ -82,7 +170,7 @@ export function SidebarProjectGroupHeader(props: {
                   ·
                 </span>
               ) : null}
-              <span className={COUNT_CLASS_NAME[entry.status]}>
+              <span className={entry.className}>
                 {entry.count} {entry.label}
               </span>
             </Fragment>

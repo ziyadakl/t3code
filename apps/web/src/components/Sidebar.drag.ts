@@ -3,7 +3,6 @@ import { verticalListSortingStrategy, type SortingStrategy } from "@dnd-kit/sort
 import {
   resolveSidebarDropTarget,
   sidebarListItemId,
-  sidebarProjectGroupFoldKeyOfMarker,
   sidebarMarkerId,
   type SidebarListItem,
   type SidebarListMarker,
@@ -21,8 +20,18 @@ const isShelfHeader = (item: SidebarListItem | undefined) =>
     item.marker === "settled-header");
 
 const isGroupedInboxMarker = (item: SidebarListItem) =>
-  item.kind === "marker" &&
-  (item.marker === "needs-you-header" || sidebarProjectGroupFoldKeyOfMarker(item.marker) !== null);
+  item.kind === "marker" && (item.marker === "needs-you-header" || item.marker === "project-group");
+
+/** Rows sitting under a project group header: one-line rows (grouped layout). */
+function groupedRowKeys(items: readonly SidebarListItem[]): ReadonlySet<string> {
+  const keys = new Set<string>();
+  let underGroup = false;
+  for (const item of items) {
+    if (item.kind === "marker") underGroup = item.marker === "project-group";
+    else if (underGroup) keys.add(item.key);
+  }
+  return keys;
+}
 
 /** Keep the lifted card below the Pins label, including when Pins is empty.
  * The container rect follows scrolling; the offset is measured once at pickup. */
@@ -109,6 +118,10 @@ export function createSidebarSortingStrategy(input: {
   settledOrder: readonly string[];
   /** Time-ordered inbox (Working beta): where the lifted row would land. */
   activeOrder?: readonly string[];
+  /** False when the inbox has no user-arranged order. With no `activeOrder`
+   * to project either (grouped layout), its rows and headers hold their
+   * places. Defaults to true. */
+  inboxArrangeable?: boolean;
   settledExpanded: boolean;
   settledVisibleCount?: number;
   routeThreadKey?: string | null;
@@ -122,7 +135,8 @@ export function createSidebarSortingStrategy(input: {
   if (input.enabled === false) return () => stationary;
   const { items } = input;
   const indices = new Map(items.map((item, index) => [sidebarListItemId(item), index]));
-  const isGroupedInbox = items.some(isGroupedInboxMarker);
+  const inboxHoldsPlaces = input.inboxArrangeable === false && input.activeOrder === undefined;
+  const groupedRows = groupedRowKeys(items);
   let previous: Pick<Layout, "rects" | "activeIndex" | "overIndex"> | undefined;
   let transforms: ReturnType<SortingStrategy>[] | null = [];
 
@@ -150,7 +164,7 @@ export function createSidebarSortingStrategy(input: {
         }
         continue;
       }
-      if (item.compact) {
+      if (groupedRows.has(item.key)) {
         // A one-line row in a project group measures neither a card nor a shelf row.
       } else if (
         item.section === "pinned" ||
@@ -204,8 +218,8 @@ export function createSidebarSortingStrategy(input: {
     marker("pinned-header");
     projected.push(...groups.pinned);
     marker("pinned-divider");
-    if (isGroupedInbox) {
-      // Fork (grouped layout): the inbox has no arrangeable order, so its
+    if (inboxHoldsPlaces) {
+      // Fork (grouped layout): the inbox has no order to preview, so its
       // headers and rows hold their places. A row leaving closes its gap; an
       // arriving row opens one under "Needs you".
       const inbox: SidebarListItem[] = [];
@@ -251,7 +265,10 @@ export function createSidebarSortingStrategy(input: {
           ? cardHeight
           : slimHeight;
       // A grouped row that stays in the inbox keeps its own measured height.
-      const moved = item.kind === "thread" && item.key === active.key && !item.compact;
+      const moved =
+        item.kind === "thread" &&
+        item.key === active.key &&
+        !(item.section === "active" && groupedRows.has(item.key));
       return item.kind === "marker" &&
         (item.marker === "pinned-header" || item.marker === "pinned-divider")
         ? labelHeight
