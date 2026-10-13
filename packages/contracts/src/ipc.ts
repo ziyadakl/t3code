@@ -5,6 +5,7 @@ import { EnvironmentId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { BrowserProfileId } from "./browserProfile.ts";
 import type {
   BrowserImportResult,
+  BrowserImportSite,
   BrowserImportSource,
   BrowserImportSourceId,
 } from "./browserImport.ts";
@@ -1269,11 +1270,19 @@ export interface DesktopPreviewBridge {
   ) => Promise<DesktopPreviewWebviewConfig>;
   /** Browsers on this machine whose cookies can be imported. */
   listBrowserImportSources: () => Promise<ReadonlyArray<BrowserImportSource>>;
+  /** Sites one source profile holds cookies for. Reads no secrets. */
+  listBrowserImportSites: (input: {
+    readonly sourceId: BrowserImportSourceId;
+    readonly sourceProfileDirectory: string;
+    readonly currentUrl?: string;
+  }) => Promise<ReadonlyArray<BrowserImportSite>>;
   importBrowserCookies: (input: {
     readonly environmentId: EnvironmentId;
     readonly sourceId: BrowserImportSourceId;
     readonly sourceProfileDirectory: string;
     readonly targetProfileId: string;
+    /** Registrable domains to import; absent imports every cookie. */
+    readonly domains?: ReadonlyArray<string>;
   }) => Promise<BrowserImportResult>;
   setAnnotationTheme: (theme: DesktopPreviewAnnotationTheme) => Promise<void>;
   /**
