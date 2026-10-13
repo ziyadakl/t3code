@@ -25,6 +25,14 @@ describe("sensitiveKind", () => {
     expect(sensitiveKind("live.fr")).toBe("email");
     expect(sensitiveKind("googleblog.com")).toBeUndefined();
     expect(sensitiveKind("notgoogle.co.uk")).toBeUndefined();
+    expect(sensitiveKind("olive.com")).toBeUndefined();
+    expect(sensitiveKind("outlookindia.com")).toBeUndefined();
+  });
+
+  it("does not take a user's page on a hosting suffix for the brand", () => {
+    expect(sensitiveKind("live.blogspot.com")).toBeUndefined();
+    expect(sensitiveKind("google.blogspot.com")).toBeUndefined();
+    expect(sensitiveKind("someone.github.io")).toBeUndefined();
   });
 
   it("flags the sign-in-with identity providers", () => {

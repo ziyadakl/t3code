@@ -10,7 +10,7 @@
  * @module SensitiveSites
  */
 import type { BrowserImportSensitiveKind } from "@t3tools/contracts";
-import { getDomainWithoutSuffix } from "tldts";
+import { parse } from "tldts";
 
 const SENSITIVE_SITES: ReadonlyArray<readonly [BrowserImportSensitiveKind, ReadonlyArray<string>]> =
   [
@@ -113,8 +113,13 @@ const KIND_BY_BRAND = new Map<string, BrowserImportSensitiveKind>([
 export const sensitiveKind = (domain: string): BrowserImportSensitiveKind | undefined => {
   const listed = KIND_BY_DOMAIN.get(domain);
   if (listed !== undefined) return listed;
-  const brand = getDomainWithoutSuffix(domain, { allowPrivateDomains: true });
-  const branded = brand === null ? undefined : KIND_BY_BRAND.get(brand);
+  // ICANN suffixes only, and only when the domain is itself the registrable
+  // one: `live.blogspot.com` is someone's blog, not Microsoft's mailbox.
+  // `live.tv` still reads as the brand; that costs the user one tick.
+  const { domain: registrable, domainWithoutSuffix: brand } = parse(domain, {
+    allowPrivateDomains: false,
+  });
+  const branded = registrable === domain && brand !== null ? KIND_BY_BRAND.get(brand) : undefined;
   if (branded !== undefined) return branded;
   // Catches the long tail of banks the list cannot name: tdbank.com,
   // bankofireland.ie, and so on.
