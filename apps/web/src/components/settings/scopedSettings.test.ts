@@ -158,6 +158,7 @@ describe("scoped settings writes", () => {
           mode: "custom",
           rules: {
             worktreeAfterDays: 12,
+            worktreeAfterArchivedDays: null,
             worktreeOnDelete: true,
             worktreeOnMerge: true,
             worktreeUnchanged: false,
@@ -182,6 +183,7 @@ describe("scoped settings writes", () => {
     expect(policies).toEqual([
       {
         worktreeAfterDays: 12,
+        worktreeAfterArchivedDays: null,
         worktreeOnDelete: false,
         worktreeOnMerge: true,
         worktreeUnchanged: false,
@@ -189,8 +191,59 @@ describe("scoped settings writes", () => {
       },
       {
         worktreeAfterDays: null,
+        worktreeAfterArchivedDays: null,
         worktreeOnDelete: false,
         worktreeOnMerge: false,
+        worktreeUnchanged: false,
+        worktreeKeepWhen: "uncommitted-changes",
+      },
+    ]);
+  });
+  it("sets the archived-thread rule on every machine without changing their other rules", () => {
+    const custom = environment("Laptop", {
+      settings: {
+        worktreeCleanup: {
+          mode: "custom",
+          rules: {
+            worktreeAfterDays: 12,
+            worktreeAfterArchivedDays: null,
+            worktreeOnDelete: true,
+            worktreeOnMerge: false,
+            worktreeUnchanged: false,
+            worktreeKeepWhen: "uncommitted-changes",
+          },
+        },
+      },
+    });
+    const inherited = environment("Server", {
+      settings: {
+        storageCleanup: { ...DEFAULT_SERVER_SETTINGS.storageCleanup, worktreeOnMerge: true },
+      },
+    });
+    const targets = [custom, inherited];
+    const plan = planScopedSettingsPatch(all, targets, {
+      storageCleanup: { worktreeAfterArchivedDays: 14 },
+    });
+    const policies = plan.serverWrites.map((write, index) =>
+      resolveWorktreeCleanup(
+        applyServerSettingsPatch(targets[index]!.serverConfig!.settings, write.patch),
+        null,
+      ),
+    );
+    expect(policies).toEqual([
+      {
+        worktreeAfterDays: 12,
+        worktreeAfterArchivedDays: 14,
+        worktreeOnDelete: true,
+        worktreeOnMerge: false,
+        worktreeUnchanged: false,
+        worktreeKeepWhen: "uncommitted-changes",
+      },
+      {
+        worktreeAfterDays: null,
+        worktreeAfterArchivedDays: 14,
+        worktreeOnDelete: false,
+        worktreeOnMerge: true,
         worktreeUnchanged: false,
         worktreeKeepWhen: "uncommitted-changes",
       },
@@ -296,6 +349,7 @@ describe("scoped settings writes", () => {
               mode: "custom",
               rules: {
                 worktreeAfterDays: 8,
+                worktreeAfterArchivedDays: null,
                 worktreeOnDelete: false,
                 worktreeOnMerge: true,
                 worktreeUnchanged: false,
@@ -317,6 +371,7 @@ describe("scoped settings writes", () => {
             mode: "custom",
             rules: {
               worktreeAfterDays: 8,
+              worktreeAfterArchivedDays: null,
               worktreeOnDelete: true,
               worktreeOnMerge: true,
               worktreeUnchanged: false,
@@ -331,6 +386,7 @@ describe("scoped settings writes", () => {
             mode: "custom",
             rules: {
               worktreeAfterDays: 30,
+              worktreeAfterArchivedDays: null,
               worktreeOnDelete: true,
               worktreeOnMerge: false,
               worktreeUnchanged: false,

@@ -271,6 +271,7 @@ function CleanupSection() {
     if (!settings) return false;
     const enabled = (rules: WorktreeCleanupRules) =>
       rules.worktreeAfterDays !== null ||
+      rules.worktreeAfterArchivedDays !== null ||
       rules.worktreeOnMerge ||
       rules.worktreeOnDelete ||
       rules.worktreeUnchanged;
@@ -538,6 +539,27 @@ export function StorageSettingsPanel() {
                 />
               }
             />
+            {connectedEnvironments.every(
+              (environment) =>
+                environment.serverConfig?.environment.capabilities
+                  .storageCleanupArchivedWorktrees === true,
+            ) && (
+              <SettingsRow
+                title="Delete worktrees of archived threads"
+                status={ruleStatus("worktreeAfterArchivedDays")}
+                description="Remove a worktree once its thread has been archived for this many days. Branches and thread history are kept."
+                serverScoped={!isProjectScope}
+                control={
+                  <RetentionControl
+                    label="Delete worktrees of archived threads"
+                    value={settings.worktreeAfterArchivedDays}
+                    onChange={(worktreeAfterArchivedDays) =>
+                      updateWorktree({ worktreeAfterArchivedDays })
+                    }
+                  />
+                }
+              />
+            )}
             <SettingsRow
               title="Delete merged worktrees"
               status={ruleStatus("worktreeOnMerge")}

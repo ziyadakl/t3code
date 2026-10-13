@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
@@ -274,7 +275,11 @@ const cleanupFixture = Effect.gen(function* () {
     } as unknown as ProjectStore.ProjectStoreV2["Service"]),
     Effect.provideService(ProjectionStore.ProjectionStoreV2, {
       getShellSnapshot: (input?: { location?: string }) =>
-        Effect.sync(() => ({ threads: input?.location === "archive" ? [] : threads })),
+        Effect.sync(() => ({
+          threads: threads.filter(
+            (thread) => (thread.archivedAt !== null) === (input?.location === "archive"),
+          ),
+        })),
     } as unknown as ProjectionStore.ProjectionStoreV2["Service"]),
     Effect.provideService(Orchestrator.OrchestratorV2, {
       streamDomainEvents: Stream.empty,
@@ -330,6 +335,9 @@ const cleanupFixture = Effect.gen(function* () {
     setPolicy: (worktreeKeepWhen: WorktreeKeepWhen) => {
       settings = { ...settings, storageCleanup: { ...settings.storageCleanup, worktreeKeepWhen } };
     },
+    setStorageCleanup: (patch: Partial<typeof settings.storageCleanup>) => {
+      settings = { ...settings, storageCleanup: { ...settings.storageCleanup, ...patch } };
+    },
     disable: () => {
       settings = {
         ...settings,
@@ -360,6 +368,66 @@ const runCleanupTest = <A, E>(
     | Scope.Scope
   >,
 ) => effect.pipe(Effect.provide(cleanupTestLayer), Effect.scoped);
+
+describe("archived thread worktree cleanup", () => {
+  // These run on the live clock, so dates are relative to its current time.
+  const archivedThread = (worktree: string, archivedDaysAgo: number | null) =>
+    Clock.currentTimeMillis.pipe(
+      Effect.map((now) => {
+        const daysAgo = (days: number) => DateTime.makeUnsafe(now - days * DAY_MS);
+        return shell({
+          branch: "feature",
+          worktreePath: worktree,
+          createdAt: daysAgo(30),
+          latestUserMessageAt: daysAgo(1),
+          archivedAt: archivedDaysAgo === null ? null : daysAgo(archivedDaysAgo),
+        });
+      }),
+    );
+  it.live("removes the worktree of a thread archived longer than the setting", () =>
+    runCleanupTest(
+      Effect.gen(function* () {
+        const { service, fs, worktree, setThreads, setStorageCleanup } = yield* cleanupFixture;
+        setStorageCleanup({ worktreeAfterDays: null, worktreeAfterArchivedDays: 7 });
+        setThreads([yield* archivedThread(worktree, 10)]);
+        const report = yield* service.runNow;
+        expect(report.entries[0]).toMatchObject({
+          outcome: "removed",
+          reason: "Archived for 10 days",
+        });
+        expect(yield* fs.exists(worktree)).toBe(false);
+      }),
+    ),
+  );
+  it.live.each([
+    { name: "archived too recently", archivedDaysAgo: 3, reason: "Archived for 3 of 7 days" },
+    { name: "not archived", archivedDaysAgo: null, reason: "Not archived" },
+  ])("keeps the worktree of a thread $name", ({ archivedDaysAgo, reason }) =>
+    runCleanupTest(
+      Effect.gen(function* () {
+        const { service, fs, worktree, setThreads, setStorageCleanup } = yield* cleanupFixture;
+        setStorageCleanup({ worktreeAfterDays: null, worktreeAfterArchivedDays: 7 });
+        setThreads([yield* archivedThread(worktree, archivedDaysAgo)]);
+        const report = yield* service.runNow;
+        expect(report.entries[0]).toMatchObject({ outcome: "kept", reason });
+        expect(yield* fs.exists(worktree)).toBe(true);
+      }),
+    ),
+  );
+  it.live("keeps an archived thread's worktree with uncommitted changes", () =>
+    runCleanupTest(
+      Effect.gen(function* () {
+        const { service, fs, worktree, setThreads, setStorageCleanup } = yield* cleanupFixture;
+        setStorageCleanup({ worktreeAfterDays: null, worktreeAfterArchivedDays: 7 });
+        setThreads([yield* archivedThread(worktree, 10)]);
+        yield* fs.writeFileString(`${worktree}/tracked.txt`, "edited\n");
+        const report = yield* service.runNow;
+        expect(report.entries[0]).toMatchObject({ outcome: "kept" });
+        expect(yield* fs.exists(worktree)).toBe(true);
+      }),
+    ),
+  );
+});
 
 describe("storage cleanup reports and local file policies", () => {
   it.live("measures nested regular files without following symlinks", () =>

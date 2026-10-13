@@ -56,6 +56,7 @@ describe("storage cleanup settings", () => {
     expect(decodeServerSettings({}).worktreeCleanup).toBeNull();
     expect(decodeServerSettings({}).storageCleanup).toEqual({
       worktreeAfterDays: null,
+      worktreeAfterArchivedDays: null,
       worktreeOnMerge: false,
       worktreeOnDelete: false,
       worktreeUnchanged: false,
@@ -102,13 +103,30 @@ describe("storage cleanup settings", () => {
       },
     });
     expect(settings.worktreeCleanup).toMatchObject({
-      rules: { worktreeKeepWhen: "uncommitted-changes" },
+      rules: { worktreeKeepWhen: "uncommitted-changes", worktreeAfterArchivedDays: null },
     });
     expect(
       decodeServerSettingsPatch({ storageCleanup: { worktreeKeepWhen: "tracked-changes" } }),
     ).toEqual({ storageCleanup: { worktreeKeepWhen: "tracked-changes" } });
     expect(() =>
       decodeServerSettingsPatch({ storageCleanup: { worktreeKeepWhen: "unknown" } }),
+    ).toThrow();
+  });
+
+  it("accepts and clears the archived-thread worktree rule globally and per project", () => {
+    expect(
+      decodeServerSettingsPatch({ storageCleanup: { worktreeAfterArchivedDays: 14 } }),
+    ).toEqual({ storageCleanup: { worktreeAfterArchivedDays: 14 } });
+    expect(
+      decodeServerSettingsPatch({ storageCleanup: { worktreeAfterArchivedDays: null } }),
+    ).toEqual({ storageCleanup: { worktreeAfterArchivedDays: null } });
+    expect(
+      decodeServerSettingsPatch({
+        worktreeCleanup: { mode: "custom", rules: { worktreeAfterArchivedDays: 3 } },
+      }),
+    ).toEqual({ worktreeCleanup: { mode: "custom", rules: { worktreeAfterArchivedDays: 3 } } });
+    expect(() =>
+      decodeServerSettingsPatch({ storageCleanup: { worktreeAfterArchivedDays: 0 } }),
     ).toThrow();
   });
 

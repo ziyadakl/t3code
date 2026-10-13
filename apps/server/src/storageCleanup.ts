@@ -67,6 +67,7 @@ function cleanupFailureReason(error: { readonly message: string }) {
 
 const worktreeCleanupEnabled = (rules: WorktreeCleanupRules) =>
   rules.worktreeAfterDays !== null ||
+  rules.worktreeAfterArchivedDays !== null ||
   rules.worktreeOnMerge ||
   rules.worktreeOnDelete ||
   rules.worktreeUnchanged;
@@ -127,6 +128,9 @@ export function storageCleanupActivityAt(thread: OrchestrationV2ThreadShell): nu
     ].flatMap((value) => (value == null ? [] : [DateTime.toEpochMillis(value)])),
   );
 }
+
+const archivedAtMillis = (thread: Pick<OrchestrationV2ThreadShell, "archivedAt">) =>
+  thread.archivedAt === null ? null : DateTime.toEpochMillis(thread.archivedAt);
 
 /**
  * Whether the host's pull request proves this worktree's head was merged. A
@@ -481,10 +485,20 @@ const make = Effect.gen(function* () {
           !deleted &&
           settings.worktreeAfterDays !== null &&
           storageCleanupActivityAt(thread) < now - settings.worktreeAfterDays * DAY_MS;
-        let eligible = deleted || old;
+        // Unarchiving clears archivedAt, so the rule stops applying.
+        const archivedAt = archivedAtMillis(thread);
+        const archivedDays = archivedAt === null ? 0 : Math.floor((now - archivedAt) / DAY_MS);
+        const archivedLong =
+          !deleted &&
+          settings.worktreeAfterArchivedDays !== null &&
+          archivedAt !== null &&
+          archivedAt < now - settings.worktreeAfterArchivedDays * DAY_MS;
+        let eligible = deleted || old || archivedLong;
         let removalReason = deleted
           ? "thread was deleted"
-          : `inactive for ${Math.floor((now - storageCleanupActivityAt(thread)) / DAY_MS)} days`;
+          : old
+            ? `inactive for ${Math.floor((now - storageCleanupActivityAt(thread)) / DAY_MS)} days`
+            : `archived for ${archivedDays} days`;
         if (!eligible && (settings.worktreeUnchanged || settings.worktreeOnMerge)) {
           const repositoryCwd = path.resolve(project.workspaceRoot);
           const remote = yield* git.resolvePrimaryRemoteName(repositoryCwd);
@@ -532,9 +546,13 @@ const make = Effect.gen(function* () {
           return keep(
             !deleted && settings.worktreeAfterDays !== null
               ? `inactive for ${Math.floor((now - storageCleanupActivityAt(thread)) / DAY_MS)} of ${settings.worktreeAfterDays} days`
-              : settings.worktreeOnMerge
-                ? "not merged"
-                : "has commits beyond the default branch",
+              : !deleted && settings.worktreeAfterArchivedDays !== null
+                ? archivedAt === null
+                  ? "not archived"
+                  : `archived for ${archivedDays} of ${settings.worktreeAfterArchivedDays} days`
+                : settings.worktreeOnMerge
+                  ? "not merged"
+                  : "has commits beyond the default branch",
           );
         // Threads, queued deletion work and provider sessions as they are now, so a
         // queued turn, resumed session or new thread sharing this path cancels
@@ -566,7 +584,8 @@ const make = Effect.gen(function* () {
             latest.length !== 1 ||
             latest[0]!.id !== thread.id ||
             !storageCleanupThreadIdle(latest[0]!, now) ||
-            storageCleanupActivityAt(latest[0]!) !== storageCleanupActivityAt(thread)
+            storageCleanupActivityAt(latest[0]!) !== storageCleanupActivityAt(thread) ||
+            archivedAtMillis(latest[0]!) !== archivedAtMillis(thread)
           )
             return "thread activity or shared worktree changed since check";
           // Sessions can outlive their run and can be shared across app threads.
