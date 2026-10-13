@@ -120,12 +120,11 @@ export const make = Effect.gen(function* () {
     archive: boolean,
   ) {
     const children = yield* projections.getSubagentChildren(threadId);
+    const type = archive ? "thread.archive" : "thread.unarchive";
+    const reason = archive ? "archive-with-parent" : "unarchive-with-parent";
     yield* Effect.forEach(
       children.filter((child) => (child.archivedAt === null) === archive),
-      (child) =>
-        archive
-          ? dispatch("thread.archive", child.id, "archive-with-parent")
-          : dispatch("thread.unarchive", child.id, "unarchive-with-parent"),
+      (child) => dispatch(type, child.id, reason),
       { concurrency: 8, discard: true },
     );
   });

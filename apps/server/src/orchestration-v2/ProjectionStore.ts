@@ -5373,46 +5373,40 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           readonly orphaned: number;
           readonly busy: number;
         }>`
-          SELECT t.payload_json,
-            (
-              json_extract(t.payload_json, '$.lineage.relationshipToParent') = 'subagent'
-              AND (
-                parent.thread_id IS NULL
-                OR parent.deleted_at IS NOT NULL
-                OR json_extract(parent.payload_json, '$.archivedAt') IS NOT NULL
-              )
-            ) AS orphaned,
+          SELECT candidate.payload_json, candidate.orphaned,
             (
               EXISTS (
                 SELECT 1 FROM orchestration_v2_projection_runs active
-                WHERE active.thread_id = t.thread_id
+                WHERE active.thread_id = candidate.thread_id
                   AND active.status IN ('preparing', 'starting', 'running', 'waiting')
               )
               OR EXISTS (
                 SELECT 1 FROM orchestration_v2_projection_runtime_requests request
-                WHERE request.thread_id = t.thread_id AND request.status = 'pending'
+                WHERE request.thread_id = candidate.thread_id AND request.status = 'pending'
               )
             ) AS busy
-          FROM orchestration_v2_projection_threads t
-          LEFT JOIN orchestration_v2_projection_threads parent
-            ON parent.thread_id = json_extract(t.payload_json, '$.lineage.parentThreadId')
-          WHERE t.deleted_at IS NULL
-            AND json_extract(t.payload_json, '$.archivedAt') IS NULL
-            AND (
+          FROM (
+            SELECT t.thread_id, t.payload_json, t.updated_at,
               (
-                json_extract(t.payload_json, '$.settledOverride') = 'settled'
-                AND json_extract(t.payload_json, '$.settledAt') IS NOT NULL
-              )
-              OR (
                 json_extract(t.payload_json, '$.lineage.relationshipToParent') = 'subagent'
                 AND (
                   parent.thread_id IS NULL
                   OR parent.deleted_at IS NOT NULL
                   OR json_extract(parent.payload_json, '$.archivedAt') IS NOT NULL
                 )
-              )
+              ) AS orphaned
+            FROM orchestration_v2_projection_threads t
+            LEFT JOIN orchestration_v2_projection_threads parent
+              ON parent.thread_id = json_extract(t.payload_json, '$.lineage.parentThreadId')
+            WHERE t.deleted_at IS NULL
+              AND json_extract(t.payload_json, '$.archivedAt') IS NULL
+          ) candidate
+          WHERE candidate.orphaned
+            OR (
+              json_extract(candidate.payload_json, '$.settledOverride') = 'settled'
+              AND json_extract(candidate.payload_json, '$.settledAt') IS NOT NULL
             )
-          ORDER BY t.updated_at ASC, t.thread_id ASC
+          ORDER BY candidate.updated_at ASC, candidate.thread_id ASC
         `;
         return yield* Effect.forEach(rows, (row) =>
           decodeThreadPayload(row.payload_json).pipe(
