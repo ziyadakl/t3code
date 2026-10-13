@@ -23,6 +23,7 @@ import {
   sessionGrantsScope,
 } from "@t3tools/contracts";
 import {
+  applyClientSettingsPatch,
   type ClientSettingsPatch,
   type ClientSettings,
   DEFAULT_CLIENT_SETTINGS,
@@ -198,7 +199,7 @@ export function persistClientSettingsPatch(
   if (deferPatch) {
     deferredClientSettingsPatchCount += 1;
   } else {
-    replaceClientSettingsSnapshot({ ...getClientSettingsSnapshot(), ...patch });
+    replaceClientSettingsSnapshot(applyClientSettingsPatch(getClientSettingsSnapshot(), patch));
   }
   return enqueueClientSettingsPersistence(async () => {
     if (deferPatch) {
@@ -206,7 +207,7 @@ export function persistClientSettingsPatch(
         if (clientSettingsHydrationStatus !== "ready") {
           await hydrateClientSettings();
         }
-        replaceClientSettingsSnapshot({ ...getClientSettingsSnapshot(), ...patch });
+        replaceClientSettingsSnapshot(applyClientSettingsPatch(getClientSettingsSnapshot(), patch));
       } finally {
         deferredClientSettingsPatchCount -= 1;
       }

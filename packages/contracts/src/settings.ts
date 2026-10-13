@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 import * as Duration from "effect/Duration";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
+import * as Struct from "effect/Struct";
 import {
   ForwardCompatibleNullable,
   ForwardCompatibleOptional,
@@ -320,6 +321,41 @@ export type ModelPreferences = {
   readonly providerModelPreferences: typeof ProviderModelPreferences.Type;
 };
 
+/**
+ * Which sidebar top statuses float a thread above the project groups. Keys
+ * match the web sidebar's `SidebarV2TopStatusKind` (minus `working`, which
+ * lives in the Working shelf). A missing key decodes to its default.
+ */
+export const SidebarFloatToTopStatuses = Schema.Struct({
+  done: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  input: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  approval: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  failed: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  woke: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  limited: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  waiting: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+});
+export type SidebarFloatToTopStatuses = typeof SidebarFloatToTopStatuses.Type;
+export type SidebarFloatToTopStatus = keyof SidebarFloatToTopStatuses;
+
+/** A "Float to the top" update: statuses it leaves out keep their saved value. */
+export const SidebarFloatToTopStatusesPatch = Schema.Struct({
+  done: Schema.optionalKey(Schema.Boolean),
+  input: Schema.optionalKey(Schema.Boolean),
+  approval: Schema.optionalKey(Schema.Boolean),
+  failed: Schema.optionalKey(Schema.Boolean),
+  woke: Schema.optionalKey(Schema.Boolean),
+  limited: Schema.optionalKey(Schema.Boolean),
+  waiting: Schema.optionalKey(Schema.Boolean),
+});
+
+/** The statuses switched on in a "Float to the top" record. */
+export function resolveSidebarFloatToTopStatusSet(
+  statuses: SidebarFloatToTopStatuses,
+): ReadonlySet<SidebarFloatToTopStatus> {
+  return new Set(Struct.keys(statuses).filter((status) => statuses[status]));
+}
+
 export const ClientSettingsSchema = Schema.Struct({
   notificationMode: NotificationMode.pipe(
     Schema.withDecodingDefault(Effect.succeed("off" as const)),
@@ -473,6 +509,14 @@ export const ClientSettingsSchema = Schema.Struct({
   // time, so manual placement there is ignored (and kept) while it is on.
   sidebarWorkingShelfEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
+  // Fork: the active list folds threads under one header per project, and
+  // threads whose top status is switched on float above the groups.
+  sidebarProjectGroupsEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(true)),
+  ),
+  sidebarFloatToTopStatuses: SidebarFloatToTopStatuses.pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
   ),
   sidebarProjectGroupingMode: SidebarProjectGroupingMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_PROJECT_GROUPING_MODE)),
@@ -1765,6 +1809,8 @@ export const ClientSettingsPatch = Schema.Struct({
   showSkillsInSlashMenu: Schema.optionalKey(Schema.Boolean),
   legacySidebarEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarWorkingShelfEnabled: Schema.optionalKey(Schema.Boolean),
+  sidebarProjectGroupsEnabled: Schema.optionalKey(Schema.Boolean),
+  sidebarFloatToTopStatuses: Schema.optionalKey(SidebarFloatToTopStatusesPatch),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
   sidebarProjectGroupingOverrides: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, SidebarProjectGroupingMode),
@@ -1783,3 +1829,26 @@ export const ClientSettingsPatch = Schema.Struct({
   wordWrap: Schema.optionalKey(Schema.Boolean),
 });
 export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;
+
+/**
+ * Applies a client-settings patch. Top-level keys replace the saved value; the
+ * "Float to the top" record merges, so a patch naming some statuses keeps the rest.
+ */
+export function applyClientSettingsPatch(
+  current: ClientSettings,
+  patch: ClientSettingsPatch,
+): ClientSettings {
+  const { sidebarFloatToTopStatuses, ...rest } = patch;
+  return {
+    ...current,
+    ...rest,
+    ...(sidebarFloatToTopStatuses === undefined
+      ? {}
+      : {
+          sidebarFloatToTopStatuses: {
+            ...current.sidebarFloatToTopStatuses,
+            ...sidebarFloatToTopStatuses,
+          },
+        }),
+  };
+}

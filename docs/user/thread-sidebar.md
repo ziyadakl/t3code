@@ -116,13 +116,31 @@ open.
 
 Turn on **Settings → General → Working section (beta)** on web and desktop, or **Settings →
 Thread behavior → Working section** on iOS and Android, to move threads that are working or
-monitoring into a collapsed **Working** section below the active list. A thread returns to the top
-of the active list when it finishes, fails, or needs an approval or answer. The Working section
+monitoring into a collapsed **Working** section below the active list. A thread leaves the Working
+section when it finishes, fails, or needs an approval or answer: it returns to the top of the active
+list, or with project groups on, to **Needs you** or its project's group. The Working section
 lists the thread you last sent work to first. Pinned threads stay in the pinned section. Each
 device keeps its own choice.
 
 While this is on, the active list is ordered by when each thread last came back to you, so you
 cannot drag or move threads within it. Your saved order returns when you turn it off.
+
+### Group threads by project
+
+On web and desktop, the active list folds threads under one header per project. The same code
+opened on several machines shares one group, and threads with no project sit under **No project**.
+Groups start folded, never open by themselves, and remember whether you left them open or folded
+across restarts. The group with the newest activity comes first. A folded header shows a count per
+status of what still needs you: unread threads, plus threads waiting on your input or approval.
+
+Above the groups, **Needs you** holds threads whose status is switched on under **Settings →
+General → Float to the top**. By default **Done**, **Needs input**, **Needs approval**, and
+**Failed** float; **Woke**, **Limited**, and **Waiting** stay in their group. A thread drops back
+into its group once its status no longer applies.
+
+While grouping is on, you cannot drag threads into a custom order inside the active list. Pinned
+threads and the Working, Snoozed, and Settled sections work as before. Turn off **Settings →
+General → Group threads by project** for the flat list and your saved order.
 
 ## Settle finished work
 

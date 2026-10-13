@@ -115,6 +115,12 @@ describe("searchSettings", () => {
     expect(searchSettings("administrative access")[0]?.id).toBe("connections-environment");
   });
 
+  it("finds the sidebar project group settings", () => {
+    expect(searchSettings("fold threads by project")[0]?.id).toBe("sidebar-project-groups");
+    expect(searchSettings("float to the top")[0]?.id).toBe("sidebar-float-to-top");
+    expect(searchSettings("needs you")[0]?.id).toBe("sidebar-float-to-top");
+  });
+
   it("lists thread confirmations in panel order", () => {
     expect(searchSettings("confirmation").map((item) => item.id)).toEqual([
       "unpin-confirmation",
@@ -308,6 +314,27 @@ describe("searchSettings", () => {
 
     expect(itemIds(false)).toEqual([]);
     expect(itemIds(true)).toEqual(["auto-archive-settled-threads", "days-before-auto-archive"]);
+  });
+
+  it("offers Float to the top only while project groups are on", () => {
+    const itemIds = (sidebarProjectGroupsEnabled: boolean) =>
+      searchSettings(
+        "float to the top",
+        filterAvailableSettingsSearchItems({
+          hasCloudPublicConfig: false,
+          hasEnvironment: false,
+          hasProviderSettingsEnvironment: false,
+          hasMacProviderSettingsEnvironment: false,
+          canManageLocalBackend: false,
+          isWslSettingsRowVisible: false,
+          hasThreadAutoSettlement: false,
+          hasThreadAutoArchive: false,
+          sidebarProjectGroupsEnabled,
+        }),
+      ).map((item) => item.id);
+
+    expect(itemIds(false)).not.toContain("sidebar-float-to-top");
+    expect(itemIds(true)).toContain("sidebar-float-to-top");
   });
 
   it("finds keybinding commands by label, command id, and default key", () => {
