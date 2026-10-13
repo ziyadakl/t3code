@@ -51,6 +51,7 @@ import { PreviewChromeRow } from "./PreviewChromeRow";
 import { PreviewEmptyState } from "./PreviewEmptyState";
 import { PreviewMoreMenu, type PreviewMoreMenuActions } from "./PreviewMoreMenu";
 import { usePreviewCookieImport } from "~/components/browserImport/usePreviewCookieImport";
+import { previewTabTakesCookieImport } from "~/components/browserImport/browserImportLauncher.logic";
 import {
   commitBrowserViewportChange,
   subscribeBrowserViewportChange,
@@ -283,10 +284,13 @@ export function PreviewView({
     else if (previewBridge && runtimeTabId) void previewBridge.refresh(runtimeTabId);
   }, [isServerTab, runtimeTabId]);
 
-  // Imports write into this machine's partition for the tab's profile, which a
-  // server-run tab never reads.
+  // Imports write into this machine's partition for the tab's profile, which
+  // this desktop's own server tabs read too; a streamed tab never does.
   const cookieImport = usePreviewCookieImport({
-    available: !serverOwnsRendering,
+    available: previewTabTakesCookieImport({
+      runtime: snapshot?.runtime,
+      rendersNatively: nativeServerTab,
+    }),
     environmentId: threadRef.environmentId,
     profileId: activeProfileId,
     profilePersistent: activeProfile?.kind === "persistent",

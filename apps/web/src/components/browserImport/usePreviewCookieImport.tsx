@@ -49,8 +49,8 @@ export interface PreviewCookieImportMenu {
  * closes it or an import lands; backing out of the wizard keeps it.
  *
  * `available` is false where this machine's browsers are not the tab's: web
- * and remote clients have no bridge to read them, and a server-run tab keeps
- * its cookies in the environment's browser, not here. Incognito keeps nothing,
+ * and remote clients have no bridge to read them, and a streamed server tab
+ * keeps its cookies in the environment's browser, not here. Incognito keeps nothing,
  * so it gets neither entry.
  */
 export function usePreviewCookieImport(input: {

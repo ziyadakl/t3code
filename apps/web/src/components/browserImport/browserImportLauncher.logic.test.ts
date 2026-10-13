@@ -9,6 +9,7 @@ import {
   freshBannerChoice,
   oncePerSession,
   previewImportLanded,
+  previewTabTakesCookieImport,
   shouldShowCookieImportBanner,
   singleImportableSource,
 } from "./browserImportLauncher.logic";
@@ -33,6 +34,20 @@ describe("importableBrowserSources", () => {
       source("safari", "needsFullDiskAccess"),
     ];
     expect(importableBrowserSources(sources).map((s) => s.id)).toEqual(["chrome", "arc", "safari"]);
+  });
+});
+
+describe("previewTabTakesCookieImport", () => {
+  it("offers import on a tab this machine runs itself", () => {
+    expect(previewTabTakesCookieImport({ runtime: undefined, rendersNatively: false })).toBe(true);
+  });
+
+  it("offers import on a server tab this desktop renders in its own webview", () => {
+    expect(previewTabTakesCookieImport({ runtime: "server", rendersNatively: true })).toBe(true);
+  });
+
+  it("hides import on a server tab streamed from another environment's browser", () => {
+    expect(previewTabTakesCookieImport({ runtime: "server", rendersNatively: false })).toBe(false);
   });
 });
 

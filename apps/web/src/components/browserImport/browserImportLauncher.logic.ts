@@ -2,6 +2,7 @@ import {
   BrowserImportFailureReason,
   type BrowserImportSite,
   type BrowserImportSource,
+  type PreviewRuntime,
 } from "@t3tools/contracts";
 
 import type { SitesOutcome } from "./browserImportWizard.logic";
@@ -41,6 +42,19 @@ export function importableBrowserSources(
     (source) =>
       source.unavailable !== "notInstalled" && source.unavailable !== "unsupportedPlatform",
   );
+}
+
+/**
+ * Whether a preview tab reads cookies from this machine's partition for its
+ * profile, the only jar an import writes. A tab this machine runs, or a server
+ * tab this desktop renders in its own webview, does; a server tab streamed from
+ * another environment's browser does not.
+ */
+export function previewTabTakesCookieImport(input: {
+  readonly runtime: PreviewRuntime | undefined;
+  readonly rendersNatively: boolean;
+}): boolean {
+  return input.runtime !== "server" || input.rendersNatively;
 }
 
 /**
