@@ -1,4 +1,7 @@
-import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
+import {
+  resolveThreadWorkingStartedAt,
+  threadRuntimeCanArchive,
+} from "@t3tools/client-runtime/state/models";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import * as React from "react";
@@ -621,6 +624,28 @@ export function buildBulkUnpinContextMenuItem(input: {
 }): ContextMenuItem<"unpin"> | null {
   if (input.pinnedCount === 0) return null;
   return { id: "unpin", label: `Unpin (${input.pinnedCount})` };
+}
+
+/**
+ * Bulk archive touches only the threads the single-row "Archive thread"
+ * action could take: not already archived and not running. The label counts
+ * those targets, and the item stays visible but disabled when there are none,
+ * like the single-row item on a running thread.
+ */
+export function buildBulkArchiveContextMenuItem<
+  T extends Pick<SidebarThreadSummary, "archivedAt" | "runtime">,
+>(input: { threads: readonly T[] }): { item: ContextMenuItem<"archive">; targets: T[] } {
+  const targets = input.threads.filter(
+    (thread) => thread.archivedAt === null && threadRuntimeCanArchive(thread.runtime),
+  );
+  return {
+    item: {
+      id: "archive",
+      label: `Archive (${targets.length})`,
+      disabled: targets.length === 0,
+    },
+    targets,
+  };
 }
 
 export interface ThreadStatusPill {

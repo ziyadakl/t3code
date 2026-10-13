@@ -14,6 +14,7 @@ import {
   sidebarSearchEnvironmentIds,
   archiveSelectedThreadEntries,
   buildBulkTitleRegenerationContextMenuItem,
+  buildBulkArchiveContextMenuItem,
   buildBulkUnpinContextMenuItem,
   buildMultiSelectThreadContextMenuItems,
   createThreadJumpHintVisibilityController,
@@ -318,6 +319,40 @@ describe("buildBulkUnpinContextMenuItem", () => {
 
   it("omits the action when nothing selected is pinned", () => {
     expect(buildBulkUnpinContextMenuItem({ pinnedCount: 0 })).toBeNull();
+  });
+});
+
+describe("buildBulkArchiveContextMenuItem", () => {
+  const thread = (
+    archivedAt: string | null,
+    runtimeStatus: "idle" | "running" | "queued" = "idle",
+  ) => ({
+    archivedAt,
+    runtime: {
+      status: runtimeStatus,
+      activeRunId: runtimeStatus === "idle" ? null : RunId.make("run-1"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      providerName: "Codex",
+      lastError: null,
+      updatedAt: "2026-10-01T00:00:00.000Z",
+    },
+  });
+
+  it("archives only the threads the single-row action could archive", () => {
+    const archivable = thread(null);
+    const { item, targets } = buildBulkArchiveContextMenuItem({
+      threads: [archivable, thread(null, "running"), thread("2026-10-01T00:00:00.000Z")],
+    });
+    expect(item).toEqual({ id: "archive", label: "Archive (1)", disabled: false });
+    expect(targets).toEqual([archivable]);
+  });
+
+  it("stays visible but disabled when nothing selected can be archived", () => {
+    const { item, targets } = buildBulkArchiveContextMenuItem({
+      threads: [thread(null, "running"), thread(null, "queued")],
+    });
+    expect(item).toEqual({ id: "archive", label: "Archive (0)", disabled: true });
+    expect(targets).toEqual([]);
   });
 });
 
