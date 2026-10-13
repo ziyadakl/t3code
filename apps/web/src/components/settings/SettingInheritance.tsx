@@ -39,7 +39,7 @@ function formatValue(key: keyof ServerSettings, value: unknown): string {
   if (value === null || value === undefined) {
     return key === "pullRequestMergeMethod"
       ? "Last selected"
-      : key === "sidebarAutoSettleAfterDays"
+      : key === "sidebarAutoSettleAfterDays" || key === "sidebarAutoArchiveSettledAfterDays"
         ? "Never"
         : key === "defaultModelSelection"
           ? "Automatic"
@@ -51,7 +51,7 @@ function formatValue(key: keyof ServerSettings, value: unknown): string {
   }
   if (typeof value === "boolean") return value ? "On" : "Off";
   if (typeof value === "number") {
-    return key === "sidebarAutoSettleAfterDays"
+    return key === "sidebarAutoSettleAfterDays" || key === "sidebarAutoArchiveSettledAfterDays"
       ? `${value} ${value === 1 ? "day" : "days"}`
       : String(value);
   }

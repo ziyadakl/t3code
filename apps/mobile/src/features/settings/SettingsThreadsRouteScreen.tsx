@@ -54,6 +54,7 @@ export function SettingsThreadsRouteScreen() {
 }
 
 const AUTO_SETTLE_DEFAULT_DAYS = DEFAULT_SERVER_SETTINGS.sidebarAutoSettleAfterDays ?? 3;
+const AUTO_ARCHIVE_DEFAULT_DAYS = DEFAULT_SERVER_SETTINGS.sidebarAutoArchiveSettledAfterDays ?? 7;
 
 /**
  * Mobile edits auto-settle defaults across selected capable targets.
@@ -90,6 +91,7 @@ function AutoSettleSettingsRows() {
     patch: Partial<AutoSettleSettings> & {
       autoResumeLimitedThreads?: boolean;
       snoozeLimitedThreads?: boolean;
+      sidebarAutoArchiveSettledAfterDays?: number | null;
     },
   ) => {
     if (writeInFlight.current) return;
@@ -157,6 +159,17 @@ function AutoSettleSettingsRows() {
   };
 
   const afterDays = referenceSettings.sidebarAutoSettleAfterDays;
+  // An environment-wide setting, so it is hidden while a project is selected.
+  const supportsAutoArchive =
+    !projectSelected &&
+    syncTargets.every(
+      (target) =>
+        target.environment.serverConfig.environment.capabilities.threadAutoArchive === true,
+    );
+  const archiveAfterDays = uniformMobileSetting(
+    displayTargets,
+    "sidebarAutoArchiveSettledAfterDays",
+  );
 
   return (
     <View className="gap-6">
@@ -216,6 +229,33 @@ function AutoSettleSettingsRows() {
           </View>
         ) : null}
       </SettingsSection>
+      {supportsAutoArchive ? (
+        <SettingsSection title="Auto-archive">
+          <SettingsSwitchRow
+            icon="archivebox"
+            label="Auto-archive settled threads"
+            value={archiveAfterDays !== null}
+            disabled={disabled}
+            onValueChange={(value) =>
+              writeToAll({
+                sidebarAutoArchiveSettledAfterDays: value ? AUTO_ARCHIVE_DEFAULT_DAYS : null,
+              })
+            }
+          />
+          {archiveAfterDays !== null ? (
+            <View className="flex-row items-center gap-4 px-4 py-4 android:min-h-14 android:py-3">
+              <View className="w-[22px] android:w-6" />
+              <Text className="flex-1 text-foreground text-lg android:text-base">Settled days</Text>
+              <AutoSettleDaysField
+                value={archiveAfterDays}
+                disabled={disabled}
+                accessibilityLabel="Days settled before auto-archive"
+                onValueChange={(value) => writeToAll({ sidebarAutoArchiveSettledAfterDays: value })}
+              />
+            </View>
+          ) : null}
+        </SettingsSection>
+      ) : null}
       {pendingWrites === 0 && mismatches.length > 0 ? (
         <SettingsSection title="Across environments">
           <View className="gap-3 p-4">

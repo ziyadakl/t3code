@@ -235,6 +235,15 @@ describe("filterSharedServerPatch", () => {
       );
     },
   );
+
+  it("shares the auto-archive threshold only with servers that archive", () => {
+    const patch = { sidebarAutoArchiveSettledAfterDays: 14, sidebarAutoSettleAfterDays: 7 };
+    expect(filterSharedServerPatch(patch, { threadAutoArchive: true })).toEqual(patch);
+    expect(filterSharedServerPatch(patch, {})).toEqual({ sidebarAutoSettleAfterDays: 7 });
+    expect(
+      pickSharedServerSettings(DEFAULT_SERVER_SETTINGS, { threadAutoArchive: true }),
+    ).toHaveProperty("sidebarAutoArchiveSettledAfterDays", 7);
+  });
 });
 
 describe("findSharedSettingsMismatches", () => {

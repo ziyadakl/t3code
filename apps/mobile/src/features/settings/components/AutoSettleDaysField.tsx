@@ -10,6 +10,7 @@ export interface AutoSettleDaysFieldProps {
   readonly value: number;
   readonly onValueChange: (value: number) => void;
   readonly disabled?: boolean;
+  readonly accessibilityLabel?: string;
 }
 
 export function AutoSettleDaysField(props: AutoSettleDaysFieldProps) {
@@ -41,7 +42,7 @@ export function AutoSettleDaysField(props: AutoSettleDaysFieldProps) {
       onChangeText={setDraft}
       onBlur={commit}
       onSubmitEditing={commit}
-      accessibilityLabel="Days before auto-settle"
+      accessibilityLabel={props.accessibilityLabel ?? "Days before auto-settle"}
       editable={!props.disabled}
     />
   );
