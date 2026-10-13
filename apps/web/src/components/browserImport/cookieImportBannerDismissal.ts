@@ -2,7 +2,7 @@ import * as Schema from "effect/Schema";
 
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 
-export const COOKIE_IMPORT_BANNER_STORAGE_KEY = "t3code:preview-cookie-import-banner:v1";
+const COOKIE_IMPORT_BANNER_STORAGE_KEY = "t3code:preview-cookie-import-banner:v1";
 
 const CookieImportBannerSchema = Schema.Struct({ dismissed: Schema.Boolean });
 const NOT_DISMISSED = { dismissed: false };
