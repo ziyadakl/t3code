@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 import type { CommandId, ProjectId } from "./baseSchemas.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import {
+  applyClientSettingsPatch,
   ClientSettingsSchema,
   ClientSettingsPatch,
   ClaudeSettings,
@@ -171,6 +172,30 @@ describe("ClientSettings sidebar project groups", () => {
     expect(decodeClientSettingsPatch({ sidebarFloatToTopStatuses: statuses })).toEqual({
       sidebarFloatToTopStatuses: statuses,
     });
+  });
+  it("keeps the saved value of every status a float list patch leaves out", () => {
+    const current = decodeClientSettings({
+      sidebarFloatToTopStatuses: { woke: true, input: false },
+    });
+    const patch = decodeClientSettingsPatch({ sidebarFloatToTopStatuses: { done: false } });
+
+    expect(applyClientSettingsPatch(current, patch).sidebarFloatToTopStatuses).toEqual({
+      done: false,
+      input: false,
+      approval: true,
+      failed: true,
+      woke: true,
+      limited: false,
+      waiting: false,
+    });
+  });
+
+  it("replaces other settings from a patch as before", () => {
+    const current = decodeClientSettings({});
+    const next = applyClientSettingsPatch(current, { sidebarProjectGroupsEnabled: false });
+
+    expect(next.sidebarProjectGroupsEnabled).toBe(false);
+    expect(next.sidebarFloatToTopStatuses).toEqual(current.sidebarFloatToTopStatuses);
   });
 });
 

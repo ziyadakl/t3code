@@ -316,6 +316,27 @@ describe("searchSettings", () => {
     expect(itemIds(true)).toEqual(["auto-archive-settled-threads", "days-before-auto-archive"]);
   });
 
+  it("offers Float to the top only while project groups are on", () => {
+    const itemIds = (sidebarProjectGroupsEnabled: boolean) =>
+      searchSettings(
+        "float to the top",
+        filterAvailableSettingsSearchItems({
+          hasCloudPublicConfig: false,
+          hasEnvironment: false,
+          hasProviderSettingsEnvironment: false,
+          hasMacProviderSettingsEnvironment: false,
+          canManageLocalBackend: false,
+          isWslSettingsRowVisible: false,
+          hasThreadAutoSettlement: false,
+          hasThreadAutoArchive: false,
+          sidebarProjectGroupsEnabled,
+        }),
+      ).map((item) => item.id);
+
+    expect(itemIds(false)).not.toContain("sidebar-float-to-top");
+    expect(itemIds(true)).toContain("sidebar-float-to-top");
+  });
+
   it("finds keybinding commands by label, command id, and default key", () => {
     expect(searchSettings("toggle sidebar")[0]?.id).toBe("keybinding-sidebar.toggle");
     expect(searchSettings("sidebar.toggle")[0]?.id).toBe("keybinding-sidebar.toggle");

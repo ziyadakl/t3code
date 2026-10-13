@@ -1,4 +1,5 @@
 import {
+  applyClientSettingsPatch,
   DEFAULT_CLIENT_SETTINGS,
   type ClientSettingsPatch,
   type DesktopSnapShotState,
@@ -114,7 +115,7 @@ beforeEach(() => {
   bridge.checkSnapShotShortcut.mockResolvedValue({ available: true, message: null });
   bridge.setupSnapShot.mockReset().mockResolvedValue(undefined);
   settingsStore.update.mockImplementation(async (patch) => {
-    settingsStore.current = { ...settingsStore.current, ...patch };
+    settingsStore.current = applyClientSettingsPatch(settingsStore.current, patch);
     state = { ...state, shortcut: settingsStore.current.snapShotShortcut };
   });
 });

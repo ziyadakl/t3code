@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 import * as Duration from "effect/Duration";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
+import * as Struct from "effect/Struct";
 import {
   ForwardCompatibleNullable,
   ForwardCompatibleOptional,
@@ -337,13 +338,22 @@ export const SidebarFloatToTopStatuses = Schema.Struct({
 export type SidebarFloatToTopStatuses = typeof SidebarFloatToTopStatuses.Type;
 export type SidebarFloatToTopStatus = keyof SidebarFloatToTopStatuses;
 
+/** A "Float to the top" update: statuses it leaves out keep their saved value. */
+export const SidebarFloatToTopStatusesPatch = Schema.Struct({
+  done: Schema.optionalKey(Schema.Boolean),
+  input: Schema.optionalKey(Schema.Boolean),
+  approval: Schema.optionalKey(Schema.Boolean),
+  failed: Schema.optionalKey(Schema.Boolean),
+  woke: Schema.optionalKey(Schema.Boolean),
+  limited: Schema.optionalKey(Schema.Boolean),
+  waiting: Schema.optionalKey(Schema.Boolean),
+});
+
 /** The statuses switched on in a "Float to the top" record. */
 export function resolveSidebarFloatToTopStatusSet(
   statuses: SidebarFloatToTopStatuses,
 ): ReadonlySet<SidebarFloatToTopStatus> {
-  return new Set(
-    (Object.keys(statuses) as SidebarFloatToTopStatus[]).filter((status) => statuses[status]),
-  );
+  return new Set(Struct.keys(statuses).filter((status) => statuses[status]));
 }
 
 export const ClientSettingsSchema = Schema.Struct({
@@ -1800,7 +1810,7 @@ export const ClientSettingsPatch = Schema.Struct({
   legacySidebarEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarWorkingShelfEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarProjectGroupsEnabled: Schema.optionalKey(Schema.Boolean),
-  sidebarFloatToTopStatuses: Schema.optionalKey(SidebarFloatToTopStatuses),
+  sidebarFloatToTopStatuses: Schema.optionalKey(SidebarFloatToTopStatusesPatch),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
   sidebarProjectGroupingOverrides: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, SidebarProjectGroupingMode),
@@ -1819,3 +1829,26 @@ export const ClientSettingsPatch = Schema.Struct({
   wordWrap: Schema.optionalKey(Schema.Boolean),
 });
 export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;
+
+/**
+ * Applies a client-settings patch. Top-level keys replace the saved value; the
+ * "Float to the top" record merges, so a patch naming some statuses keeps the rest.
+ */
+export function applyClientSettingsPatch(
+  current: ClientSettings,
+  patch: ClientSettingsPatch,
+): ClientSettings {
+  const { sidebarFloatToTopStatuses, ...rest } = patch;
+  return {
+    ...current,
+    ...rest,
+    ...(sidebarFloatToTopStatuses === undefined
+      ? {}
+      : {
+          sidebarFloatToTopStatuses: {
+            ...current.sidebarFloatToTopStatuses,
+            ...sidebarFloatToTopStatuses,
+          },
+        }),
+  };
+}
