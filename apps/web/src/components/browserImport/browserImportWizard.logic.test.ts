@@ -4,6 +4,8 @@ import type { BrowserImportSite, BrowserImportSource } from "@t3tools/contracts"
 import {
   canCloseWizard,
   filterSites,
+  siteBulkActionLabels,
+  capSiteRows,
   initialWizardStep,
   initialSiteSelection,
   orderSites,
@@ -16,6 +18,7 @@ import {
   refreshedSourceProfileDirectory,
   refreshedSourceStep,
   resolveWizardTarget,
+  selectedImportDomains,
   siteSelectionFor,
   sitesOutcomeToStep,
 } from "./browserImportWizard.logic";
@@ -51,6 +54,17 @@ describe("wizard target selection", () => {
       kind: "existing",
       profileId: "default",
     });
+  });
+
+  it("fixes a locked target to the requested profile, even once it is gone", () => {
+    const profiles = [{ id: "default", name: "Default" }];
+    expect(initialTargetSelection(true, profiles, "work", true)).toEqual({
+      kind: "existing",
+      profileId: "work",
+    });
+    expect(
+      resolveWizardTarget({ kind: "existing", profileId: "work" }, "generated", profiles),
+    ).toBeUndefined();
   });
 
   it("rejects an existing target that is no longer listed", () => {
@@ -313,6 +327,35 @@ describe("filterSites", () => {
   });
 });
 
+describe("capSiteRows", () => {
+  const many = (count: number) =>
+    Array.from({ length: count }, (_, index) => site(`site${index}.com`));
+
+  it("shows every site up to the cap", () => {
+    const sites = many(200);
+    expect(capSiteRows(sites)).toEqual({ rows: sites, hidden: 0 });
+  });
+
+  it("shows the first 200 and counts the rest", () => {
+    const capped = capSiteRows(many(1234));
+    expect(capped.rows).toHaveLength(200);
+    expect(capped.rows[0]?.domain).toBe("site0.com");
+    expect(capped.rows.at(-1)?.domain).toBe("site199.com");
+    expect(capped.hidden).toBe(1034);
+  });
+});
+
+describe("siteBulkActionLabels", () => {
+  it("selects all and clears all with no filter", () => {
+    expect(siteBulkActionLabels("")).toEqual({ select: "Select all", clear: "Clear all" });
+    expect(siteBulkActionLabels("   ")).toEqual({ select: "Select all", clear: "Clear all" });
+  });
+
+  it("says it only selects the shown sites while a filter is typed, and still clears all", () => {
+    expect(siteBulkActionLabels("git")).toEqual({ select: "Select shown", clear: "Clear all" });
+  });
+});
+
 describe("sitesOutcomeToStep", () => {
   it("lists the sites in import order", () => {
     expect(
@@ -408,5 +451,32 @@ describe("siteSelectionFor", () => {
       sourceProfileDirectory: "Default",
       domains: ["github.com", "linear.app"],
     });
+  });
+});
+
+describe("selectedImportDomains", () => {
+  it("imports the domains ticked for the chosen source profile", () => {
+    expect(
+      selectedImportDomains(
+        { sourceProfileDirectory: "Default", domains: ["github.com", "linear.app"] },
+        "Default",
+      ),
+    ).toEqual(["github.com", "linear.app"]);
+  });
+
+  it("refuses to import before any site is chosen", () => {
+    expect(selectedImportDomains(undefined, "Default")).toBeUndefined();
+    expect(
+      selectedImportDomains({ sourceProfileDirectory: "Default", domains: [] }, "Default"),
+    ).toBeUndefined();
+  });
+
+  it("refuses ticks made in another source profile", () => {
+    expect(
+      selectedImportDomains(
+        { sourceProfileDirectory: "Profile 2", domains: ["github.com"] },
+        "Default",
+      ),
+    ).toBeUndefined();
   });
 });

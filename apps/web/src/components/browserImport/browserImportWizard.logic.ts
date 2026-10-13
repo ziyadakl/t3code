@@ -20,12 +20,18 @@ export type WizardTargetSelection =
 /**
  * Where "Into" starts: the requested profile when it is a valid target (the
  * preview tab's own profile), else a new profile, else the first existing one.
+ * A locked target always stays on the requested profile, even when it is no
+ * longer listed, so the wizard reports it gone instead of importing elsewhere.
  */
 export function initialTargetSelection(
   canCreateProfile: boolean,
   targetProfiles: ReadonlyArray<WizardTargetProfile>,
   initialTargetProfileId?: string,
+  targetLocked = false,
 ): WizardTargetSelection {
+  if (targetLocked && initialTargetProfileId !== undefined) {
+    return { kind: "existing", profileId: initialTargetProfileId };
+  }
   const requested = targetProfiles.find((profile) => profile.id === initialTargetProfileId);
   if (requested) return { kind: "existing", profileId: requested.id };
   if (canCreateProfile) return { kind: "new" };
@@ -63,6 +69,12 @@ export type ImportOutcome =
     }
   | { readonly kind: "blocked"; readonly reason: BrowserImportFailureReason };
 
+/** A run the blocked screen's "Try again" can repeat. */
+export type BlockedRetry = "import" | "listSites";
+
+/** What "Try again" does: repeat a run, or start over at configure. */
+export type BlockedRetryAction = BlockedRetry | "configure";
+
 /**
  * The wizard's screens. Every one is a place the user can act from — there are
  * no dead ends. `blocked` covers the reasons no local step recovers.
@@ -91,7 +103,7 @@ export type WizardStep =
       readonly step: "blocked";
       readonly reason: BrowserImportFailureReason;
       /** What "Try again" re-runs; absent when nothing was attempted yet. */
-      readonly retry?: "import" | "listSites";
+      readonly retry?: BlockedRetry;
     };
 
 /** The import owns its target partition until the write finishes. */
@@ -225,13 +237,43 @@ export function initialSiteSelection(orderedSites: ReadonlyArray<BrowserImportSi
 }
 
 /** Sites whose domain contains the query, ignoring case; all of them for an empty query. */
-export function filterSites<T extends BrowserImportSite>(
-  sites: ReadonlyArray<T>,
+export function filterSites(
+  sites: ReadonlyArray<BrowserImportSite>,
   query: string,
-): ReadonlyArray<T> {
+): ReadonlyArray<BrowserImportSite> {
   const needle = query.trim().toLowerCase();
   if (needle === "") return sites;
   return sites.filter((entry) => entry.domain.toLowerCase().includes(needle));
+}
+
+const SITE_ROW_LIMIT = 200;
+
+/**
+ * The rows the sites list renders. A browser profile can hold thousands of
+ * sites, so past the limit only the first rows render and the rest are
+ * counted; filtering narrows them. Selection still applies to every site.
+ */
+export function capSiteRows(sites: ReadonlyArray<BrowserImportSite>): {
+  readonly rows: ReadonlyArray<BrowserImportSite>;
+  readonly hidden: number;
+} {
+  if (sites.length <= SITE_ROW_LIMIT) return { rows: sites, hidden: 0 };
+  return { rows: sites.slice(0, SITE_ROW_LIMIT), hidden: sites.length - SITE_ROW_LIMIT };
+}
+
+/**
+ * The sites step's bulk buttons. Selecting acts on the filtered sites only, so
+ * it says "shown" while a filter is typed; clearing always empties the whole
+ * selection, so it always says "all".
+ */
+export function siteBulkActionLabels(query: string): {
+  readonly select: string;
+  readonly clear: string;
+} {
+  return {
+    select: query.trim() === "" ? "Select all" : "Select shown",
+    clear: "Clear all",
+  };
 }
 
 /** Where listing a profile's sites lands the wizard. */
@@ -251,7 +293,7 @@ export function sitesOutcomeToStep(outcome: SitesOutcome): WizardStep {
  */
 export function blockedRetryAction(
   step: Extract<WizardStep, { step: "blocked" }>,
-): "import" | "listSites" | "configure" | undefined {
+): BlockedRetryAction | undefined {
   if (!isRetryableReason(step.reason)) return undefined;
   return step.retry ?? "configure";
 }
@@ -280,4 +322,21 @@ export function siteSelectionFor(
     sourceProfileDirectory,
     domains: previous.domains.filter((domain) => listed.has(domain)),
   };
+}
+
+/** At least one registrable domain: an import always names the sites it brings over. */
+export type ImportDomains = readonly [string, ...string[]];
+
+/**
+ * The domains an import may run with: the ticks made for the source profile
+ * being imported. Undefined when nothing was chosen for it yet, so the wizard
+ * sends the user back to pick sites instead of importing nothing.
+ */
+export function selectedImportDomains(
+  selection: SiteSelection | undefined,
+  sourceProfileDirectory: string,
+): ImportDomains | undefined {
+  if (selection?.sourceProfileDirectory !== sourceProfileDirectory) return undefined;
+  const [first, ...rest] = selection.domains;
+  return first === undefined ? undefined : [first, ...rest];
 }

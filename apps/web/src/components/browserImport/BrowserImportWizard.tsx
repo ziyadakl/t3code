@@ -26,15 +26,20 @@ import {
   initialWizardStep,
   initialTargetSelection,
   canCloseWizard,
+  capSiteRows,
   filterSites,
   formatSkippedDomains,
+  siteBulkActionLabels,
   fullDiskAccessRecheckStep,
   outcomeToStep,
   refreshedSourceProfileDirectory,
   refreshedSourceStep,
   resolveWizardTarget,
+  selectedImportDomains,
   siteSelectionFor,
   sitesOutcomeToStep,
+  type BlockedRetryAction,
+  type ImportDomains,
   type ImportOutcome,
   type SiteSelection,
   type SitesOutcome,
@@ -59,6 +64,11 @@ interface BrowserImportWizardProps {
    * so opening from a preview tab imports into the profile being viewed.
    */
   readonly initialTargetProfileId?: string | undefined;
+  /**
+   * Fixes the target to `initialTargetProfileId` and hides the "Into" picker,
+   * so an import started from a preview tab lands in that tab's own session.
+   */
+  readonly targetLocked?: boolean | undefined;
   /** Lists the sites a source profile holds cookies for, without decrypting. */
   readonly onListSites: (sourceProfileDirectory: string) => Promise<SitesOutcome>;
   /**
@@ -70,7 +80,7 @@ interface BrowserImportWizardProps {
     readonly sourceProfileDirectory: string;
     readonly target: WizardTarget;
     /** Registrable domains the user ticked; only their cookies are imported. */
-    readonly domains: ReadonlyArray<string>;
+    readonly domains: ImportDomains;
   }) => Promise<ImportOutcome>;
   /** Re-checks the source's availability after the user quits the browser. */
   readonly onRefreshSource: () => Promise<BrowserImportSource | undefined>;
@@ -93,6 +103,7 @@ export function BrowserImportWizard({
   targetProfiles,
   canCreateProfile,
   initialTargetProfileId,
+  targetLocked,
   onListSites,
   onImport,
   onRefreshSource,
@@ -105,8 +116,9 @@ export function BrowserImportWizard({
   const [sourceProfileDirectory, setSourceProfileDirectory] = useState(
     () => initialSource.profiles[0]?.directory ?? "",
   );
+  const locked = targetLocked === true && initialTargetProfileId !== undefined;
   const [target, setTarget] = useState<WizardTargetSelection>(() =>
-    initialTargetSelection(canCreateProfile, targetProfiles, initialTargetProfileId),
+    initialTargetSelection(canCreateProfile, targetProfiles, initialTargetProfileId, locked),
   );
   // Survives Back and Continue on the same source profile; a listing for
   // another profile replaces it with that profile's default ticks.
@@ -123,9 +135,15 @@ export function BrowserImportWizard({
 
   const runImport = () => {
     if (importInFlight.current) return;
+    const domains = selectedImportDomains(siteSelection, sourceProfileDirectory);
+    if (domains === undefined) {
+      // Nothing chosen for this source profile; Continue lists its sites.
+      setStep({ step: "configure" });
+      return;
+    }
     const chosen = resolveWizardTarget(target, newProfileId.current, targetProfiles);
     if (chosen === undefined) {
-      setTargetError("That profile is no longer available. Choose where to import these cookies.");
+      setTargetError(targetMissingCopy(locked));
       setStep({ step: "configure" });
       return;
     }
@@ -135,7 +153,7 @@ export function BrowserImportWizard({
     void onImport({
       sourceProfileDirectory,
       target: chosen,
-      domains: siteSelection?.domains ?? [],
+      domains,
     })
       .then((outcome) => setStep(outcomeToStep(outcome)))
       .catch(() => setStep({ step: "blocked", reason: "readFailed" }))
@@ -159,7 +177,7 @@ export function BrowserImportWizard({
   };
 
   const retryAction = step.step === "blocked" ? blockedRetryAction(step) : undefined;
-  const retryBlocked = (action: NonNullable<typeof retryAction>) => {
+  const retryBlocked = (action: BlockedRetryAction) => {
     if (action === "import") runImport();
     else if (action === "listSites") listSites();
     else setStep({ step: "configure" });
@@ -247,6 +265,7 @@ export function BrowserImportWizard({
             sourceProfileDirectory={sourceProfileDirectory}
             onSourceProfileChange={setSourceProfileDirectory}
             target={target}
+            targetLocked={locked}
             onTargetChange={(selection) => {
               setTarget(selection);
               setTargetError(undefined);
@@ -299,6 +318,13 @@ function cookieResultCount(count: number): string {
   return `${count.toLocaleString()} ${count === 1 ? "cookie" : "cookies"}`;
 }
 
+/** A locked target has no picker to choose from, so it only says the profile is gone. */
+function targetMissingCopy(targetLocked: boolean): string {
+  return targetLocked
+    ? "That profile is no longer available."
+    : "That profile is no longer available. Choose where to import these cookies.";
+}
+
 type ConfigureStepProps = {
   readonly source: BrowserImportSource;
   readonly destinationEnvironmentName: string;
@@ -307,6 +333,7 @@ type ConfigureStepProps = {
   readonly sourceProfileDirectory: string;
   readonly onSourceProfileChange: (directory: string) => void;
   readonly target: WizardTargetSelection;
+  readonly targetLocked: boolean;
   readonly targetError: string | undefined;
   readonly onTargetChange: (target: WizardTargetSelection) => void;
   readonly onCancel: () => void;
@@ -407,14 +434,17 @@ function ConfigureStep({
   sourceProfileDirectory,
   onSourceProfileChange,
   target,
+  targetLocked,
   targetError,
   onTargetChange,
   onCancel,
   onContinue,
 }: ConfigureStepProps) {
-  const targetMissing =
-    target.kind === "existing" &&
-    !targetProfiles.some((profile) => profile.id === target.profileId);
+  const existingTarget =
+    target.kind === "existing"
+      ? targetProfiles.find((profile) => profile.id === target.profileId)
+      : undefined;
+  const targetMissing = target.kind === "existing" && existingTarget === undefined;
   // The "New profile" tile is unrendered once the cap is reached, so a target
   // chosen before that leaves nothing selected in "Into" — say so, the same
   // way a vanished existing target is explained.
@@ -422,7 +452,7 @@ function ConfigureStep({
   const targetFeedback =
     targetError ??
     (targetMissing
-      ? "That profile is no longer available. Choose where to import these cookies."
+      ? targetMissingCopy(targetLocked)
       : targetUncreatable
         ? "You've reached the profile limit. Choose an existing profile to import into."
         : undefined);
@@ -436,7 +466,12 @@ function ConfigureStep({
       </DialogHeader>
       <DialogPanel>
         {/* Side by side when the dialog has room, stacked when it doesn't. */}
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
+        <div
+          className={cn(
+            "flex flex-col gap-3",
+            !targetLocked && "sm:flex-row sm:items-center sm:gap-4",
+          )}
+        >
           <section className="flex-1 space-y-2">
             <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
               From
@@ -451,32 +486,40 @@ function ConfigureStep({
               />
             ))}
           </section>
-          <div className="flex shrink-0 items-center justify-center text-muted-foreground">
-            <ArrowDownIcon className="size-4 sm:hidden" />
-            <ArrowRightIcon className="hidden size-4 sm:block" />
-          </div>
-          <section className="flex-1 space-y-2">
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Into
-            </p>
-            {canCreateProfile ? (
-              <SelectableTile
-                selected={target.kind === "new"}
-                title="New profile"
-                subtitle="Created for these cookies"
-                onSelect={() => onTargetChange({ kind: "new" })}
-              />
-            ) : null}
-            {targetProfiles.map((profile) => (
-              <SelectableTile
-                key={profile.id}
-                selected={target.kind === "existing" && target.profileId === profile.id}
-                title={profile.name}
-                subtitle="Existing profile"
-                onSelect={() => onTargetChange({ kind: "existing", profileId: profile.id })}
-              />
-            ))}
-          </section>
+          {targetLocked ? (
+            existingTarget ? (
+              <p className="text-xs text-muted-foreground">Into {existingTarget.name}</p>
+            ) : null
+          ) : (
+            <>
+              <div className="flex shrink-0 items-center justify-center text-muted-foreground">
+                <ArrowDownIcon className="size-4 sm:hidden" />
+                <ArrowRightIcon className="hidden size-4 sm:block" />
+              </div>
+              <section className="flex-1 space-y-2">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Into
+                </p>
+                {canCreateProfile ? (
+                  <SelectableTile
+                    selected={target.kind === "new"}
+                    title="New profile"
+                    subtitle="Created for these cookies"
+                    onSelect={() => onTargetChange({ kind: "new" })}
+                  />
+                ) : null}
+                {targetProfiles.map((profile) => (
+                  <SelectableTile
+                    key={profile.id}
+                    selected={target.kind === "existing" && target.profileId === profile.id}
+                    title={profile.name}
+                    subtitle="Existing profile"
+                    onSelect={() => onTargetChange({ kind: "existing", profileId: profile.id })}
+                  />
+                ))}
+              </section>
+            </>
+          )}
         </div>
         {targetFeedback ? (
           <p role="alert" className="mt-3 text-sm text-destructive">
@@ -606,6 +649,8 @@ function SitesStep({
   const filterId = useId();
   const visible = filterSites(sites, query);
   const selectedSet = new Set(selected);
+  const bulkLabels = siteBulkActionLabels(query);
+  const { rows, hidden } = capSiteRows(visible);
   const setChecked = (domain: string, checked: boolean) =>
     onSelectedChange(
       checked ? [...selected, domain] : selected.filter((entry) => entry !== domain),
@@ -653,7 +698,7 @@ function SitesStep({
                   disabled={visible.length === 0}
                   onClick={selectVisible}
                 >
-                  Select all
+                  {bulkLabels.select}
                 </Button>
                 <Button
                   size="xs"
@@ -661,7 +706,7 @@ function SitesStep({
                   disabled={selected.length === 0}
                   onClick={() => onSelectedChange([])}
                 >
-                  Clear
+                  {bulkLabels.clear}
                 </Button>
               </div>
             </div>
@@ -670,37 +715,44 @@ function SitesStep({
                 No sites match &ldquo;{query.trim()}&rdquo;.
               </p>
             ) : (
-              <ul className="max-h-72 divide-y divide-border/60 overflow-y-auto rounded-lg border border-border/60">
-                {visible.map((entry) => (
-                  <li key={entry.domain}>
-                    <label className="flex cursor-pointer items-center gap-3 px-3 py-2 transition-colors hover:bg-muted/40">
-                      <Checkbox
-                        checked={selectedSet.has(entry.domain)}
-                        onCheckedChange={(checked) => setChecked(entry.domain, checked === true)}
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-medium text-foreground">
-                          {entry.domain}
+              <>
+                <ul className="max-h-72 divide-y divide-border/60 overflow-y-auto rounded-lg border border-border/60">
+                  {rows.map((entry) => (
+                    <li key={entry.domain}>
+                      <label className="flex cursor-pointer items-center gap-3 px-3 py-2 transition-colors hover:bg-muted/40">
+                        <Checkbox
+                          checked={selectedSet.has(entry.domain)}
+                          onCheckedChange={(checked) => setChecked(entry.domain, checked === true)}
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-medium text-foreground">
+                            {entry.domain}
+                          </span>
+                          <span className="block truncate text-xs tabular-nums text-muted-foreground">
+                            {cookieResultCount(entry.cookieCount)}
+                            {entry.signedIn ? " · Signed in" : ""}
+                          </span>
                         </span>
-                        <span className="block truncate text-xs tabular-nums text-muted-foreground">
-                          {cookieResultCount(entry.cookieCount)}
-                          {entry.signedIn ? " · Signed in" : ""}
-                        </span>
-                      </span>
-                      {entry.current || entry.sensitive ? (
-                        <span className="shrink-0 text-xs text-muted-foreground">
-                          {[
-                            entry.current ? "This site" : undefined,
-                            entry.sensitive ? SENSITIVE_LABEL[entry.sensitive] : undefined,
-                          ]
-                            .filter((label) => label !== undefined)
-                            .join(" · ")}
-                        </span>
-                      ) : null}
-                    </label>
-                  </li>
-                ))}
-              </ul>
+                        {entry.current || entry.sensitive ? (
+                          <span className="shrink-0 text-xs text-muted-foreground">
+                            {[
+                              entry.current ? "This site" : undefined,
+                              entry.sensitive ? SENSITIVE_LABEL[entry.sensitive] : undefined,
+                            ]
+                              .filter((label) => label !== undefined)
+                              .join(" · ")}
+                          </span>
+                        ) : null}
+                      </label>
+                    </li>
+                  ))}
+                </ul>
+                {hidden > 0 ? (
+                  <p className="mt-2 text-xs tabular-nums text-muted-foreground">
+                    {hidden.toLocaleString()} more. Type to filter.
+                  </p>
+                ) : null}
+              </>
             )}
           </>
         )}
