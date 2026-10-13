@@ -1547,6 +1547,11 @@ export const resolveClaudeRollbackResumeSessionAt = Effect.fn(
       if (target.providerTurn.nativeUserMessageId !== undefined) {
         return target.providerTurn.nativeUserMessageId;
       }
+      // Turns from builds that recorded no prompt uuid sent one derived from
+      // the attempt.
+      if (target.providerTurn.runAttemptId !== null) {
+        return yield* legacyClaudePromptUuid(target.providerTurn.runAttemptId);
+      }
 
       return yield* new ProviderAdapter.ProviderAdapterRollbackThreadError({
         driver: CLAUDE_PROVIDER,
@@ -1555,6 +1560,18 @@ export const resolveClaudeRollbackResumeSessionAt = Effect.fn(
       });
     }
   }
+});
+
+// Legacy only: the prompt uuid builds before random prompt ids derived from
+// the run attempt. New turns record the uuid they actually send.
+const legacyClaudePromptUuid = Effect.fn("legacyClaudePromptUuid")(function* (attemptId: string) {
+  const crypto = yield* Crypto.Crypto;
+  const digest = yield* crypto
+    .digest("SHA-256", new TextEncoder().encode(`t3-claude-prompt:${attemptId}`))
+    .pipe(Effect.orDie);
+  const hex = Hex.encode(digest);
+  const variant = ((Number.parseInt(hex[16]!, 16) & 0x3) | 0x8).toString(16);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 });
 
 type ClaudeUserContent = SDKUserMessage["message"]["content"];
@@ -7955,7 +7972,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           // first one of a prompted turn names the uuid its files are
           // checkpointed by; nothing else reads these frames.
           if (message.type === "user" && "isReplay" in message && message.isReplay === true) {
-            if (context?.promptUuid != null && context.nativeUserMessageId === null) {
+            if (context?.promptUuid != null && context.nativeUserMessageId === context.promptUuid) {
               context.nativeUserMessageId = message.uuid;
             }
             return;
@@ -8704,7 +8721,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               nativeThreadId,
               nativeTurnId,
               nativeMessageCursor: null,
-              nativeUserMessageId: null,
+              // Recorded now, so a turn stopped before Claude echoes its
+              // prompt can still be rewound; the echo may replace it.
+              nativeUserMessageId: promptUuid,
               providerTurnId,
               providerTurnOrdinal,
               startedAt,
