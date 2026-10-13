@@ -262,8 +262,9 @@ export function capSiteRows(sites: ReadonlyArray<BrowserImportSite>): {
 }
 
 /**
- * The sites step's bulk buttons. Selecting acts on the filtered sites only, so
- * it says "shown" while a filter is typed; clearing always empties the whole
+ * The sites step's bulk buttons. Selecting ticks every site the filter
+ * matches, including matches past the row cap that are not rendered, so it
+ * says "matches" while a filter is typed; clearing always empties the whole
  * selection, so it always says "all".
  */
 export function siteBulkActionLabels(query: string): {
@@ -271,9 +272,27 @@ export function siteBulkActionLabels(query: string): {
   readonly clear: string;
 } {
   return {
-    select: query.trim() === "" ? "Select all" : "Select shown",
+    select: query.trim() === "" ? "Select all" : "Select all matches",
     clear: "Clear all",
   };
+}
+
+/**
+ * The selection after the bulk select: every site matching the query is added,
+ * rendered or not, after the domains already selected.
+ */
+export function selectMatchingSites(
+  selected: ReadonlyArray<string>,
+  sites: ReadonlyArray<BrowserImportSite>,
+  query: string,
+): string[] {
+  const selectedSet = new Set(selected);
+  return [
+    ...selected,
+    ...filterSites(sites, query)
+      .map((entry) => entry.domain)
+      .filter((domain) => !selectedSet.has(domain)),
+  ];
 }
 
 /** Where listing a profile's sites lands the wizard. */

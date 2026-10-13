@@ -5,6 +5,7 @@ import {
   canCloseWizard,
   filterSites,
   siteBulkActionLabels,
+  selectMatchingSites,
   capSiteRows,
   initialWizardStep,
   initialSiteSelection,
@@ -351,8 +352,30 @@ describe("siteBulkActionLabels", () => {
     expect(siteBulkActionLabels("   ")).toEqual({ select: "Select all", clear: "Clear all" });
   });
 
-  it("says it only selects the shown sites while a filter is typed, and still clears all", () => {
-    expect(siteBulkActionLabels("git")).toEqual({ select: "Select shown", clear: "Clear all" });
+  it("says it selects every match while a filter is typed, and still clears all", () => {
+    expect(siteBulkActionLabels("git")).toEqual({
+      select: "Select all matches",
+      clear: "Clear all",
+    });
+  });
+});
+
+describe("selectMatchingSites", () => {
+  const many = (count: number) =>
+    Array.from({ length: count }, (_, index) => site(`match${index}.com`));
+
+  it("ticks every match, including those hidden past the row cap", () => {
+    const sites = [site("other.com"), ...many(250)];
+    const selected = selectMatchingSites(["other.com", "match3.com"], sites, "match");
+    expect(selected).toHaveLength(251);
+    expect(selected).toContain("match249.com");
+    expect(new Set(selected).size).toBe(251);
+    expect(selected.slice(0, 2)).toEqual(["other.com", "match3.com"]);
+  });
+
+  it("leaves sites that do not match the filter as they were", () => {
+    const sites = [site("github.com"), site("bank.com")];
+    expect(selectMatchingSites([], sites, "git")).toEqual(["github.com"]);
   });
 });
 

@@ -30,6 +30,7 @@ import {
   filterSites,
   formatSkippedDomains,
   siteBulkActionLabels,
+  selectMatchingSites,
   fullDiskAccessRecheckStep,
   outcomeToStep,
   refreshedSourceProfileDirectory,
@@ -655,11 +656,7 @@ function SitesStep({
     onSelectedChange(
       checked ? [...selected, domain] : selected.filter((entry) => entry !== domain),
     );
-  const selectVisible = () =>
-    onSelectedChange([
-      ...selected,
-      ...visible.map((entry) => entry.domain).filter((domain) => !selectedSet.has(domain)),
-    ]);
+  const selectMatches = () => onSelectedChange(selectMatchingSites(selected, sites, query));
   return (
     <>
       <DialogHeader>
@@ -696,7 +693,7 @@ function SitesStep({
                   size="xs"
                   variant="ghost"
                   disabled={visible.length === 0}
-                  onClick={selectVisible}
+                  onClick={selectMatches}
                 >
                   {bulkLabels.select}
                 </Button>
