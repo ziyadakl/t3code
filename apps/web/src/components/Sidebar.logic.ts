@@ -160,14 +160,24 @@ export type SidebarListMarker =
   | "pinned-divider"
   | "working-header"
   | "snoozed-header"
-  | "settled-header";
+  | "settled-header"
+  /** Fork (grouped layout): the "Needs you" label above floating rows, and
+      one header per project group, keyed by its fold key. */
+  | "needs-you-header"
+  | `project-group:${string}`;
 
 export function sidebarMarkerId(marker: SidebarListMarker): string {
   return `${SIDEBAR_MARKER_PREFIX}${marker}`;
 }
 
 export type SidebarListItem =
-  | { readonly kind: "thread"; readonly key: string; readonly section: SidebarSection }
+  | {
+      readonly kind: "thread";
+      readonly key: string;
+      readonly section: SidebarSection;
+      /** A one-line row inside a project group (grouped layout). */
+      readonly compact?: boolean;
+    }
   | { readonly kind: "marker"; readonly marker: SidebarListMarker };
 
 export function sidebarListItemId(item: SidebarListItem): string {
@@ -1518,6 +1528,30 @@ export interface SidebarThreadAttention {
   readonly isWoke: boolean;
 }
 
+/** Unread and woke, read the same way the sidebar row reads them, so the
+    grouped layout floats and counts exactly what the row's badge shows. */
+export function resolveSidebarThreadAttention(input: {
+  readonly thread: ThreadStatusInput & {
+    readonly settledOverride?: SidebarThreadSummary["settledOverride"] | undefined;
+  };
+  readonly localLastVisitedAt: string | undefined;
+  readonly wokeAt: string | null;
+}): SidebarThreadAttention {
+  const lastVisitedAt = resolveThreadLastVisitedAt(
+    input.thread.lastVisitedAt,
+    input.localLastVisitedAt,
+  );
+  const lastVisitedMs = lastVisitedAt === undefined ? Number.NaN : Date.parse(lastVisitedAt);
+  const wokeAtMs = input.wokeAt === null ? Number.NaN : Date.parse(input.wokeAt);
+  return {
+    isUnread: hasUnseenCompletion({ ...input.thread, lastVisitedAt }),
+    isWoke:
+      !Number.isNaN(wokeAtMs) &&
+      (Number.isNaN(lastVisitedMs) || lastVisitedMs < wokeAtMs) &&
+      input.thread.settledOverride !== "settled",
+  };
+}
+
 export interface SidebarActiveProjectGroup<TThread> {
   /** Logical project key; null for the "No project" group. */
   readonly projectKey: string | null;
@@ -1594,6 +1628,99 @@ export function buildSidebarGroupedActiveModel<
     }
   }
   return { floating, groups: [...groupsByKey.values()] };
+}
+
+// A NUL byte never appears in a logical project key, so the "No project"
+// group cannot share its fold state with a real project.
+const NO_PROJECT_GROUP_FOLD_KEY = "\u0000no-project";
+
+/** The key a project group's fold state is stored under. */
+export function sidebarProjectGroupFoldKey(projectKey: string | null): string {
+  return projectKey ?? NO_PROJECT_GROUP_FOLD_KEY;
+}
+
+/** Fold state is the list of open groups: a group not listed is folded. */
+export function toggleSidebarProjectGroupOpen(
+  openFoldKeys: readonly string[],
+  foldKey: string,
+): string[] {
+  return openFoldKeys.includes(foldKey)
+    ? openFoldKeys.filter((key) => key !== foldKey)
+    : [...openFoldKeys, foldKey];
+}
+
+// Most urgent first. Labels match the row's status badge.
+const PROJECT_GROUP_COUNT_ORDER: ReadonlyArray<
+  readonly [Exclude<SidebarV2TopStatusKind, "working">, string]
+> = [
+  ["approval", "Approval"],
+  ["input", "Input"],
+  ["failed", "Failed"],
+  ["limited", "Limited"],
+  ["woke", "Woke"],
+  ["done", "Done"],
+  ["waiting", "Waiting"],
+];
+
+/** The per-status counts a group header shows: only while folded, since an
+    open group's rows carry their own badges. */
+export function resolveSidebarProjectGroupCounts(
+  statusCounts: Readonly<Partial<Record<SidebarV2TopStatusKind, number>>>,
+  options: { readonly open: boolean },
+): Array<{
+  readonly status: Exclude<SidebarV2TopStatusKind, "working">;
+  readonly count: number;
+  readonly label: string;
+}> {
+  if (options.open) return [];
+  return PROJECT_GROUP_COUNT_ORDER.flatMap(([status, label]) => {
+    const count = statusCounts[status] ?? 0;
+    return count > 0 ? [{ status, count, label }] : [];
+  });
+}
+
+const PROJECT_GROUP_MARKER_PREFIX = "project-group:";
+
+/** The fold key a project group header marker stands for; null otherwise. */
+export function sidebarProjectGroupFoldKeyOfMarker(marker: SidebarListMarker): string | null {
+  return marker.startsWith(PROJECT_GROUP_MARKER_PREFIX)
+    ? marker.slice(PROJECT_GROUP_MARKER_PREFIX.length)
+    : null;
+}
+
+/**
+ * The active section's rows in the grouped layout: the "Needs you" label and
+ * its full rows, then each group's header with its one-line rows when open.
+ * A folded group shows only its header, except for the open thread, which
+ * stays visible beneath it (the shelves make the same exception) without
+ * opening the group. `visibleThreads` is the rendered order, for keyboard
+ * navigation and jump hints.
+ */
+export function buildSidebarGroupedActiveRows<TThread>(input: {
+  readonly model: SidebarGroupedActiveModel<TThread>;
+  readonly openFoldKeys: readonly string[];
+  readonly routeThreadKey: string | null;
+  readonly threadKey: (thread: TThread) => string;
+}): { readonly items: SidebarListItem[]; readonly visibleThreads: TThread[] } {
+  const items: SidebarListItem[] = [{ kind: "marker", marker: "needs-you-header" }];
+  const visibleThreads: TThread[] = [];
+  for (const thread of input.model.floating) {
+    items.push({ kind: "thread", key: input.threadKey(thread), section: "active" });
+    visibleThreads.push(thread);
+  }
+  const open = new Set(input.openFoldKeys);
+  for (const group of input.model.groups) {
+    const foldKey = sidebarProjectGroupFoldKey(group.projectKey);
+    items.push({ kind: "marker", marker: `${PROJECT_GROUP_MARKER_PREFIX}${foldKey}` });
+    const isOpen = open.has(foldKey);
+    for (const thread of group.threads) {
+      const key = input.threadKey(thread);
+      if (!isOpen && key !== input.routeThreadKey) continue;
+      items.push({ kind: "thread", key, section: "active", compact: true });
+      visibleThreads.push(thread);
+    }
+  }
+  return { items, visibleThreads };
 }
 
 /**

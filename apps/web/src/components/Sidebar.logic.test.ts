@@ -8,6 +8,12 @@ import { AsyncResult } from "effect/reactivity";
 import {
   animateSidebarLayoutChanges,
   buildSidebarGroupedActiveModel,
+  resolveSidebarThreadAttention,
+  sidebarProjectGroupFoldKey,
+  toggleSidebarProjectGroupOpen,
+  buildSidebarGroupedActiveRows,
+  sidebarProjectGroupFoldKeyOfMarker,
+  resolveSidebarProjectGroupCounts,
   filterToEnvironment,
   isDraftSessionInSidebarScope,
   resolveSidebarEnvironmentFilter,
@@ -2725,5 +2731,166 @@ describe("buildSidebarGroupedActiveModel", () => {
     expect(model.groups.map((g) => [g.projectKey, ids(g.threads), g.statusCounts])).toEqual([
       ["shared", ["on-remote", "on-local"], { woke: 1 }],
     ]);
+  });
+});
+
+describe("resolveSidebarThreadAttention", () => {
+  // The run in makeLatestRun completes at 10:05.
+  const visitedThread = (lastVisitedAt: string | null) =>
+    makeThreadFixture({ latestRun: makeLatestRun(), lastVisitedAt });
+
+  it("reads a completion after the last visit as unread", () => {
+    expect(
+      resolveSidebarThreadAttention({
+        thread: visitedThread("2026-03-09T10:00:00.000Z"),
+        localLastVisitedAt: undefined,
+        wokeAt: null,
+      }),
+    ).toEqual({ isUnread: true, isWoke: false });
+    expect(
+      resolveSidebarThreadAttention({
+        thread: visitedThread("2026-03-09T10:06:00.000Z"),
+        localLastVisitedAt: undefined,
+        wokeAt: null,
+      }),
+    ).toEqual({ isUnread: false, isWoke: false });
+  });
+
+  it("is woke until the thread is visited after the wake", () => {
+    const wokeAt = "2026-03-09T11:00:00.000Z";
+    expect(
+      resolveSidebarThreadAttention({
+        thread: visitedThread("2026-03-09T10:06:00.000Z"),
+        localLastVisitedAt: undefined,
+        wokeAt,
+      }).isWoke,
+    ).toBe(true);
+    expect(
+      resolveSidebarThreadAttention({
+        thread: visitedThread("2026-03-09T11:01:00.000Z"),
+        localLastVisitedAt: undefined,
+        wokeAt,
+      }).isWoke,
+    ).toBe(false);
+  });
+
+  it("uses the local visit when the server does not track visits", () => {
+    const thread = {
+      ...makeThreadFixture({ latestRun: makeLatestRun() }),
+      lastVisitedAt: undefined,
+    };
+    expect(
+      resolveSidebarThreadAttention({
+        thread,
+        localLastVisitedAt: "2026-03-09T10:06:00.000Z",
+        wokeAt: "2026-03-09T10:03:00.000Z",
+      }),
+    ).toEqual({ isUnread: false, isWoke: false });
+  });
+});
+
+describe("toggleSidebarProjectGroupOpen", () => {
+  it("opens a folded group and folds an open one, leaving others alone", () => {
+    const opened = toggleSidebarProjectGroupOpen(["beta"], sidebarProjectGroupFoldKey("alpha"));
+    expect(opened).toEqual(["beta", "alpha"]);
+    expect(toggleSidebarProjectGroupOpen(opened, sidebarProjectGroupFoldKey("alpha"))).toEqual([
+      "beta",
+    ]);
+  });
+
+  it("keeps the No project group apart from any real project key", () => {
+    const noProject = sidebarProjectGroupFoldKey(null);
+    expect(noProject).not.toBe(sidebarProjectGroupFoldKey("No project"));
+    expect(noProject).not.toBe(sidebarProjectGroupFoldKey(""));
+    expect(toggleSidebarProjectGroupOpen([], noProject)).toEqual([noProject]);
+  });
+});
+
+describe("buildSidebarGroupedActiveRows", () => {
+  type Row = { readonly key: string };
+  const row = (key: string): Row => ({ key });
+  const model = {
+    floating: [row("done-1"), row("input-1")],
+    groups: [
+      {
+        projectKey: "alpha",
+        displayName: "Alpha",
+        threads: [row("a1"), row("a2")],
+        statusCounts: {},
+      },
+      { projectKey: null, displayName: "No project", threads: [row("n1")], statusCounts: {} },
+    ],
+  };
+  const build = (openFoldKeys: readonly string[], routeThreadKey: string | null = null) =>
+    buildSidebarGroupedActiveRows({
+      model,
+      openFoldKeys,
+      routeThreadKey,
+      threadKey: (thread) => thread.key,
+    });
+  const describeItems = (items: readonly SidebarListItem[]) =>
+    items.map((item) =>
+      item.kind === "marker" ? item.marker : `${item.key}${item.compact ? " (compact)" : ""}`,
+    );
+
+  it("lists Needs you rows in full, then a header per folded group and nothing inside", () => {
+    const { items, visibleThreads } = build([]);
+    expect(describeItems(items)).toEqual([
+      "needs-you-header",
+      "done-1",
+      "input-1",
+      `project-group:${sidebarProjectGroupFoldKey("alpha")}`,
+      `project-group:${sidebarProjectGroupFoldKey(null)}`,
+    ]);
+    expect(visibleThreads.map((thread) => thread.key)).toEqual(["done-1", "input-1"]);
+  });
+
+  it("shows an open group's threads as compact rows under its header", () => {
+    const { items, visibleThreads } = build([sidebarProjectGroupFoldKey(null)]);
+    expect(describeItems(items).slice(3)).toEqual([
+      `project-group:${sidebarProjectGroupFoldKey("alpha")}`,
+      `project-group:${sidebarProjectGroupFoldKey(null)}`,
+      "n1 (compact)",
+    ]);
+    expect(visibleThreads.map((thread) => thread.key)).toEqual(["done-1", "input-1", "n1"]);
+  });
+
+  it("keeps the open thread's row visible under its folded header without opening it", () => {
+    const { items } = build([], "a2");
+    expect(describeItems(items).slice(3)).toEqual([
+      `project-group:${sidebarProjectGroupFoldKey("alpha")}`,
+      "a2 (compact)",
+      `project-group:${sidebarProjectGroupFoldKey(null)}`,
+    ]);
+  });
+
+  it("reads the fold key back from a group header marker", () => {
+    const { items } = build([]);
+    const header = items[3]!;
+    expect(header.kind === "marker" && sidebarProjectGroupFoldKeyOfMarker(header.marker)).toBe(
+      sidebarProjectGroupFoldKey("alpha"),
+    );
+    expect(sidebarProjectGroupFoldKeyOfMarker("needs-you-header")).toBeNull();
+  });
+});
+
+describe("resolveSidebarProjectGroupCounts", () => {
+  it("lists a folded header's counts most urgent first, labelled like the row badges", () => {
+    expect(
+      resolveSidebarProjectGroupCounts(
+        { woke: 4, done: 2, failed: 1, waiting: 1 },
+        { open: false },
+      ),
+    ).toEqual([
+      { status: "failed", count: 1, label: "Failed" },
+      { status: "woke", count: 4, label: "Woke" },
+      { status: "done", count: 2, label: "Done" },
+      { status: "waiting", count: 1, label: "Waiting" },
+    ]);
+  });
+
+  it("shows nothing on a quiet group or an open one, whose rows carry their own badges", () => {
+    expect(resolveSidebarProjectGroupCounts({}, { open: false })).toEqual([]);
+    expect(resolveSidebarProjectGroupCounts({ woke: 1 }, { open: true })).toEqual([]);
   });
 });
