@@ -44,18 +44,29 @@ export function importableBrowserSources(
 }
 
 /**
- * The preview pane's one-time import prompt. `sources` is null until the one
- * lazy listing returns, which keeps the banner from appearing and then
- * vanishing on a machine with no importable browser.
+ * The preview pane's one-time import prompt, asked only where an import into
+ * the tab's profile is possible. `sources` is null until the one lazy listing
+ * returns, which keeps the banner from appearing and then vanishing on a
+ * machine with no importable browser.
  */
 export function shouldShowCookieImportBanner(input: {
-  readonly importSupported: boolean;
-  readonly profilePersistent: boolean;
   readonly dismissed: boolean;
   readonly sources: ReadonlyArray<BrowserImportSource> | null;
 }): boolean {
-  if (!input.importSupported || !input.profilePersistent || input.dismissed) return false;
-  return input.sources !== null && importableBrowserSources(input.sources).length > 0;
+  if (input.dismissed || input.sources === null) return false;
+  return importableBrowserSources(input.sources).length > 0;
+}
+
+/**
+ * What the preview does once an import it opened lands cookies. The prompt has
+ * done its job either way; the tab reloads only if it still shows the profile
+ * the cookies went into, since it can switch profile while the import runs.
+ */
+export function previewImportLanded(
+  importedProfileId: string,
+  tabProfileId: string,
+): { readonly reloadTab: boolean; readonly dismissBanner: boolean } {
+  return { reloadTab: importedProfileId === tabProfileId, dismissBanner: true };
 }
 
 /** The only browser worth offering, when there is no choice to show. */
@@ -64,4 +75,20 @@ export function singleImportableSource(
 ): BrowserImportSource | undefined {
   const importable = importableBrowserSources(sources);
   return importable.length === 1 ? importable[0] : undefined;
+}
+
+/**
+ * Runs `load` at most once per app session and shares the answer, including
+ * with callers that arrive while it is still running. A failure is not kept,
+ * so the next caller tries again.
+ */
+export function oncePerSession<T>(load: () => Promise<T>): () => Promise<T> {
+  let pending: Promise<T> | null = null;
+  return () => {
+    pending ??= load().catch((cause: unknown) => {
+      pending = null;
+      throw cause;
+    });
+    return pending;
+  };
 }

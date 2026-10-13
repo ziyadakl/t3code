@@ -1,14 +1,30 @@
 import type { BrowserImportSource, EnvironmentId } from "@t3tools/contracts";
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+
+import { previewBridge } from "~/components/preview/previewBridge";
 
 import {
   browserImportSupported,
   useBrowserImportDestination,
   useBrowserImportLauncher,
 } from "./BrowserImportLauncher";
-import { shouldShowCookieImportBanner } from "./browserImportLauncher.logic";
+import {
+  oncePerSession,
+  previewImportLanded,
+  shouldShowCookieImportBanner,
+} from "./browserImportLauncher.logic";
 import { useCookieImportBannerDismissal } from "./cookieImportBannerDismissal";
 import { PreviewCookieImportBanner } from "./PreviewCookieImportBanner";
+
+/**
+ * Whether the banner has anything to offer barely changes while the app runs,
+ * so one listing serves every preview pane this session. Menus still list
+ * fresh when they open, since the state of each browser does change.
+ */
+const listSourcesForBanner = oncePerSession(async () => {
+  if (!previewBridge) return [];
+  return previewBridge.listBrowserImportSources();
+});
 
 /** What the ⋮ menu needs to offer "Import cookies from browser". */
 export interface PreviewCookieImportMenu {
@@ -20,8 +36,9 @@ export interface PreviewCookieImportMenu {
 /**
  * Cookie import from inside the preview pane: the ⋮ menu entry, the one-time
  * banner, and the wizard both open. Imports land in the tab's own profile and
- * environment, and the tab reloads once they do so the user sees themselves
- * signed in.
+ * environment, with no other choice, and the tab reloads once they do so the
+ * user sees themselves signed in. The banner goes away for good when the user
+ * closes it or an import lands; backing out of the wizard keeps it.
  *
  * `available` is false where this machine's browsers are not the tab's: web
  * and remote clients have no bridge to read them, and a server-run tab keeps
@@ -53,16 +70,24 @@ export function usePreviewCookieImport(input: {
     latest.current = input;
   });
 
-  // Listed once for the banner, and only while it could show.
+  // Listed for the banner only while it could show.
   const bannerCandidate = usable && !dismissed;
-  const { loadSources, sources } = launcher;
-  const loadedForBanner = useRef(false);
+  const [bannerSources, setBannerSources] = useState<ReadonlyArray<BrowserImportSource> | null>(
+    null,
+  );
   useEffect(() => {
-    if (!bannerCandidate || loadedForBanner.current) return;
-    loadedForBanner.current = true;
-    loadSources();
-  }, [bannerCandidate, loadSources]);
+    if (!bannerCandidate) return;
+    let current = true;
+    void listSourcesForBanner().then(
+      (listed) => current && setBannerSources(listed),
+      () => current && setBannerSources([]),
+    );
+    return () => {
+      current = false;
+    };
+  }, [bannerCandidate]);
 
+  const { loadSources, sources } = launcher;
   if (!usable || destination === null) {
     return { menu: undefined, banner: null, wizard: launcher.wizard };
   }
@@ -72,24 +97,27 @@ export function usePreviewCookieImport(input: {
       source,
       destination,
       initialTargetProfileId: input.profileId,
+      targetLocked: true,
       currentUrl: input.currentUrl,
       onImported: (targetProfileId) => {
-        if (targetProfileId === latest.current.profileId) latest.current.reload();
+        const landed = previewImportLanded(targetProfileId, latest.current.profileId);
+        if (landed.dismissBanner) dismiss();
+        if (landed.reloadTab) latest.current.reload();
       },
     });
 
-  const showBanner = shouldShowCookieImportBanner({
-    importSupported: browserImportSupported,
-    profilePersistent: input.profilePersistent,
-    dismissed,
-    sources,
-  });
+  const showBanner = shouldShowCookieImportBanner({ dismissed, sources: bannerSources });
 
   return {
     menu: { sources, loadSources, onChoose },
     banner:
-      showBanner && sources ? (
-        <PreviewCookieImportBanner sources={sources} onChoose={onChoose} onDismiss={dismiss} />
+      showBanner && bannerSources ? (
+        <PreviewCookieImportBanner
+          sources={sources ?? bannerSources}
+          loadSources={loadSources}
+          onChoose={onChoose}
+          onDismiss={dismiss}
+        />
       ) : null,
     wizard: launcher.wizard,
   };

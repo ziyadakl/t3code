@@ -5,6 +5,8 @@ import {
   importFailureReason,
   importableBrowserSources,
   listSitesOutcome,
+  oncePerSession,
+  previewImportLanded,
   shouldShowCookieImportBanner,
   singleImportableSource,
 } from "./browserImportLauncher.logic";
@@ -33,14 +35,9 @@ describe("importableBrowserSources", () => {
 });
 
 describe("shouldShowCookieImportBanner", () => {
-  const ready = {
-    importSupported: true,
-    profilePersistent: true,
-    dismissed: false,
-    sources: [source("chrome")],
-  };
+  const ready = { dismissed: false, sources: [source("chrome")] };
 
-  it("shows when the desktop can import into a persistent profile and a browser is here", () => {
+  it("shows while a browser is here to import from", () => {
     expect(shouldShowCookieImportBanner(ready)).toBe(true);
   });
 
@@ -48,10 +45,8 @@ describe("shouldShowCookieImportBanner", () => {
     expect(shouldShowCookieImportBanner({ ...ready, sources: null })).toBe(false);
   });
 
-  it("stays hidden once dismissed, in incognito, or where this machine's browsers are out of reach", () => {
+  it("stays hidden once dismissed", () => {
     expect(shouldShowCookieImportBanner({ ...ready, dismissed: true })).toBe(false);
-    expect(shouldShowCookieImportBanner({ ...ready, profilePersistent: false })).toBe(false);
-    expect(shouldShowCookieImportBanner({ ...ready, importSupported: false })).toBe(false);
   });
 
   it("stays hidden when no browser can be imported from", () => {
@@ -67,6 +62,19 @@ describe("shouldShowCookieImportBanner", () => {
     expect(
       shouldShowCookieImportBanner({ ...ready, sources: [source("arc", "browserRunning")] }),
     ).toBe(true);
+  });
+});
+
+describe("previewImportLanded", () => {
+  it("reloads the tab when the cookies landed in the profile it shows", () => {
+    expect(previewImportLanded("work", "work")).toEqual({ reloadTab: true, dismissBanner: true });
+  });
+
+  it("leaves the tab alone when it moved to another profile while the import ran", () => {
+    expect(previewImportLanded("work", "personal")).toEqual({
+      reloadTab: false,
+      dismissBanner: true,
+    });
   });
 });
 
@@ -130,5 +138,33 @@ describe("singleImportableSource", () => {
   it("is absent when there is a real choice to make", () => {
     expect(singleImportableSource([source("chrome"), source("safari")])).toBeUndefined();
     expect(singleImportableSource([])).toBeUndefined();
+  });
+});
+
+describe("oncePerSession", () => {
+  it("lists once and hands every caller the same answer, even while it is in flight", async () => {
+    let calls = 0;
+    const listed = oncePerSession(async () => {
+      calls += 1;
+      return [source("chrome")];
+    });
+
+    const [first, second] = await Promise.all([listed(), listed()]);
+    await listed();
+
+    expect(calls).toBe(1);
+    expect(second).toBe(first);
+  });
+
+  it("tries again after a failed listing instead of keeping the failure", async () => {
+    let calls = 0;
+    const listed = oncePerSession(async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("bridge not ready");
+      return [source("chrome")];
+    });
+
+    await expect(listed()).rejects.toThrow("bridge not ready");
+    await expect(listed()).resolves.toEqual([source("chrome")]);
   });
 });

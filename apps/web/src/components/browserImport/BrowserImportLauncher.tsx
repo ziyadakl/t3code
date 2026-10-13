@@ -14,10 +14,9 @@ import {
 } from "@t3tools/contracts";
 import { useCallback, useRef, useState, type ReactNode } from "react";
 
-import { clearBrowserProfileData } from "~/browser/browserProfileData";
 import { resolveEnvironmentOptionLabel } from "~/components/BranchToolbar.logic";
 import { previewBridge } from "~/components/preview/previewBridge";
-import { BrowserImportWizard, type WizardTarget } from "./BrowserImportWizard";
+import { BrowserImportWizard } from "./BrowserImportWizard";
 import type { ImportOutcome } from "./browserImportWizard.logic";
 import { MenuItem } from "~/components/ui/menu";
 import { toastManager } from "~/components/ui/toast";
@@ -30,11 +29,13 @@ import {
 import { readLocalApi } from "~/localApi";
 import { useEnvironment, usePrimaryEnvironmentId } from "~/state/environments";
 
+import { importableBrowserSources, listSitesOutcome } from "./browserImportLauncher.logic";
 import {
-  importFailureReason,
-  importableBrowserSources,
-  listSitesOutcome,
-} from "./browserImportLauncher.logic";
+  runBrowserImport,
+  type BrowserImportChoice,
+  type BrowserImportRun,
+  type BrowserProfileStore,
+} from "./runBrowserImport";
 
 /**
  * Whether this client can read the machine's browsers at all. Web and remote
@@ -75,24 +76,29 @@ export function useBrowserImportDestination(
   );
 }
 
-export interface BrowserImportRequest {
-  readonly source: BrowserImportSource;
+export interface BrowserImportRequest extends BrowserImportRun {
   readonly destination: BrowserImportDestination;
   /** Existing profile to start "Into" on; the wizard's own default otherwise. */
   readonly initialTargetProfileId?: string | undefined;
+  /** Import into `initialTargetProfileId` only, with no "Into" choice. */
+  readonly targetLocked?: boolean | undefined;
   /** URL of the preview tab asking, so the wizard can put its site first. */
   readonly currentUrl?: string | undefined;
-  /** Runs once cookies have landed in `targetProfileId`. */
-  readonly onImported?: ((targetProfileId: string) => void) | undefined;
 }
 
-/** Thrown from the post-import settings updater when the cap was hit meanwhile. */
-class ProfileLimitReachedError extends Error {
-  constructor() {
-    super("Browser profile limit reached.");
-    this.name = "ProfileLimitReachedError";
-  }
-}
+/** The saved browser profiles as client settings hold them. */
+const browserProfileStore: BrowserProfileStore = {
+  current: () => getClientSettings().browserProfiles,
+  update: async (update) =>
+    (
+      await persistClientSettingsUpdate((settings) => {
+        const browserProfiles = update(settings.browserProfiles);
+        return browserProfiles === settings.browserProfiles
+          ? settings
+          : { ...settings, browserProfiles };
+      })
+    ).browserProfiles,
+};
 
 /**
  * Sources are listed lazily, by `loadSources`, when a menu opens: detection
@@ -119,106 +125,17 @@ export function useBrowserImportLauncher() {
 
   const isImportInFlight = useCallback(() => importInFlightRef.current, []);
 
-  // A new profile is registered only once the import succeeds — the cookies
-  // land in its partition first — so a blocked attempt never leaves an empty
-  // profile behind.
   const runImport = async (
     current: BrowserImportRequest,
-    input: {
-      readonly sourceProfileDirectory: string;
-      readonly target: WizardTarget;
-      readonly domains: ReadonlyArray<string>;
-    },
+    choice: BrowserImportChoice,
   ): Promise<ImportOutcome> => {
-    const { source, destination } = current;
-    if (!previewBridge) return { kind: "blocked", reason: "sessionUnavailable" };
-    if (!settingsHydrated) return { kind: "blocked", reason: "sessionUnavailable" };
-    const targetStillExists = () =>
-      resolveBrowserProfiles(getClientSettings().browserProfiles).some(
-        (profile) => profile.id === input.target.profileId,
-      );
-    if (input.target.kind === "existing" && !targetStillExists()) {
-      return { kind: "blocked", reason: "readFailed" };
-    }
+    if (!previewBridge || !settingsHydrated)
+      return { kind: "blocked", reason: "sessionUnavailable" };
     if (importInFlightRef.current) return { kind: "blocked", reason: "readFailed" };
     importInFlightRef.current = true;
     setImportInFlight(true);
     try {
-      const result = await previewBridge.importBrowserCookies({
-        environmentId: destination.environmentId,
-        sourceId: source.id,
-        sourceProfileDirectory: input.sourceProfileDirectory,
-        targetProfileId: input.target.profileId,
-        domains: input.domains,
-      });
-      if (input.target.kind === "existing" && !targetStillExists()) {
-        return { kind: "blocked", reason: "readFailed" };
-      }
-      let targetName: string;
-      if (input.target.kind === "new") {
-        // Registered only when something actually came over: an import that
-        // found no cookies should not leave a new, empty profile behind.
-        if (result.imported > 0) {
-          try {
-            const persisted = await persistClientSettingsUpdate((settings) => {
-              const existing = settings.browserProfiles.find(
-                (profile) => profile.id === input.target.profileId,
-              );
-              if (existing) return settings;
-              // The wizard refuses a new target at the cap, but the cap can be
-              // reached while the import runs; the updater sees the newest
-              // settings, so this is the check that holds.
-              if (settings.browserProfiles.length >= BROWSER_PROFILE_MAX_COUNT) {
-                throw new ProfileLimitReachedError();
-              }
-              const taken = new Set(
-                resolveBrowserProfiles(settings.browserProfiles).map((profile) => profile.name),
-              );
-              let name = source.name;
-              for (let index = 2; taken.has(name); index += 1) name = `${source.name} ${index}`;
-              return {
-                ...settings,
-                browserProfiles: [
-                  ...settings.browserProfiles,
-                  { id: input.target.profileId, name, kind: "persistent" as const },
-                ],
-              };
-            });
-            targetName =
-              persisted.browserProfiles.find((profile) => profile.id === input.target.profileId)
-                ?.name ?? source.name;
-          } catch (cause) {
-            // This target id belongs only to the attempted new profile. Clear
-            // its partition so a failed registration cannot strand imported
-            // cookies behind a profile that disappears on restart.
-            await clearBrowserProfileData(
-              previewBridge,
-              [destination.environmentId],
-              input.target.profileId,
-            ).catch(() => undefined);
-            // Not a read failure: the cookies came over and were cleared again
-            // because the profile could not be kept. Name that, in the same
-            // token form `importFailureReason` recovers from a bridge error.
-            const reason =
-              cause instanceof ProfileLimitReachedError ? "profileLimitReached" : "profileNotSaved";
-            throw new Error(`Importing cookies from ${source.id} failed: ${reason}.`, { cause });
-          }
-        } else {
-          targetName = source.name;
-        }
-      } else {
-        targetName = input.target.name;
-      }
-      if (result.imported > 0) current.onImported?.(input.target.profileId);
-      return {
-        kind: "imported",
-        imported: result.imported,
-        skipped: result.skipped,
-        skippedDomains: result.skippedDomains,
-        targetName,
-      };
-    } catch (cause) {
-      return { kind: "blocked", reason: importFailureReason(cause) };
+      return await runBrowserImport(previewBridge, browserProfileStore, current, choice);
     } finally {
       importInFlightRef.current = false;
       setImportInFlight(false);
@@ -266,6 +183,7 @@ export function useBrowserImportLauncher() {
       targetProfiles={targetProfiles}
       canCreateProfile={settingsHydrated && !atProfileLimit}
       initialTargetProfileId={request.initialTargetProfileId}
+      targetLocked={request.targetLocked}
       onListSites={(sourceProfileDirectory) => listSites(request, sourceProfileDirectory)}
       onImport={(input) => runImport(request, input)}
       onRefreshSource={() => refreshSource(request.source.id)}
