@@ -42,9 +42,7 @@ function candidate(
 ): ProjectionStore.ProjectionAutoArchiveCandidate {
   return {
     id: ThreadId.make(id),
-    lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: ThreadId.make(id) },
-    settledOverride: "settled",
-    settledAt: at(-10 * DAY_MS),
+    settledSince: at(-10 * DAY_MS),
     updatedAt: at(-10 * DAY_MS),
     pinnedAt: null,
     snoozedUntil: null,
@@ -65,9 +63,9 @@ describe("resolveAutoArchiveReason", () => {
     expect(resolve(candidate("old"), 14)).toBeNull();
     expect(resolve(candidate("old"), null)).toBeNull();
     expect(
-      resolve(candidate("recent", { settledAt: at(-2 * DAY_MS), updatedAt: at(-2 * DAY_MS) })),
+      resolve(candidate("recent", { settledSince: at(-2 * DAY_MS), updatedAt: at(-2 * DAY_MS) })),
     ).toBeNull();
-    expect(resolve(candidate("active", { settledOverride: "active", settledAt: null }))).toBeNull();
+    expect(resolve(candidate("active", { settledSince: null }))).toBeNull();
   });
 
   it("restarts the clock when a settled thread changes, such as an unarchive", () => {
@@ -85,8 +83,7 @@ describe("resolveAutoArchiveReason", () => {
   it("archives orphaned subagent children even with the threshold off", () => {
     const orphan = candidate("orphan", {
       orphaned: true,
-      settledOverride: null,
-      settledAt: null,
+      settledSince: null,
       updatedAt: at(-60 * 1_000),
     });
     expect(resolve(orphan)).toBe("orphaned");
@@ -243,9 +240,9 @@ describe("ThreadArchiveServiceV2 worker", () => {
         const fixture = yield* makeHarness({
           candidates: [
             candidate("old-settled"),
-            candidate("recent-settled", { settledAt: at(-DAY_MS), updatedAt: at(-DAY_MS) }),
+            candidate("recent-settled", { settledSince: at(-DAY_MS), updatedAt: at(-DAY_MS) }),
             candidate("pinned", { pinnedAt: at(-DAY_MS) }),
-            candidate("orphan", { orphaned: true, settledOverride: null, settledAt: null }),
+            candidate("orphan", { orphaned: true, settledSince: null }),
           ],
         });
         yield* Effect.gen(function* () {

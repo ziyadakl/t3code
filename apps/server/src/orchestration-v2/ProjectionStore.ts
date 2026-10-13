@@ -198,10 +198,11 @@ export type ProjectionSettlementCandidate = Pick<
  * An unarchived thread the auto-archive sweep may archive: one that is settled,
  * or a subagent child whose parent is archived, deleted or missing.
  */
-export type ProjectionAutoArchiveCandidate = Pick<
-  OrchestrationV2AppThread,
-  "id" | "lineage" | "settledOverride" | "settledAt" | "updatedAt" | "pinnedAt" | "snoozedUntil"
-> & {
+export type ProjectionAutoArchiveCandidate = Pick<OrchestrationV2AppThread, "id" | "updatedAt"> & {
+  readonly pinnedAt: DateTime.Utc | null;
+  readonly snoozedUntil: DateTime.Utc | null;
+  /** When the user settled it; null unless it is settled. */
+  readonly settledSince: DateTime.Utc | null;
   /** Subagent child whose parent is archived, deleted or missing. */
   readonly orphaned: boolean;
   /** Has a live run or a pending runtime request. */
@@ -5412,9 +5413,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           decodeThreadPayload(row.payload_json).pipe(
             Effect.map((thread): ProjectionAutoArchiveCandidate => ({
               id: thread.id,
-              lineage: thread.lineage,
-              settledOverride: thread.settledOverride,
-              settledAt: thread.settledAt,
+              settledSince: thread.settledOverride === "settled" ? thread.settledAt : null,
               updatedAt: thread.updatedAt,
               pinnedAt: thread.pinnedAt ?? null,
               snoozedUntil: thread.snoozedUntil ?? null,
@@ -5953,9 +5952,7 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
               .map(
                 ({ thread, runs, runtimeRequests, orphaned }): ProjectionAutoArchiveCandidate => ({
                   id: thread.id,
-                  lineage: thread.lineage,
-                  settledOverride: thread.settledOverride,
-                  settledAt: thread.settledAt,
+                  settledSince: thread.settledOverride === "settled" ? thread.settledAt : null,
                   updatedAt: thread.updatedAt,
                   pinnedAt: thread.pinnedAt ?? null,
                   snoozedUntil: thread.snoozedUntil ?? null,

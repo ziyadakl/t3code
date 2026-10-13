@@ -29,22 +29,16 @@ export function resolveAutoArchiveReason(
   nowMs: number,
   archiveSettledAfterDays: number | null,
 ): "settled" | "orphaned" | null {
-  if (thread.busy || thread.pinnedAt != null) return null;
-  if (thread.snoozedUntil != null && DateTime.toEpochMillis(thread.snoozedUntil) > nowMs) {
+  if (thread.busy || thread.pinnedAt !== null) return null;
+  if (thread.snoozedUntil !== null && DateTime.toEpochMillis(thread.snoozedUntil) > nowMs) {
     return null;
   }
   if (thread.orphaned) return "orphaned";
-  if (
-    archiveSettledAfterDays === null ||
-    thread.settledOverride !== "settled" ||
-    thread.settledAt === null
-  ) {
-    return null;
-  }
+  if (archiveSettledAfterDays === null || thread.settledSince === null) return null;
   // Any later change (an unarchive, a rename, a mode switch) restarts the
   // clock, so a thread the user just unarchived is not archived again at once.
   const anchorMs = Math.max(
-    DateTime.toEpochMillis(thread.settledAt),
+    DateTime.toEpochMillis(thread.settledSince),
     DateTime.toEpochMillis(thread.updatedAt),
   );
   return anchorMs <= nowMs - archiveSettledAfterDays * DAY_MS ? "settled" : null;

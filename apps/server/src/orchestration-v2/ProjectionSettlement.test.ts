@@ -478,12 +478,21 @@ it.effect.each([
 
       const candidates = yield* store.getAutoArchiveCandidates();
       assert.deepEqual(
-        new Map(candidates.map((thread) => [thread.id, [thread.orphaned, thread.busy]])),
+        new Map(
+          candidates.map((thread) => [
+            thread.id,
+            [
+              thread.orphaned,
+              thread.busy,
+              thread.settledSince === null ? null : DateTime.toEpochMillis(thread.settledSince),
+            ],
+          ]),
+        ),
         new Map([
-          [settled, [false, false]],
-          [busy, [false, true]],
-          [orphan, [true, false]],
-          [deletedOrphan, [true, false]],
+          [settled, [false, false, DateTime.toEpochMillis(old)]],
+          [busy, [false, true, DateTime.toEpochMillis(old)]],
+          [orphan, [true, false, null]],
+          [deletedOrphan, [true, false, null]],
         ]),
       );
 
