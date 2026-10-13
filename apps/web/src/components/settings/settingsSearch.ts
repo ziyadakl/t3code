@@ -75,6 +75,8 @@ export interface SettingsSearchItem {
   readonly secondary?: boolean;
   readonly requiresThreadAutoSettlement?: boolean;
   readonly requiresThreadAutoArchive?: boolean;
+  // Its row only renders while the sidebar groups threads by project.
+  readonly requiresSidebarProjectGroups?: boolean;
 }
 
 export interface SettingsSearchAvailability {
@@ -88,6 +90,7 @@ export interface SettingsSearchAvailability {
   readonly hasThreadAutoSettlement: boolean;
   readonly hasThreadAutoArchive: boolean;
   readonly managedTunnelActive?: boolean;
+  readonly sidebarProjectGroupsEnabled?: boolean;
 }
 
 /**
@@ -376,6 +379,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [
       "needs you statuses done input approval failed woke limited waiting sidebar groups",
     ],
+    requiresSidebarProjectGroups: true,
   },
   {
     id: "auto-settle-inactive-threads",
@@ -1185,7 +1189,8 @@ export function filterAvailableSettingsSearchItems(
       (!item.wslAvailableOnly || availability.isWslSettingsRowVisible) &&
       (!item.requiresThreadAutoSettlement || availability.hasThreadAutoSettlement) &&
       (!item.requiresThreadAutoArchive || availability.hasThreadAutoArchive) &&
-      (!item.managedTunnelOnly || availability.managedTunnelActive === true),
+      (!item.managedTunnelOnly || availability.managedTunnelActive === true) &&
+      (!item.requiresSidebarProjectGroups || availability.sidebarProjectGroupsEnabled === true),
   );
 }
 
