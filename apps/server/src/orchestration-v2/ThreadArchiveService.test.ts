@@ -5,7 +5,6 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
-  type OrchestrationV2AppThread,
   type OrchestrationV2Command,
   type OrchestrationV2DomainEvent,
   type ServerSettings as ContractServerSettings,
@@ -115,7 +114,7 @@ const testCrypto = Crypto.make({
 interface HarnessOptions {
   readonly candidates?: ReadonlyArray<ProjectionStore.ProjectionAutoArchiveCandidate>;
   readonly children?: Readonly<
-    Record<string, ReadonlyArray<Pick<OrchestrationV2AppThread, "id" | "archivedAt">>>
+    Record<string, ReadonlyArray<ProjectionStore.ProjectionSubagentChild>>
   >;
   readonly settings?: ContractServerSettings;
 }
@@ -289,7 +288,7 @@ describe("ThreadArchiveServiceV2 worker", () => {
     ),
   );
 
-  it.effect("archives and unarchives a thread's subagent children with it", () =>
+  it.effect("archives and unarchives a thread's idle subagent children with it", () =>
     Effect.scoped(
       Effect.gen(function* () {
         yield* TestClock.setTime(NOW_MS);
@@ -297,8 +296,9 @@ describe("ThreadArchiveServiceV2 worker", () => {
         const fixture = yield* makeHarness({
           children: {
             parent: [
-              { id: ThreadId.make("child-open"), archivedAt: null },
-              { id: ThreadId.make("child-archived"), archivedAt: at(-DAY_MS) },
+              { id: ThreadId.make("child-open"), archivedAt: null, busy: false },
+              { id: ThreadId.make("child-running"), archivedAt: null, busy: true },
+              { id: ThreadId.make("child-archived"), archivedAt: at(-DAY_MS), busy: false },
             ],
           },
         });

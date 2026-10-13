@@ -209,6 +209,11 @@ export type ProjectionAutoArchiveCandidate = Pick<OrchestrationV2AppThread, "id"
   readonly busy: boolean;
 };
 
+export type ProjectionSubagentChild = Pick<OrchestrationV2AppThread, "id" | "archivedAt"> & {
+  /** Has a live run or a pending runtime request, as for an auto-archive candidate. */
+  readonly busy: boolean;
+};
+
 const ProjectionCheckpointContext = Schema.Struct({
   runs: Schema.Array(
     OrchestrationV2RunJsonSchema.mapFields(({ id, ordinal, status }) => ({ id, ordinal, status })),
@@ -379,10 +384,7 @@ export interface ProjectionStoreV2Shape {
   /** Subagent children of `threadId` that are not deleted, archived or not. */
   readonly getSubagentChildren: (
     threadId: ThreadId,
-  ) => Effect.Effect<
-    ReadonlyArray<Pick<OrchestrationV2AppThread, "id" | "archivedAt">>,
-    ProjectionStoreV2Error
-  >;
+  ) => Effect.Effect<ReadonlyArray<ProjectionSubagentChild>, ProjectionStoreV2Error>;
   /**
    * Active (not deleted, not archived) threads with at least one pull request
    * link, in shell snapshot order, or only `threadId` when given. Skips run,
@@ -1549,6 +1551,16 @@ function isActivityRunForShell(
   readonly status: ShellActivityRunStatus;
 } {
   return isInterruptibleRunForShell(run) || run.status === "waiting";
+}
+
+/** A thread the archive sweep and cascade leave alone: it has a live run or a pending request. */
+function isBusyProjection(
+  projection: Pick<OrchestrationV2ThreadProjection, "runs" | "runtimeRequests">,
+): boolean {
+  return (
+    projection.runs.some(isActivityRunForShell) ||
+    projection.runtimeRequests.some((request) => request.status === "pending")
+  );
 }
 
 type ShellThreadState = {
@@ -5367,6 +5379,21 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         )
         .pipe(Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })));
 
+    // Mirrors isBusyProjection: a live run or a pending runtime request.
+    const isBusyThread = (threadId: Statement.Fragment) => sql`
+      (
+        EXISTS (
+          SELECT 1 FROM orchestration_v2_projection_runs active
+          WHERE active.thread_id = ${threadId}
+            AND active.status IN ('preparing', 'starting', 'running', 'waiting')
+        )
+        OR EXISTS (
+          SELECT 1 FROM orchestration_v2_projection_runtime_requests request
+          WHERE request.thread_id = ${threadId} AND request.status = 'pending'
+        )
+      )
+    `;
+
     const getAutoArchiveCandidates: ProjectionStoreV2Shape["getAutoArchiveCandidates"] = () =>
       Effect.gen(function* () {
         const rows = yield* sql<{
@@ -5375,17 +5402,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           readonly busy: number;
         }>`
           SELECT candidate.payload_json, candidate.orphaned,
-            (
-              EXISTS (
-                SELECT 1 FROM orchestration_v2_projection_runs active
-                WHERE active.thread_id = candidate.thread_id
-                  AND active.status IN ('preparing', 'starting', 'running', 'waiting')
-              )
-              OR EXISTS (
-                SELECT 1 FROM orchestration_v2_projection_runtime_requests request
-                WHERE request.thread_id = candidate.thread_id AND request.status = 'pending'
-              )
-            ) AS busy
+            ${isBusyThread(sql`candidate.thread_id`)} AS busy
           FROM (
             SELECT t.thread_id, t.payload_json, t.updated_at,
               (
@@ -5426,17 +5443,21 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
 
     const getSubagentChildren: ProjectionStoreV2Shape["getSubagentChildren"] = (threadId) =>
       Effect.gen(function* () {
-        const rows = yield* sql<PayloadRow>`
-          SELECT payload_json
-          FROM orchestration_v2_projection_threads
-          WHERE deleted_at IS NULL
-            AND json_extract(payload_json, '$.lineage.parentThreadId') = ${threadId}
-            AND json_extract(payload_json, '$.lineage.relationshipToParent') = 'subagent'
-          ORDER BY created_at ASC, thread_id ASC
+        const rows = yield* sql<{ readonly payload_json: string; readonly busy: number }>`
+          SELECT child.payload_json, ${isBusyThread(sql`child.thread_id`)} AS busy
+          FROM orchestration_v2_projection_threads child
+          WHERE child.deleted_at IS NULL
+            AND json_extract(child.payload_json, '$.lineage.parentThreadId') = ${threadId}
+            AND json_extract(child.payload_json, '$.lineage.relationshipToParent') = 'subagent'
+          ORDER BY child.created_at ASC, child.thread_id ASC
         `;
         return yield* Effect.forEach(rows, (row) =>
           decodeThreadPayload(row.payload_json).pipe(
-            Effect.map((thread) => ({ id: thread.id, archivedAt: thread.archivedAt })),
+            Effect.map((thread): ProjectionSubagentChild => ({
+              id: thread.id,
+              archivedAt: thread.archivedAt,
+              busy: row.busy === 1,
+            })),
           ),
         );
       }).pipe(Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })));
@@ -5957,9 +5978,7 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                   pinnedAt: thread.pinnedAt ?? null,
                   snoozedUntil: thread.snoozedUntil ?? null,
                   orphaned,
-                  busy:
-                    runs.some(isActivityRunForShell) ||
-                    runtimeRequests.some((request) => request.status === "pending"),
+                  busy: isBusyProjection({ runs, runtimeRequests }),
                 }),
               ),
           ),
@@ -5968,14 +5987,17 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
         Ref.get(replayState).pipe(
           Effect.map((state) =>
             [...state.projections.values()]
-              .map(({ thread }) => thread)
               .filter(
-                (thread) =>
+                ({ thread }) =>
                   thread.deletedAt === null &&
                   thread.lineage.parentThreadId === threadId &&
                   thread.lineage.relationshipToParent === "subagent",
               )
-              .map((thread) => ({ id: thread.id, archivedAt: thread.archivedAt })),
+              .map((projection): ProjectionSubagentChild => ({
+                id: projection.thread.id,
+                archivedAt: projection.thread.archivedAt,
+                busy: isBusyProjection(projection),
+              })),
           ),
         ),
       getThreadsWithPullRequests: (threadId) =>

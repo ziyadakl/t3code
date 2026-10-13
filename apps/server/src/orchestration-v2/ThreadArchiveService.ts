@@ -114,7 +114,8 @@ export const make = Effect.gen(function* () {
   });
 
   // Each child's own archived or unarchived event cascades to its children,
-  // so one level per pass reaches every descendant.
+  // so one level per pass reaches every descendant. A running child is never
+  // archived here; the orphan sweep archives it once it is idle.
   const cascade = Effect.fn("ThreadArchiveServiceV2.cascade")(function* (
     threadId: ThreadId,
     archive: boolean,
@@ -123,7 +124,9 @@ export const make = Effect.gen(function* () {
     const type = archive ? "thread.archive" : "thread.unarchive";
     const reason = archive ? "archive-with-parent" : "unarchive-with-parent";
     yield* Effect.forEach(
-      children.filter((child) => (child.archivedAt === null) === archive),
+      children.filter((child) =>
+        archive ? child.archivedAt === null && !child.busy : child.archivedAt !== null,
+      ),
       (child) => dispatch(type, child.id, reason),
       { concurrency: 8, discard: true },
     );

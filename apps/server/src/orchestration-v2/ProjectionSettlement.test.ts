@@ -456,6 +456,8 @@ it.effect.each([
       });
       const live = yield* createThread("archive-live-parent");
       const liveChild = yield* createThread("archive-live-child", subagentOf(live));
+      const busyChild = yield* createThread("archive-busy-child", subagentOf(live));
+      yield* createRun(busyChild, "running");
       const archivedParent = yield* createThread("archive-archived-parent", { archivedAt: old });
       const orphan = yield* createThread("archive-orphan", subagentOf(archivedParent));
       const archivedChild = yield* createThread("archive-archived-child", {
@@ -509,8 +511,11 @@ it.effect.each([
         ]),
       );
       assert.deepEqual(
-        (yield* store.getSubagentChildren(live)).map((child) => child.id),
-        [liveChild],
+        new Map((yield* store.getSubagentChildren(live)).map((child) => [child.id, child.busy])),
+        new Map([
+          [liveChild, false],
+          [busyChild, true],
+        ]),
       );
     }).pipe(Effect.provide(testLayer)),
 );
