@@ -2038,14 +2038,15 @@ function FontFamilySettingsRow({
 const AUTO_SETTLE_DEFAULT_DAYS = DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays ?? 3;
 const AUTO_ARCHIVE_DEFAULT_DAYS = DEFAULT_UNIFIED_SETTINGS.sidebarAutoArchiveSettledAfterDays ?? 7;
 
-function AutoSettleDaysInput({
+/** A day-count field for thread settings such as auto-settle and auto-archive. */
+function ThreadDaysInput({
   value,
   onCommit,
-  ariaLabel = "Days of inactivity before auto-settle",
+  ariaLabel,
 }: {
   value: number;
   onCommit: (days: number) => void;
-  ariaLabel?: string;
+  ariaLabel: string;
 }) {
   // Local draft so the field can be emptied mid-edit; the setting only moves
   // on valid input and snaps back to the persisted value on blur.
@@ -2477,8 +2478,9 @@ export function GeneralSettingsPanel() {
                 title={searchableSetting("days-before-auto-settle").title}
                 description="Any new activity un-settles a thread automatically."
                 control={
-                  <AutoSettleDaysInput
+                  <ThreadDaysInput
                     value={settings.sidebarAutoSettleAfterDays}
+                    ariaLabel="Days of inactivity before auto-settle"
                     onCommit={(days) => updateSettings({ sidebarAutoSettleAfterDays: days })}
                   />
                 }
@@ -2530,7 +2532,7 @@ export function GeneralSettingsPanel() {
                 title={searchableSetting("days-before-auto-archive").title}
                 description="Pinned and snoozed threads are never archived automatically."
                 control={
-                  <AutoSettleDaysInput
+                  <ThreadDaysInput
                     value={settings.sidebarAutoArchiveSettledAfterDays}
                     onCommit={(days) =>
                       updateSettings({ sidebarAutoArchiveSettledAfterDays: days })

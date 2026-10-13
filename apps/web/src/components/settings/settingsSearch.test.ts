@@ -158,6 +158,7 @@ describe("searchSettings", () => {
       canManageLocalBackend: false,
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: false,
+      hasThreadAutoArchive: false,
     });
 
     const gatedIds = new Set<string>([
@@ -176,6 +177,8 @@ describe("searchSettings", () => {
       "auto-settle-inactive-threads",
       "auto-settle-merged-threads",
       "days-before-auto-settle",
+      "auto-archive-settled-threads",
+      "days-before-auto-archive",
     ]);
     expect(available.map((item) => item.id).filter((id) => gatedIds.has(id))).toEqual([]);
   });
@@ -189,6 +192,7 @@ describe("searchSettings", () => {
       canManageLocalBackend: false,
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: false,
+      hasThreadAutoArchive: false,
     };
     const itemIds = (macAvailable: boolean) =>
       filterAvailableSettingsSearchItems({
@@ -208,6 +212,7 @@ describe("searchSettings", () => {
       canManageLocalBackend: false,
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: false,
+      hasThreadAutoArchive: false,
     };
     const remoteOnly = filterAvailableSettingsSearchItems({
       ...availability,
@@ -231,6 +236,7 @@ describe("searchSettings", () => {
       canManageLocalBackend: true,
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: false,
+      hasThreadAutoArchive: false,
     };
     const itemIds = (managedTunnelActive: boolean) =>
       filterAvailableSettingsSearchItems({ ...availability, managedTunnelActive }).map(
@@ -249,6 +255,7 @@ describe("searchSettings", () => {
       canManageLocalBackend: false,
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: true,
+      hasThreadAutoArchive: false,
     });
 
     expect(searchSettings("auto-settle", available).map((item) => item.id)).toEqual([
@@ -256,6 +263,26 @@ describe("searchSettings", () => {
       "auto-settle-merged-threads",
       "days-before-auto-settle",
     ]);
+  });
+
+  it("offers auto-archive settings only when a server supports them", () => {
+    const itemIds = (hasThreadAutoArchive: boolean) =>
+      searchSettings(
+        "auto-archive",
+        filterAvailableSettingsSearchItems({
+          hasCloudPublicConfig: false,
+          hasEnvironment: true,
+          hasProviderSettingsEnvironment: true,
+          hasMacProviderSettingsEnvironment: false,
+          canManageLocalBackend: false,
+          isWslSettingsRowVisible: false,
+          hasThreadAutoSettlement: true,
+          hasThreadAutoArchive,
+        }),
+      ).map((item) => item.id);
+
+    expect(itemIds(false)).toEqual([]);
+    expect(itemIds(true)).toEqual(["auto-archive-settled-threads", "days-before-auto-archive"]);
   });
 
   it("finds keybinding commands by label, command id, and default key", () => {
@@ -380,6 +407,7 @@ describe("searchSettings", () => {
       canManageLocalBackend: false,
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: true,
+      hasThreadAutoArchive: false,
     });
     expect(searchSettings("writing style", available)[0]?.id).toBe("source-control-writing-style");
     expect(searchSettings("auto-settle", available)).toHaveLength(3);
@@ -397,6 +425,15 @@ describe("settings search targets", () => {
       requiresThreadAutoSettlement: true,
     });
   });
+
+  it.each(["auto-archive-settled-threads", "days-before-auto-archive"])(
+    "retains the auto-archive capability requirement for %s",
+    (targetId) => {
+      expect(getSettingsSearchTargetScope(targetId)).toMatchObject({
+        requiresThreadAutoArchive: true,
+      });
+    },
+  );
 
   it("treats device-local rows as reachable from every selection", () => {
     const setting = getSettingsSearchTargetScope("time-format")!;
@@ -475,6 +512,7 @@ describe("auto-settlement search availability", () => {
       canManageLocalBackend: false,
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: availability.eligibleEnvironmentIds.length > 0,
+      hasThreadAutoArchive: false,
     });
     expect(searchSettings("auto-settle", items).map((item) => item.id)).toEqual([
       "auto-settle-inactive-threads",
@@ -541,6 +579,32 @@ describe("auto-settlement search availability", () => {
       }),
     ).toEqual({ eligibleEnvironmentIds: [], isTargetAvailable: false });
     expect(getThreadAutoSettlementSearchAvailability([]).eligibleEnvironmentIds).toEqual([]);
+  });
+});
+
+describe("auto-archive search availability", () => {
+  function environment(id: string, capabilities: Record<string, boolean>) {
+    return {
+      environmentId: EnvironmentId.make(id),
+      connection: { phase: "connected" as const },
+      serverConfig: { environment: { capabilities } },
+    };
+  }
+
+  it("judges the auto-archive capability, not auto-settlement", () => {
+    const settleOnly = environment("settle-only", { threadAutoSettlement: true });
+    const archiving = environment("archiving", {
+      threadAutoSettlement: true,
+      threadAutoArchive: true,
+    });
+
+    expect(
+      getThreadAutoSettlementSearchAvailability(
+        [settleOnly, archiving],
+        { kind: "environment", environmentIds: [settleOnly.environmentId] },
+        "threadAutoArchive",
+      ),
+    ).toEqual({ eligibleEnvironmentIds: [archiving.environmentId], isTargetAvailable: false });
   });
 });
 
