@@ -240,6 +240,9 @@ import {
   resolveSidebarEnvironmentFilter,
   sidebarProjectScopeTriggerLabel,
   sidebarSearchEnvironmentIds,
+  resolveSidebarRowQuickActions,
+  type SidebarRowQuickAction,
+  type SidebarSweepAction,
 } from "./Sidebar.logic";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
@@ -659,6 +662,91 @@ function SnoozeMenuButton(props: {
   );
 }
 
+// The status label sitting under the quick actions leaves the flow and fades
+// while the row is hovered or an action has keyboard focus, so the actions take
+// its place in the same slot. Needs a `group/sidebar-status-slot` parent.
+const STATUS_LABEL_YIELDS_TO_QUICK_ACTIONS =
+  "pointer-events-none group-has-[:focus-visible]/sidebar-status-slot:absolute group-has-[:focus-visible]/sidebar-status-slot:right-0 group-has-[:focus-visible]/sidebar-status-slot:opacity-0 group-any-hover/sidebar-row:absolute group-any-hover/sidebar-row:right-0 group-any-hover/sidebar-row:opacity-0";
+
+/**
+ * An active thread row's hover quick actions (discard draft, snooze, settle),
+ * shared by the card and the slim grouped row. Hidden at rest; cross-fades in
+ * over the row's status label on hover or keyboard focus, and stays pinned
+ * while the snooze menu is open. Slim rows show the settle icon without its label.
+ */
+function SidebarRowQuickActions(props: {
+  actions: readonly SidebarRowQuickAction[];
+  slim: boolean;
+  snoozeMenuOpen: boolean;
+  onSnoozeMenuOpenChange: (open: boolean) => void;
+  onSnooze: (preset: Pick<SnoozePreset, "snoozedUntil">) => void;
+  timestampFormat: TimestampFormat;
+  onDiscardDraft: (event: ReactMouseEvent) => void;
+  onSettle: (event: ReactMouseEvent) => void;
+  onActionPointerDown: (event: ReactPointerEvent) => void;
+}) {
+  const { actions } = props;
+  if (actions.length === 0) return null;
+  return (
+    <span
+      className={cn(
+        // focus-visible, not focus-within: a mouse click leaves
+        // the Settle button focused, and a plain focus-within
+        // would keep the controls pinned over the status label
+        // once the pointer moves away (e.g. after a failed
+        // settle) instead of cross-fading back.
+        "pointer-events-none absolute inset-y-0 right-0 flex items-stretch self-stretch opacity-0 transition-opacity has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:static has-[:focus-visible]:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:static group-any-hover/sidebar-row:opacity-100",
+        props.snoozeMenuOpen && "pointer-events-auto static opacity-100",
+      )}
+    >
+      {actions.includes("discard-draft") ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                aria-label="Discard draft"
+                onClick={props.onDiscardDraft}
+                className="inline-flex cursor-pointer items-center rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
+              />
+            }
+          >
+            <XIcon className="size-3.5" />
+          </TooltipTrigger>
+          <TooltipPopup side="top">Discard draft</TooltipPopup>
+        </Tooltip>
+      ) : null}
+      {actions.includes("snooze") ? (
+        <SnoozeMenuButton
+          open={props.snoozeMenuOpen}
+          onOpenChange={props.onSnoozeMenuOpenChange}
+          onSnooze={props.onSnooze}
+          timestampFormat={props.timestampFormat}
+        />
+      ) : null}
+      {actions.includes("settle") ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                aria-label="Settle thread"
+                onClick={props.onSettle}
+                onPointerDown={props.onActionPointerDown}
+                className="-mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
+              />
+            }
+          >
+            <CheckIcon className="size-3.5" />
+            {props.slim ? null : "Settle"}
+          </TooltipTrigger>
+          <TooltipPopup>Settle thread</TooltipPopup>
+        </Tooltip>
+      ) : null}
+    </span>
+  );
+}
+
 // Subset of useSortable applied to a thread row's root <li>. Listeners go
 // on the whole row (no dedicated handle): the pointer sensor's distance
 // constraint keeps plain clicks working, and we skip dnd-kit's aria
@@ -776,8 +864,6 @@ function SidebarSectionPlaceholder(props: {
 // Pointer travel before a press on a row starts a drag, or a press on its
 // action button starts a sweep. Shorter presses stay clicks.
 const SIDEBAR_DRAG_DISTANCE = 6;
-
-type SidebarSweepAction = "settle" | "unsettle" | "unsnooze";
 
 // Zero-height markers reserve no label space at rest. During a drag the
 // sorting strategy opens 24px for a 16px label with 4px clearance on each side.
@@ -1545,8 +1631,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     canOperateThread &&
     props.snoozeSupported &&
     canSnooze(thread, { now: new Date().toISOString() });
-  const showHoverActions =
-    (canOperateThread && props.settlementSupported) || showSnoozeButton || hasUnsentDraft;
+  const quickActions = resolveSidebarRowQuickActions({
+    variantAction,
+    settlementSupported: props.settlementSupported,
+    snoozeSupported: props.snoozeSupported,
+    canSnoozeNow: showSnoozeButton,
+    hasUnsentDraft,
+  });
   // If the thread becomes blocked while the popover is open, the button
   // unmounts without firing onOpenChange(false). Deriving the flag keeps a
   // stale true from permanently hiding the status label / pinning the
@@ -1799,7 +1890,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
           sortable?.isDragging && "relative z-20",
         )}
       >
-        <Tooltip disabled={sortable?.isDragging}>
+        <Tooltip disabled={snoozeMenuOpen || sortable?.isDragging}>
           <TooltipTrigger
             render={
               <div
@@ -1856,14 +1947,19 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             ) : (
               <span
                 className={cn(
-                  "relative ml-auto flex h-6 min-w-8 shrink-0 items-center justify-end",
+                  "group/sidebar-status-slot relative ml-auto flex h-6 min-w-8 shrink-0 items-center justify-end",
                   props.sweepAction !== null && "hidden",
                 )}
               >
                 <span
                   className={cn(
                     "inline-flex justify-end tabular-nums text-secondary-label transition-opacity",
-                    !isWoke && "group-any-hover/sidebar-row:opacity-0",
+                    // Active rows hand the slot to their quick actions, as the card does;
+                    // settled and snoozed rows overlay a single action on the faded label.
+                    variantAction === "settle"
+                      ? !isWoke && STATUS_LABEL_YIELDS_TO_QUICK_ACTIONS
+                      : !isWoke && "group-any-hover/sidebar-row:opacity-0",
+                    snoozeMenuOpen && "pointer-events-none absolute right-0 opacity-0",
                   )}
                 >
                   {variantAction === "unsnooze" && props.snoozeWakeLabelText !== null ? (
@@ -1904,7 +2000,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   )}
                 </span>
                 {variantAction === "unsnooze" ? (
-                  !props.snoozeSupported ? null : (
+                  !quickActions.includes("wake") ? null : (
                     <button
                       type="button"
                       aria-label="Wake thread now"
@@ -1918,7 +2014,19 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                       <AlarmClockOffIcon className="mb-px size-3" />
                     </button>
                   )
-                ) : !props.settlementSupported ? null : variantAction === "unsettle" ? (
+                ) : variantAction === "settle" ? (
+                  <SidebarRowQuickActions
+                    actions={quickActions}
+                    slim
+                    snoozeMenuOpen={snoozeMenuOpen}
+                    onSnoozeMenuOpenChange={setSnoozeMenuOpen}
+                    onSnooze={handleSnoozePreset}
+                    timestampFormat={props.timestampFormat}
+                    onDiscardDraft={handleDiscardDraftClick}
+                    onSettle={handleSettleClick}
+                    onActionPointerDown={handleActionPointerDown}
+                  />
+                ) : !quickActions.includes("unsettle") ? null : (
                   <Tooltip>
                     <TooltipTrigger
                       render={
@@ -1938,19 +2046,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     </TooltipTrigger>
                     <TooltipPopup side="top">Un-settle thread</TooltipPopup>
                   </Tooltip>
-                ) : (
-                  <button
-                    type="button"
-                    aria-label="Settle thread"
-                    onClick={handleSettleClick}
-                    onPointerDown={handleActionPointerDown}
-                    className={cn(
-                      "pointer-events-none absolute inset-y-0 right-0 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-2 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100",
-                      isWoke && "group-any-hover/sidebar-row:static",
-                    )}
-                  >
-                    <CheckIcon className="size-3" />
-                  </button>
                 )}
               </span>
             )}
@@ -2033,9 +2128,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     while the other controls appear beside it. */}
                   <span
                     className={cn(
-                      isWokeStatus
-                        ? "pointer-events-auto"
-                        : "pointer-events-none group-has-[:focus-visible]/sidebar-status-slot:absolute group-has-[:focus-visible]/sidebar-status-slot:right-0 group-has-[:focus-visible]/sidebar-status-slot:opacity-0 group-any-hover/sidebar-row:absolute group-any-hover/sidebar-row:right-0 group-any-hover/sidebar-row:opacity-0",
+                      isWokeStatus ? "pointer-events-auto" : STATUS_LABEL_YIELDS_TO_QUICK_ACTIONS,
                       "flex items-center self-center justify-self-end tabular-nums text-secondary-label transition-opacity",
                       snoozeMenuOpen && "pointer-events-none absolute right-0 opacity-0",
                     )}
@@ -2094,64 +2187,17 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                       threadTimeLabel(thread)
                     )}
                   </span>
-                  {props.settlementSupported || showSnoozeButton || hasUnsentDraft ? (
-                    <span
-                      className={cn(
-                        // focus-visible, not focus-within: a mouse click leaves
-                        // the Settle button focused, and a plain focus-within
-                        // would keep the controls pinned over the status label
-                        // once the pointer moves away (e.g. after a failed
-                        // settle) instead of cross-fading back.
-                        "pointer-events-none absolute inset-y-0 right-0 flex items-stretch opacity-0 transition-opacity has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:static has-[:focus-visible]:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:static group-any-hover/sidebar-row:opacity-100",
-                        snoozeMenuOpen && "pointer-events-auto static opacity-100",
-                      )}
-                    >
-                      {hasUnsentDraft ? (
-                        <Tooltip>
-                          <TooltipTrigger
-                            render={
-                              <button
-                                type="button"
-                                aria-label="Discard draft"
-                                onClick={handleDiscardDraftClick}
-                                className="inline-flex cursor-pointer items-center rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
-                              />
-                            }
-                          >
-                            <XIcon className="size-3.5" />
-                          </TooltipTrigger>
-                          <TooltipPopup side="top">Discard draft</TooltipPopup>
-                        </Tooltip>
-                      ) : null}
-                      {showSnoozeButton ? (
-                        <SnoozeMenuButton
-                          open={snoozeMenuOpen}
-                          onOpenChange={setSnoozeMenuOpen}
-                          onSnooze={handleSnoozePreset}
-                          timestampFormat={props.timestampFormat}
-                        />
-                      ) : null}
-                      {props.settlementSupported ? (
-                        <Tooltip>
-                          <TooltipTrigger
-                            render={
-                              <button
-                                type="button"
-                                aria-label="Settle thread"
-                                onClick={handleSettleClick}
-                                onPointerDown={handleActionPointerDown}
-                                className="-mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
-                              />
-                            }
-                          >
-                            <CheckIcon className="size-3.5" />
-                            Settle
-                          </TooltipTrigger>
-                          <TooltipPopup>Settle thread</TooltipPopup>
-                        </Tooltip>
-                      ) : null}
-                    </span>
-                  ) : null}
+                  <SidebarRowQuickActions
+                    actions={quickActions}
+                    slim={false}
+                    snoozeMenuOpen={snoozeMenuOpen}
+                    onSnoozeMenuOpenChange={setSnoozeMenuOpen}
+                    onSnooze={handleSnoozePreset}
+                    timestampFormat={props.timestampFormat}
+                    onDiscardDraft={handleDiscardDraftClick}
+                    onSettle={handleSettleClick}
+                    onActionPointerDown={handleActionPointerDown}
+                  />
                 </span>
               )}
               {/* A sweep hides the slot rather than unmounting it, so the
