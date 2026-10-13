@@ -167,6 +167,7 @@ describe("BrowserImport.listSites", () => {
           cookieCount: 2,
           signedIn: true,
           current: true,
+          sensitive: "signIn",
           lastAccessedAt: 1_760_000_000_000,
         },
       ]);

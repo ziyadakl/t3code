@@ -14,13 +14,13 @@ describe("groupSites", () => {
   it("counts a site's cookies across its hosts", () => {
     const sites = groupSites(
       [
-        { host: ".github.com", secure: false, httpOnly: false, expiresAt: undefined },
-        { host: "gist.github.com", secure: false, httpOnly: false, expiresAt: undefined },
+        { host: ".example.com", secure: false, httpOnly: false, expiresAt: undefined },
+        { host: "docs.example.com", secure: false, httpOnly: false, expiresAt: undefined },
       ],
       { now: 0 },
     );
     expect(sites).toEqual([
-      { domain: "github.com", cookieCount: 2, signedIn: false, current: false },
+      { domain: "example.com", cookieCount: 2, signedIn: false, current: false },
     ]);
   });
 
@@ -89,12 +89,12 @@ describe("groupSites", () => {
     const sites = groupSites(
       [
         { host: "mail.google.com", ...session },
-        { host: "github.com", ...session },
+        { host: "example.com", ...session },
       ],
       { now: NOW },
     );
     expect(sites.find((site) => site.domain === "google.com")?.sensitive).toBe("signIn");
-    expect(sites.find((site) => site.domain === "github.com")).not.toHaveProperty("sensitive");
+    expect(sites.find((site) => site.domain === "example.com")).not.toHaveProperty("sensitive");
   });
 
   it("keeps hosts without a public suffix as their own site", () => {

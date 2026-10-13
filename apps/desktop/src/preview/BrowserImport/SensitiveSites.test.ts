@@ -18,8 +18,24 @@ describe("sensitiveKind", () => {
     expect(sensitiveKind("bankofireland.ie")).toBe("banking");
   });
 
+  it("flags a brand's country domains, not look-alike names", () => {
+    expect(sensitiveKind("google.co.uk")).toBe("signIn");
+    expect(sensitiveKind("google.de")).toBe("signIn");
+    expect(sensitiveKind("yahoo.co.jp")).toBe("email");
+    expect(sensitiveKind("live.fr")).toBe("email");
+    expect(sensitiveKind("googleblog.com")).toBeUndefined();
+    expect(sensitiveKind("notgoogle.co.uk")).toBeUndefined();
+  });
+
+  it("flags the sign-in-with identity providers", () => {
+    expect(sensitiveKind("github.com")).toBe("signIn");
+    expect(sensitiveKind("facebook.com")).toBe("signIn");
+    expect(sensitiveKind("x.com")).toBe("signIn");
+    expect(sensitiveKind("twitter.com")).toBe("signIn");
+  });
+
   it("leaves ordinary sites alone", () => {
-    expect(sensitiveKind("github.com")).toBeUndefined();
+    expect(sensitiveKind("example.com")).toBeUndefined();
     expect(sensitiveKind("localhost")).toBeUndefined();
   });
 });

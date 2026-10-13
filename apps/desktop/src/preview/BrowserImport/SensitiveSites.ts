@@ -1,6 +1,8 @@
 /**
  * Sites whose session is worth more than the site itself, so the import picker
- * never pre-selects them. Keyed by registrable domain, as `siteDomain` returns.
+ * never pre-selects them. Keyed by registrable domain, as `siteDomain` returns,
+ * plus brand names that cover every country domain (`google.co.uk`,
+ * `yahoo.co.jp`).
  *
  * A curated list rather than a heuristic: a false "sensitive" only costs the
  * user one tick, but a missed one silently hands a preview tab their bank.
@@ -8,6 +10,7 @@
  * @module SensitiveSites
  */
 import type { BrowserImportSensitiveKind } from "@t3tools/contracts";
+import { getDomainWithoutSuffix } from "tldts";
 
 const SENSITIVE_SITES: ReadonlyArray<readonly [BrowserImportSensitiveKind, ReadonlyArray<string>]> =
   [
@@ -31,6 +34,11 @@ const SENSITIVE_SITES: ReadonlyArray<readonly [BrowserImportSensitiveKind, Reado
         "lastpass.com",
         "bitwarden.com",
         "dashlane.com",
+        // "Sign in with..." providers other sites trust for login.
+        "github.com",
+        "facebook.com",
+        "x.com",
+        "twitter.com",
       ],
     ],
     // Mailboxes: password resets for everything else land here.
@@ -84,10 +92,30 @@ const KIND_BY_DOMAIN = new Map(
   SENSITIVE_SITES.flatMap(([kind, domains]) => domains.map((domain) => [domain, kind] as const)),
 );
 
+/**
+ * Brands that run the same mailbox or sign-in under many country domains
+ * (`google.de`, `yahoo.co.jp`, `live.fr`), matched by the domain's name
+ * without its public suffix.
+ */
+const KIND_BY_BRAND = new Map<string, BrowserImportSensitiveKind>([
+  ["google", "signIn"],
+  ["microsoft", "signIn"],
+  ["yahoo", "email"],
+  ["live", "email"],
+  ["outlook", "email"],
+  ["hotmail", "email"],
+  ["aol", "email"],
+  ["gmx", "email"],
+  ["yandex", "email"],
+]);
+
 /** Why a site should not be pre-selected, or undefined for an ordinary one. */
 export const sensitiveKind = (domain: string): BrowserImportSensitiveKind | undefined => {
   const listed = KIND_BY_DOMAIN.get(domain);
   if (listed !== undefined) return listed;
+  const brand = getDomainWithoutSuffix(domain, { allowPrivateDomains: true });
+  const branded = brand === null ? undefined : KIND_BY_BRAND.get(brand);
+  if (branded !== undefined) return branded;
   // Catches the long tail of banks the list cannot name: tdbank.com,
   // bankofireland.ie, and so on.
   if (domain.split(".")[0]?.includes("bank")) return "banking";
