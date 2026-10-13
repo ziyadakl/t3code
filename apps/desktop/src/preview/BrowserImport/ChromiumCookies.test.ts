@@ -11,6 +11,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import {
   decryptChromiumValue,
   readChromiumCookieDatabase,
+  readChromiumCookieMetadata,
   readChromiumCookies,
 } from "./ChromiumCookies.ts";
 import { ChromiumKeyError } from "./ChromiumKeys.ts";
@@ -488,6 +489,79 @@ describe("readChromiumCookieDatabase", () => {
       expect(chips.cookies.map(({ name }) => name)).toEqual(["plain"]);
       expect(chips.undecryptable).toBe(1);
       expect(chips.undecryptableHosts).toEqual(["partitioned.example"]);
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+});
+
+/** Microseconds since 1601-01-01, as Chromium stores every timestamp. */
+const webkitMicros = (unixMillis: number): bigint =>
+  (BigInt(unixMillis) + 11_644_473_600_000n) * 1000n;
+
+const writeMetadataFixture = Effect.fnUntraced(function* (key: Buffer) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3code-chromium-sites-" });
+  const filename = `${directory}/Cookies`;
+  yield* Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`create table meta (key text primary key, value text not null)`;
+    yield* sql`insert into meta values ('version', 23)`;
+    yield* sql`create table cookies (
+      host_key text not null, name text not null, value text not null,
+      encrypted_value blob not null, path text not null, expires_utc integer not null,
+      is_secure integer not null, is_httponly integer not null, samesite integer not null,
+      last_access_utc integer not null, top_frame_site_key text not null default ''
+    )`;
+    yield* sql`insert into cookies values ('.github.com', 'user_session', '', ${encryptChromium("v11", "secret", key)}, '/', ${webkitMicros(1_900_000_000_000)}, 1, 1, 1, ${webkitMicros(1_750_000_000_123)}, '')`;
+    yield* sql`insert into cookies values ('tab.example', 'tab', '', ${encryptChromium("v11", "secret", key)}, '/', 0, 0, 0, -1, ${webkitMicros(1_750_000_000_000)}, '')`;
+    yield* sql`insert into cookies values ('chips.example', 'chips', '', ${encryptChromium("v11", "secret", key)}, '/', 0, 1, 0, 0, 0, 'https://top.example')`;
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename })));
+  return filename;
+});
+
+describe("readChromiumCookieMetadata", () => {
+  it.effect("reads hosts, flags and timestamps without a key", () =>
+    Effect.gen(function* () {
+      const filename = yield* writeMetadataFixture(Buffer.from("0123456789abcdef"));
+
+      // No key material is passed in at all: listing must never need one.
+      const metadata = yield* readChromiumCookieMetadata(filename);
+      expect(metadata).toEqual([
+        {
+          host: ".github.com",
+          secure: true,
+          httpOnly: true,
+          expiresAt: 1_900_000_000,
+          lastAccessedAt: 1_750_000_000_123,
+        },
+        {
+          host: "tab.example",
+          secure: false,
+          httpOnly: false,
+          expiresAt: undefined,
+          lastAccessedAt: 1_750_000_000_000,
+        },
+      ]);
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+});
+
+describe("readChromiumCookieDatabase host filter", () => {
+  it.effect("drops unchosen hosts before decrypting, so they are not counted as skipped", () =>
+    Effect.gen(function* () {
+      const key = Buffer.from("0123456789abcdef");
+      const filename = yield* writeMetadataFixture(key);
+
+      const result = yield* readChromiumCookieDatabase(
+        filename,
+        { cbcV11: key },
+        "linux",
+        (host) => host === ".github.com",
+      );
+
+      expect(result.cookies.map(({ name, value }) => ({ name, value }))).toEqual([
+        { name: "user_session", value: "secret" },
+      ]);
+      expect(result.undecryptable).toBe(0);
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 });

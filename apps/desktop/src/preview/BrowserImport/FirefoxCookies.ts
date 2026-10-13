@@ -14,7 +14,12 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
-import { cookieScope, snapshotCookieDatabase, type ImportedCookie } from "./CookieDatabase.ts";
+import {
+  cookieScope,
+  snapshotCookieDatabase,
+  type CookieMetadata,
+  type ImportedCookie,
+} from "./CookieDatabase.ts";
 
 /**
  * Mirrors `ChromiumCookieReadError` so both engines fail with a tagged error
@@ -114,8 +119,50 @@ const expiryToSeconds = (expiry: number, schemaVersion: number): number | undefi
   return schemaVersion >= FIREFOX_EXPIRY_MILLISECONDS_SCHEMA ? Math.floor(expiry / 1000) : expiry;
 };
 
-export const readFirefoxCookies = Effect.fn("FirefoxCookies.readFirefoxCookies")(
+const MetadataRow = Schema.Struct({
+  host: Schema.String,
+  expiry: Schema.Number,
+  isSecure: Schema.Number,
+  isHttpOnly: Schema.Number,
+  // Microseconds since the UNIX epoch.
+  lastAccessed: Schema.Number,
+});
+const decodeMetadataRows = Schema.decodeUnknownEffect(Schema.Array(MetadataRow));
+
+/**
+ * The plaintext metadata of a profile's default-container cookies, for
+ * listing its sites. Values are never selected.
+ */
+export const readFirefoxCookieMetadata = Effect.fn("FirefoxCookies.readFirefoxCookieMetadata")(
   function* (cookieDatabasePath: string) {
+    const snapshotPath = yield* snapshotCookieDatabase(cookieDatabasePath);
+    const { rows, schemaVersion } = yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const [versionRow] = yield* decodeUserVersion(yield* sql`pragma user_version`);
+      const raw = yield* sql`
+        select host, expiry, isSecure, isHttpOnly, lastAccessed
+          from moz_cookies
+         where originAttributes = ''
+      `;
+      return { rows: yield* decodeMetadataRows(raw), schemaVersion: versionRow?.user_version ?? 0 };
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: snapshotPath, readonly: true })));
+    return rows.map((row): CookieMetadata => ({
+      host: row.host,
+      secure: row.isSecure === 1,
+      httpOnly: row.isHttpOnly === 1,
+      expiresAt: expiryToSeconds(row.expiry, schemaVersion),
+      lastAccessedAt: row.lastAccessed > 0 ? Math.floor(row.lastAccessed / 1000) : undefined,
+    }));
+  },
+  (effect, cookieDatabasePath) =>
+    effect.pipe(
+      Effect.mapError((cause) => new FirefoxCookieReadError({ cookieDatabasePath, cause })),
+    ),
+);
+
+/** `includeHost` narrows the read to the sites the user chose. */
+export const readFirefoxCookies = Effect.fn("FirefoxCookies.readFirefoxCookies")(
+  function* (cookieDatabasePath: string, includeHost: (host: string) => boolean = () => true) {
     const snapshotPath = yield* snapshotCookieDatabase(cookieDatabasePath);
 
     const { rows, schemaVersion } = yield* Effect.gen(function* () {
@@ -145,23 +192,25 @@ export const readFirefoxCookies = Effect.fn("FirefoxCookies.readFirefoxCookies")
       return { rows: yield* decodeCookieRows(raw), schemaVersion };
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: snapshotPath, readonly: true })));
 
-    return rows.map((row) => {
-      const secure = row.isSecure === 1;
-      const scope = cookieScope(row.host, row.path, secure);
-      return {
-        url: scope.url,
-        name: row.name,
-        value: row.value,
-        domain: scope.domain,
-        path: row.path,
-        secure,
-        httpOnly: row.isHttpOnly === 1,
-        expirationDate: expiryToSeconds(row.expiry, schemaVersion),
-        sameSite: sameSiteFromColumn(row.sameSite, row.rawSameSite),
-      } satisfies ImportedCookie;
-    });
+    return rows
+      .filter((row) => includeHost(row.host))
+      .map((row) => {
+        const secure = row.isSecure === 1;
+        const scope = cookieScope(row.host, row.path, secure);
+        return {
+          url: scope.url,
+          name: row.name,
+          value: row.value,
+          domain: scope.domain,
+          path: row.path,
+          secure,
+          httpOnly: row.isHttpOnly === 1,
+          expirationDate: expiryToSeconds(row.expiry, schemaVersion),
+          sameSite: sameSiteFromColumn(row.sameSite, row.rawSameSite),
+        } satisfies ImportedCookie;
+      });
   },
-  (effect, cookieDatabasePath) =>
+  (effect, cookieDatabasePath, _includeHost?: (host: string) => boolean) =>
     effect.pipe(
       Effect.mapError((cause) => new FirefoxCookieReadError({ cookieDatabasePath, cause })),
     ),

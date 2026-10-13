@@ -35,6 +35,7 @@ import {
   bareHost,
   cookieScope,
   snapshotCookieDatabase,
+  type CookieMetadata,
   type CookieReadResult,
   type ImportedCookie,
 } from "./CookieDatabase.ts";
@@ -230,9 +231,18 @@ export function decryptChromiumValue(
   return null;
 }
 
-/** Reads and decodes one snapshotted Chromium cookie database. */
+/**
+ * Reads and decodes one snapshotted Chromium cookie database. `includeHost`
+ * narrows the read to chosen sites; rows it rejects are dropped before any
+ * decryption and are not reported as skipped.
+ */
 export const readChromiumCookieDatabase = Effect.fn("ChromiumCookies.readChromiumCookieDatabase")(
-  function* (snapshotPath: string, keys: ChromiumKeyMaterial, platform: NodeJS.Platform) {
+  function* (
+    snapshotPath: string,
+    keys: ChromiumKeyMaterial,
+    platform: NodeJS.Platform,
+    includeHost: (host: string) => boolean = () => true,
+  ) {
     const result = yield* Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       const schemaVersion = yield* sql`select value from meta where key = 'version' limit 1`.pipe(
@@ -247,7 +257,8 @@ export const readChromiumCookieDatabase = Effect.fn("ChromiumCookies.readChromiu
           : yield* sql`select host_key, name, value, encrypted_value, path,
                 expires_utc / 1000000 as expires_seconds, is_secure, is_httponly,
                 samesite, '' as top_frame_site_key from cookies`;
-      return { rows: yield* decodeCookieRows(raw), schemaVersion };
+      const rows = yield* decodeCookieRows(raw);
+      return { rows: rows.filter((row) => includeHost(row.host_key)), schemaVersion };
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: snapshotPath, readonly: true })));
 
     const cookies: ImportedCookie[] = [];
@@ -309,6 +320,59 @@ export const readChromiumCookieDatabase = Effect.fn("ChromiumCookies.readChromiu
   },
 );
 
+const MetadataRow = Schema.Struct({
+  host_key: Schema.String,
+  expires_seconds: Schema.Number,
+  is_secure: Schema.Number,
+  is_httponly: Schema.Number,
+  last_access_ms: Schema.Number,
+});
+const decodeMetadataRows = Schema.decodeUnknownEffect(Schema.Array(MetadataRow));
+
+/** Chromium's 1601 epoch in milliseconds before the UNIX one. */
+const WEBKIT_EPOCH_OFFSET_MILLISECONDS = WEBKIT_EPOCH_OFFSET_SECONDS * 1000;
+
+/**
+ * The plaintext columns of a Chromium cookie database, for listing its sites.
+ * Never selects a value, so it needs no key and raises no keychain prompt.
+ * Partitioned (CHIPS) cookies are left out, as the import skips them too.
+ */
+export const readChromiumCookieMetadata = Effect.fn("ChromiumCookies.readChromiumCookieMetadata")(
+  function* (cookieDatabasePath: string) {
+    const snapshotPath = yield* snapshotCookieDatabase(cookieDatabasePath);
+    const rows = yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const schemaVersion = yield* sql`select value from meta where key = 'version' limit 1`.pipe(
+        Effect.flatMap(decodeSchemaVersion),
+        Effect.map(([row]) => row.value),
+      );
+      // Divided in SQL: the microsecond values overflow a safe JS integer.
+      return yield* decodeMetadataRows(
+        schemaVersion >= 15
+          ? yield* sql`select host_key, expires_utc / 1000000 as expires_seconds, is_secure,
+                is_httponly, last_access_utc / 1000 as last_access_ms
+                from cookies where top_frame_site_key = ''`
+          : yield* sql`select host_key, expires_utc / 1000000 as expires_seconds, is_secure,
+                is_httponly, last_access_utc / 1000 as last_access_ms from cookies`,
+      );
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: snapshotPath, readonly: true })));
+    return rows.map((row): CookieMetadata => ({
+      host: row.host_key,
+      secure: row.is_secure === 1,
+      httpOnly: row.is_httponly === 1,
+      expiresAt: toUnixSeconds(row.expires_seconds),
+      lastAccessedAt:
+        row.last_access_ms > 0 ? row.last_access_ms - WEBKIT_EPOCH_OFFSET_MILLISECONDS : undefined,
+    }));
+  },
+  (effect, cookieDatabasePath) =>
+    effect.pipe(
+      Effect.mapError(
+        (cause) => new ChromiumCookieReadError({ reason: "readFailed", cookieDatabasePath, cause }),
+      ),
+    ),
+);
+
 export interface ChromiumCookieSource {
   readonly cookieDatabasePath: string;
   readonly keychainService: string | undefined;
@@ -317,6 +381,8 @@ export interface ChromiumCookieSource {
   readonly windowsLocalStatePath?: string;
   /** Supplied by the caller from `HostProcessPlatform` rather than read here. */
   readonly platform: NodeJS.Platform;
+  /** Narrows the read to chosen sites before anything is decrypted. */
+  readonly includeHost?: (host: string) => boolean;
 }
 
 export const readChromiumCookies = Effect.fn("ChromiumCookies.readChromiumCookies")(function* (
@@ -357,7 +423,12 @@ export const readChromiumCookies = Effect.fn("ChromiumCookies.readChromiumCookie
     ),
   );
 
-  return yield* readChromiumCookieDatabase(snapshotPath, keys, source.platform).pipe(
+  return yield* readChromiumCookieDatabase(
+    snapshotPath,
+    keys,
+    source.platform,
+    source.includeHost,
+  ).pipe(
     Effect.mapError(
       (cause) =>
         new ChromiumCookieReadError({

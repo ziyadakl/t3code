@@ -24,7 +24,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 
-import { cookieScope, type ImportedCookie } from "./CookieDatabase.ts";
+import { cookieScope, type CookieMetadata, type ImportedCookie } from "./CookieDatabase.ts";
 
 /** Safari's timestamps count seconds from 2001-01-01, not the UNIX epoch. */
 const APPLE_EPOCH_OFFSET_SECONDS = 978_307_200;
@@ -68,7 +68,20 @@ function readCString(buffer: Buffer, start: number): string {
   return buffer.toString("utf8", start, end === -1 ? buffer.length : end);
 }
 
-export function parseBinaryCookies(buffer: Buffer): ReadonlyArray<ImportedCookie> {
+/** One jar record as stored, before it is shaped for Electron or for listing. */
+interface BinaryCookieRecord {
+  /** As stored, leading dot and all. */
+  readonly host: string;
+  readonly name: string;
+  readonly path: string;
+  readonly value: string;
+  readonly secure: boolean;
+  readonly httpOnly: boolean;
+  /** Seconds since the UNIX epoch, or undefined for a session cookie. */
+  readonly expiresAt: number | undefined;
+}
+
+function parseBinaryCookieRecords(buffer: Buffer): ReadonlyArray<BinaryCookieRecord> {
   if (buffer.length < 8 || buffer.toString("latin1", 0, 4) !== "cook") {
     throw new SafariCookieReadError({ reason: "readFailed" });
   }
@@ -87,7 +100,7 @@ export function parseBinaryCookies(buffer: Buffer): ReadonlyArray<ImportedCookie
     pageSizes.push(buffer.readUInt32BE(8 + index * 4));
   }
 
-  const cookies: ImportedCookie[] = [];
+  const cookies: BinaryCookieRecord[] = [];
   let pageStart = 8 + pageCount * 4;
 
   for (const pageSize of pageSizes) {
@@ -148,26 +161,14 @@ export function parseBinaryCookies(buffer: Buffer): ReadonlyArray<ImportedCookie
       const value = readCString(cookie, valueOffset);
       if (domain === "" || name === "") continue;
 
-      const secure = (flags & FLAG_SECURE) !== 0;
-      const expirationDate =
-        expiry > 0 ? Math.floor(expiry) + APPLE_EPOCH_OFFSET_SECONDS : undefined;
-
       cookies.push({
-        // Safari marks domain cookies with a leading dot like the other
-        // engines, so the shared scope rule applies: host-only cookies keep
-        // `domain` undefined, or Electron widens them to every subdomain.
-        ...cookieScope(domain, path || "/", secure),
+        host: domain,
         name,
-        value,
         path: path || "/",
-        secure,
+        value,
+        secure: (flags & FLAG_SECURE) !== 0,
         httpOnly: (flags & FLAG_HTTP_ONLY) !== 0,
-        expirationDate,
-        // Bits 3–5 of the flags carry something SameSite-shaped, but no public
-        // description of them agrees and real jars do not match any of them
-        // cleanly. Lax is the modern browser default; claiming "none" would
-        // widen every imported cookie's scope.
-        sameSite: "lax",
+        expiresAt: expiry > 0 ? Math.floor(expiry) + APPLE_EPOCH_OFFSET_SECONDS : undefined,
       });
     }
   }
@@ -189,6 +190,32 @@ export function parseBinaryCookies(buffer: Buffer): ReadonlyArray<ImportedCookie
   }
 
   return cookies;
+}
+
+/** `includeHost` narrows the result to the sites the user chose. */
+export function parseBinaryCookies(
+  buffer: Buffer,
+  includeHost: (host: string) => boolean = () => true,
+): ReadonlyArray<ImportedCookie> {
+  return parseBinaryCookieRecords(buffer)
+    .filter((record) => includeHost(record.host))
+    .map((record) => ({
+      // Safari marks domain cookies with a leading dot like the other
+      // engines, so the shared scope rule applies: host-only cookies keep
+      // `domain` undefined, or Electron widens them to every subdomain.
+      ...cookieScope(record.host, record.path, record.secure),
+      name: record.name,
+      value: record.value,
+      path: record.path,
+      secure: record.secure,
+      httpOnly: record.httpOnly,
+      expirationDate: record.expiresAt,
+      // Bits 3–5 of the flags carry something SameSite-shaped, but no public
+      // description of them agrees and real jars do not match any of them
+      // cleanly. Lax is the modern browser default; claiming "none" would
+      // widen every imported cookie's scope.
+      sameSite: "lax",
+    }));
 }
 
 /**
@@ -235,39 +262,60 @@ export const safariAccessGranted = Effect.fnUntraced(function* (cookiePath: stri
   );
 });
 
+/**
+ * Reads the jar and parses it, turning a TCC refusal into the Full Disk Access
+ * prompt and a malformed jar into a typed failure rather than a defect.
+ */
+const readJar = <A>(cookiePath: string, parse: (contents: Buffer) => A) =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const contents = yield* fileSystem.readFile(cookiePath).pipe(
+      Effect.mapError((cause) => {
+        // TCC denies the read even though the file exists — a permission the
+        // user grants in System Settings rather than a missing browser. macOS
+        // never prompts for Full Disk Access, so there is no dialog to wait
+        // on; the read just fails, and it fails with EPERM, which Effect
+        // surfaces as an `Unknown` system error rather than `PermissionDenied`
+        // (that is EACCES).
+        return new SafariCookieReadError({
+          reason: isPermissionDenied(cause) ? "needsFullDiskAccess" : "readFailed",
+          cookieDatabasePath: cookiePath,
+          cause,
+        });
+      }),
+    );
+    return yield* Effect.try({
+      try: () => parse(Buffer.from(contents)),
+      catch: (cause) =>
+        new SafariCookieReadError({
+          reason: isSafariCookieReadError(cause) ? cause.reason : "readFailed",
+          cookieDatabasePath: cookiePath,
+          cause,
+        }),
+    });
+  });
+
+/** `includeHost` narrows the read to the sites the user chose. */
 export const readSafariCookies = Effect.fn("SafariCookies.readSafariCookies")(function* (
   cookiePath: string,
+  includeHost: (host: string) => boolean = () => true,
 ) {
-  const fileSystem = yield* FileSystem.FileSystem;
-  const contents = yield* fileSystem.readFile(cookiePath).pipe(
-    Effect.mapError((cause) => {
-      // TCC denies the read even though the file exists — a permission the user
-      // grants in System Settings rather than a missing browser. macOS never
-      // prompts for Full Disk Access, so there is no dialog to wait on; the
-      // read just fails, and it fails with EPERM, which Effect surfaces as an
-      // `Unknown` system error rather than `PermissionDenied` (that is EACCES).
-      return new SafariCookieReadError({
-        reason: isPermissionDenied(cause) ? "needsFullDiskAccess" : "readFailed",
-        cookieDatabasePath: cookiePath,
-        cause,
-      });
-    }),
-  );
-  // The parser throws on a malformed jar; catch it here so callers see a typed
-  // failure rather than a defect.
-  return yield* Effect.try({
-    try: () => parseBinaryCookies(Buffer.from(contents)),
-    catch: (cause) =>
-      isSafariCookieReadError(cause)
-        ? new SafariCookieReadError({
-            reason: cause.reason,
-            cookieDatabasePath: cookiePath,
-            cause,
-          })
-        : new SafariCookieReadError({
-            reason: "readFailed",
-            cookieDatabasePath: cookiePath,
-            cause,
-          }),
-  });
+  return yield* readJar(cookiePath, (contents) => parseBinaryCookies(contents, includeHost));
 });
+
+/**
+ * The jar's flags and expiries, for listing its sites. Safari records no last
+ * access time, so none is reported.
+ */
+export const readSafariCookieMetadata = Effect.fn("SafariCookies.readSafariCookieMetadata")(
+  function* (cookiePath: string) {
+    return yield* readJar(cookiePath, (contents) =>
+      parseBinaryCookieRecords(contents).map((record): CookieMetadata => ({
+        host: record.host,
+        secure: record.secure,
+        httpOnly: record.httpOnly,
+        expiresAt: record.expiresAt,
+      })),
+    );
+  },
+);

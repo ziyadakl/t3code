@@ -9,6 +9,7 @@ import * as PlatformError from "effect/PlatformError";
 import {
   isPermissionDenied,
   parseBinaryCookies,
+  readSafariCookieMetadata,
   readSafariCookies,
   safariAccessDenied,
   safariAccessGranted,
@@ -379,6 +380,52 @@ describe("readSafariCookies", () => {
       const error = yield* readSafariCookies(`${directory}/absent.binarycookies`).pipe(Effect.flip);
 
       assert.equal(error.reason, "readFailed");
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+});
+
+describe("Safari site listing", () => {
+  const writeJar = Effect.fnUntraced(function* (cookies: ReadonlyArray<FixtureCookie>) {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3code-safari-" });
+    const jar = `${directory}/Cookies.binarycookies`;
+    yield* fileSystem.writeFile(jar, encodeBinaryCookies(cookies));
+    return jar;
+  });
+  const fixture = [
+    {
+      domain: ".github.com",
+      name: "s",
+      path: "/",
+      value: "v",
+      flags: 0x1 | 0x4,
+      expiry: 800_000_000,
+    },
+    { domain: "tab.example", name: "t", path: "/", value: "v", flags: 0, expiry: 0 },
+  ];
+
+  it.effect("reads hosts, flags and expiry, with no last access to report", () =>
+    Effect.gen(function* () {
+      const metadata = yield* readSafariCookieMetadata(yield* writeJar(fixture));
+      expect(metadata).toEqual([
+        {
+          host: ".github.com",
+          secure: true,
+          httpOnly: true,
+          expiresAt: 800_000_000 + APPLE_EPOCH_OFFSET_SECONDS,
+        },
+        { host: "tab.example", secure: false, httpOnly: false, expiresAt: undefined },
+      ]);
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.effect("imports only the chosen hosts", () =>
+    Effect.gen(function* () {
+      const cookies = yield* readSafariCookies(
+        yield* writeJar(fixture),
+        (host) => host === "tab.example",
+      );
+      expect(cookies.map((cookie) => cookie.name)).toEqual(["t"]);
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 });

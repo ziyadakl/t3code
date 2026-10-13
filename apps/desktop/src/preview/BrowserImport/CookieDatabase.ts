@@ -45,6 +45,21 @@ export interface CookieReadResult {
 }
 
 /**
+ * What site listing reads about a cookie: the plaintext fields every engine
+ * stores beside the value, never the value itself.
+ */
+export interface CookieMetadata {
+  /** As stored, leading dot and all. */
+  readonly host: string;
+  readonly secure: boolean;
+  readonly httpOnly: boolean;
+  /** Seconds since the UNIX epoch, or undefined for a session cookie. */
+  readonly expiresAt: number | undefined;
+  /** Epoch milliseconds; undefined when the engine does not record it. */
+  readonly lastAccessedAt?: number | undefined;
+}
+
+/**
  * The URL and domain Electron should register a stored row under.
  *
  * Both engines mark a domain cookie with a leading dot on the host. Electron

@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off - Builds a Firefox-shaped
+// `cookies.sqlite` fixture with the same native bindings Firefox itself uses.
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -10,6 +12,9 @@ import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
+import * as TestClock from "effect/testing/TestClock";
+import type { Session } from "electron";
+import * as NodeSqlite from "node:sqlite";
 
 import * as BrowserSession from "../BrowserSession.ts";
 import * as BrowserImport from "./BrowserImport.ts";
@@ -49,7 +54,9 @@ const layerRejectedBeforeSession = Layer.succeed(
  * Builds the service against a scratch home containing an installed, closed
  * copy of the source browser.
  */
-const withImporter = Effect.fnUntraced(function* () {
+const withImporter = Effect.fnUntraced(function* (
+  sessionLayer: Layer.Layer<BrowserSession.BrowserSession> = layerRejectedBeforeSession,
+) {
   const fileSystem = yield* FileSystem.FileSystem;
   const home = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3code-import-" });
   const layerEnvironment = Layer.succeed(HostProcessEnvironment, { HOME: home });
@@ -67,7 +74,7 @@ const withImporter = Effect.fnUntraced(function* () {
   const importer = yield* BrowserImport.BrowserImport.pipe(
     Effect.provide(
       BrowserImport.layer.pipe(
-        Layer.provide(layerRejectedBeforeSession),
+        Layer.provide(sessionLayer),
         Layer.provide(layerEnvironment),
         Layer.provide(Layer.succeed(HostProcessPlatform, "darwin")),
         Layer.provide(Layer.succeed(HostProcessExecutablePath, "/Applications/T3 Code.app")),
@@ -78,7 +85,134 @@ const withImporter = Effect.fnUntraced(function* () {
   return { importer, home, root };
 });
 
+/** "Now" for the listing test; the fixture's expiries sit a day either side. */
+const FIXTURE_NOW_SECONDS = 1_800_000_000;
+
+/**
+ * Seeds a closed Firefox profile — Firefox needs no keychain, so the whole
+ * list-then-import path runs without touching the machine's credentials.
+ */
+const seedFirefox = Effect.fnUntraced(function* (home: string) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const root = `${home}/Library/Application Support/Firefox`;
+  yield* fileSystem.makeDirectory(`${root}/Profiles/main`, { recursive: true });
+  yield* fileSystem.writeFileString(
+    `${root}/profiles.ini`,
+    "[Profile0]\nName=default\nIsRelative=1\nPath=Profiles/main\n",
+  );
+  const database = new NodeSqlite.DatabaseSync(`${root}/Profiles/main/cookies.sqlite`);
+  database.exec("pragma user_version = 15");
+  database.exec(`create table moz_cookies (
+    id integer primary key, host text, name text, value text, path text, expiry integer,
+    isSecure integer, isHttpOnly integer, sameSite integer, lastAccessed integer,
+    originAttributes text not null default ''
+  )`);
+  const insert = database.prepare(
+    "insert into moz_cookies (host, name, value, path, expiry, isSecure, isHttpOnly, sameSite, lastAccessed) values (?, ?, 'v', '/', ?, ?, ?, 0, ?)",
+  );
+  const live = FIXTURE_NOW_SECONDS + 86_400;
+  const expired = FIXTURE_NOW_SECONDS - 86_400;
+  insert.run(".github.com", "user_session", live, 1, 1, 1_750_000_000_000_000);
+  insert.run("gist.github.com", "prefs", 0, 0, 0, 1_760_000_000_000_000);
+  insert.run("news.example.com", "seen", live, 0, 0, 0);
+  insert.run("old.example.org", "gone", expired, 1, 1, 0);
+  database.close();
+  return "Profiles/main";
+});
+
+/** A target session that records what was written into it. */
+const recordingSession = (written: Array<string>) =>
+  Layer.succeed(
+    BrowserSession.BrowserSession,
+    BrowserSession.BrowserSession.of({
+      getPartition: () => Effect.die("unused"),
+      isPartition: () => false,
+      getSession: () =>
+        Effect.succeed({
+          cookies: {
+            set: (cookie: { url: string; name: string }) => {
+              written.push(`${cookie.url} ${cookie.name}`);
+              return Promise.resolve();
+            },
+            flushStore: () => Promise.resolve(),
+          },
+        } as unknown as Session),
+      clearCookies: () => Effect.die("unused"),
+      clearCache: () => Effect.die("unused"),
+    }),
+  );
+
+describe("BrowserImport.listSites", () => {
+  it.effect("lists a profile's live sites without opening a session", () =>
+    Effect.gen(function* () {
+      const { importer, home } = yield* withImporter();
+      const directory = yield* seedFirefox(home);
+      yield* TestClock.setTime(FIXTURE_NOW_SECONDS * 1000);
+
+      const sites = yield* importer.listSites({
+        sourceId: "firefox",
+        sourceProfileDirectory: directory,
+        currentUrl: "https://github.com/pulls",
+      });
+
+      assert.deepEqual(sites, [
+        {
+          domain: "example.com",
+          cookieCount: 1,
+          signedIn: false,
+          current: false,
+        },
+        {
+          domain: "github.com",
+          cookieCount: 2,
+          signedIn: true,
+          current: true,
+          lastAccessedAt: 1_760_000_000_000,
+        },
+      ]);
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.effect("rejects a source profile the browser never reported", () =>
+    Effect.gen(function* () {
+      const { importer, home } = yield* withImporter();
+      yield* seedFirefox(home);
+
+      const error = yield* importer
+        .listSites({ sourceId: "firefox", sourceProfileDirectory: "../../elsewhere" })
+        .pipe(Effect.flip);
+
+      assert.equal(error.reason, "unknownSourceProfile");
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+});
+
 describe("BrowserImport.importCookies", () => {
+  it.effect("imports only the chosen sites", () =>
+    Effect.gen(function* () {
+      const written: Array<string> = [];
+      const { importer, home } = yield* withImporter(recordingSession(written));
+      const directory = yield* seedFirefox(home);
+
+      const result = yield* importer.importCookies({
+        input: {
+          sourceId: "firefox",
+          sourceProfileDirectory: directory,
+          targetProfileId: "default",
+          domains: ["github.com"],
+        },
+        scope: "persist:t3code-preview-test",
+        persistent: true,
+      });
+
+      assert.deepEqual(written, [
+        "https://github.com/ user_session",
+        "http://gist.github.com/ prefs",
+      ]);
+      assert.deepEqual(result, { imported: 2, skipped: 0, skippedDomains: [] });
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
   it.effect("rejects a source profile the browser never reported", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

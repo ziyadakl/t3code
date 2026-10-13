@@ -204,6 +204,9 @@ importers:
       react-grab:
         specifier: ^0.1.32
         version: 0.1.44(react@19.2.6)
+      tldts:
+        specifier: 7.4.2
+        version: 7.4.2
     devDependencies:
       '@effect/vitest':
         specifier: 4.0.1

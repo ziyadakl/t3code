@@ -1,0 +1,95 @@
+/**
+ * Sites whose session is worth more than the site itself, so the import picker
+ * never pre-selects them. Keyed by registrable domain, as `siteDomain` returns.
+ *
+ * A curated list rather than a heuristic: a false "sensitive" only costs the
+ * user one tick, but a missed one silently hands a preview tab their bank.
+ *
+ * @module SensitiveSites
+ */
+import type { BrowserImportSensitiveKind } from "@t3tools/contracts";
+
+const SENSITIVE_SITES: ReadonlyArray<readonly [BrowserImportSensitiveKind, ReadonlyArray<string>]> =
+  [
+    // Identity providers, SSO and password managers: one session here signs
+    // in to every other account. Google and Microsoft also serve mail, but
+    // their SSO reach is the larger risk, so they are listed here.
+    [
+      "signIn",
+      [
+        "google.com",
+        "microsoft.com",
+        "microsoftonline.com",
+        "apple.com",
+        "okta.com",
+        "oktapreview.com",
+        "auth0.com",
+        "onelogin.com",
+        "duosecurity.com",
+        "pingidentity.com",
+        "1password.com",
+        "lastpass.com",
+        "bitwarden.com",
+        "dashlane.com",
+      ],
+    ],
+    // Mailboxes: password resets for everything else land here.
+    [
+      "email",
+      [
+        "outlook.com",
+        "live.com",
+        "hotmail.com",
+        "yahoo.com",
+        "aol.com",
+        "proton.me",
+        "protonmail.com",
+        "icloud.com",
+        "fastmail.com",
+        "hey.com",
+        "zoho.com",
+        "mail.ru",
+        "gmx.com",
+      ],
+    ],
+    // Banks, payments, brokerages and exchanges.
+    [
+      "banking",
+      [
+        "paypal.com",
+        "venmo.com",
+        "stripe.com",
+        "wise.com",
+        "revolut.com",
+        "chase.com",
+        "bankofamerica.com",
+        "wellsfargo.com",
+        "citi.com",
+        "capitalone.com",
+        "americanexpress.com",
+        "discover.com",
+        "usbank.com",
+        "schwab.com",
+        "fidelity.com",
+        "vanguard.com",
+        "robinhood.com",
+        "coinbase.com",
+        "kraken.com",
+        "binance.com",
+      ],
+    ],
+  ];
+
+const KIND_BY_DOMAIN = new Map(
+  SENSITIVE_SITES.flatMap(([kind, domains]) => domains.map((domain) => [domain, kind] as const)),
+);
+
+/** Why a site should not be pre-selected, or undefined for an ordinary one. */
+export const sensitiveKind = (domain: string): BrowserImportSensitiveKind | undefined => {
+  const listed = KIND_BY_DOMAIN.get(domain);
+  if (listed !== undefined) return listed;
+  // Catches the long tail of banks the list cannot name: tdbank.com,
+  // bankofireland.ie, and so on.
+  if (domain.split(".")[0]?.includes("bank")) return "banking";
+  return undefined;
+};
