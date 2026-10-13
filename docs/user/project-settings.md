@@ -166,8 +166,9 @@ server waits for sessions and terminals to stop and retries skipped worktrees af
 Existing prompts for deleting a worktree manually remain available when this policy is off.
 
 Enable **Delete worktrees of archived threads** and choose a number of days to remove a
-worktree once its thread has been archived that long. Unarchiving the thread stops the countdown,
-and the same safety checks apply. Branches and thread history stay.
+worktree once its thread has been archived that long. Archived threads are also inactive, so this
+only removes sooner when its days are fewer than **Delete inactive worktrees**. Unarchiving the
+thread stops the countdown, and the same safety checks apply. Branches and thread history stay.
 
 Choose **Delete now** to run the enabled rules immediately. The latest results show which
 worktrees were removed or kept and why, plus any failures.

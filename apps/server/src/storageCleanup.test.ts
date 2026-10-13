@@ -41,6 +41,7 @@ import {
   storageCleanupActivityAt,
   storageCleanupPullRequestMerged,
   storageCleanupThreadIdle,
+  worktreeTimeRuleVerdict,
 } from "./storageCleanup.ts";
 
 const NOW_MS = Date.parse("2026-06-10T12:00:00.000Z");
@@ -227,6 +228,107 @@ describe("merged pull request cleanup", () => {
   });
 });
 
+describe("worktree time rule verdict", () => {
+  const rules = {
+    worktreeAfterDays: null,
+    worktreeAfterArchivedDays: null,
+    worktreeOnMerge: false,
+    worktreeUnchanged: false,
+  };
+  const thread = (activityDaysAgo: number, archivedDaysAgo: number | null) => ({
+    deleted: false,
+    activityAt: NOW_MS - activityDaysAgo * DAY_MS,
+    archivedAt: archivedDaysAgo === null ? null : NOW_MS - archivedDaysAgo * DAY_MS,
+  });
+
+  it("removes a deleted thread's worktree", () => {
+    expect(
+      worktreeTimeRuleVerdict({ ...thread(0, null), deleted: true }, rules, NOW_MS),
+    ).toMatchObject({ removalReason: "thread was deleted" });
+  });
+
+  it("removes for inactivity before the archive rule when both have fired", () => {
+    expect(
+      worktreeTimeRuleVerdict(
+        thread(40, 10),
+        { ...rules, worktreeAfterDays: 30, worktreeAfterArchivedDays: 7 },
+        NOW_MS,
+      ),
+    ).toMatchObject({ removalReason: "inactive for 40 days" });
+  });
+
+  it("removes by the archive rule when its days are fewer than the inactivity rule's", () => {
+    expect(
+      worktreeTimeRuleVerdict(
+        thread(12, 10),
+        { ...rules, worktreeAfterDays: 30, worktreeAfterArchivedDays: 7 },
+        NOW_MS,
+      ),
+    ).toMatchObject({ removalReason: "archived for 10 days" });
+  });
+
+  it.each([
+    {
+      name: "the archive countdown when it fires sooner",
+      activity: 25,
+      archived: 3,
+      keepReason: "archived for 3 of 7 days",
+    },
+    {
+      name: "the inactivity countdown when it fires sooner",
+      activity: 29,
+      archived: 1,
+      keepReason: "inactive for 29 of 30 days",
+    },
+  ])(
+    "keeps an archived thread under both day rules and reports $name",
+    ({ activity, archived, keepReason }) => {
+      expect(
+        worktreeTimeRuleVerdict(
+          thread(activity, archived),
+          { ...rules, worktreeAfterDays: 30, worktreeAfterArchivedDays: 7 },
+          NOW_MS,
+        ),
+      ).toEqual({ removalReason: null, keepReason });
+    },
+  );
+
+  it.each([
+    { name: "not merged", extra: { worktreeOnMerge: true }, keepReason: "not merged" },
+    {
+      name: "unchanged",
+      extra: { worktreeUnchanged: true },
+      keepReason: "has commits beyond the default branch",
+    },
+    { name: "no other rule", extra: {}, keepReason: "not archived" },
+  ])(
+    "keeps an unarchived thread under the archive rule and reports the $name rule",
+    ({ extra, keepReason }) => {
+      expect(
+        worktreeTimeRuleVerdict(
+          thread(2, null),
+          { ...rules, worktreeAfterArchivedDays: 7, ...extra },
+          NOW_MS,
+        ).keepReason,
+      ).toBe(keepReason);
+    },
+  );
+
+  it("never reports negative days when the clock runs behind the thread", () => {
+    const ahead = {
+      deleted: false,
+      activityAt: NOW_MS + DAY_MS * 2,
+      archivedAt: NOW_MS + DAY_MS * 2,
+    };
+    expect(
+      worktreeTimeRuleVerdict(ahead, { ...rules, worktreeAfterDays: 30 }, NOW_MS).keepReason,
+    ).toBe("inactive for 0 of 30 days");
+    expect(
+      worktreeTimeRuleVerdict(ahead, { ...rules, worktreeAfterArchivedDays: 7 }, NOW_MS).keepReason,
+    ).toBe("archived for 0 of 7 days");
+  });
+});
+
 const cleanupFixture = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const config = yield* ServerConfig.ServerConfig;
@@ -371,7 +473,7 @@ const runCleanupTest = <A, E>(
 
 describe("archived thread worktree cleanup", () => {
   // These run on the live clock, so dates are relative to its current time.
-  const archivedThread = (worktree: string, archivedDaysAgo: number | null) =>
+  const archivedThread = (worktree: string, archivedDaysAgo: number | null, activeDaysAgo = 1) =>
     Clock.currentTimeMillis.pipe(
       Effect.map((now) => {
         const daysAgo = (days: number) => DateTime.makeUnsafe(now - days * DAY_MS);
@@ -379,7 +481,7 @@ describe("archived thread worktree cleanup", () => {
           branch: "feature",
           worktreePath: worktree,
           createdAt: daysAgo(30),
-          latestUserMessageAt: daysAgo(1),
+          latestUserMessageAt: daysAgo(activeDaysAgo),
           archivedAt: archivedDaysAgo === null ? null : daysAgo(archivedDaysAgo),
         });
       }),
@@ -411,6 +513,76 @@ describe("archived thread worktree cleanup", () => {
         const report = yield* service.runNow;
         expect(report.entries[0]).toMatchObject({ outcome: "kept", reason });
         expect(yield* fs.exists(worktree)).toBe(true);
+      }),
+    ),
+  );
+  it.live.each([
+    {
+      name: "removes by the archive rule",
+      archived: 10,
+      active: 12,
+      outcome: "removed",
+      reason: "Archived for 10 days",
+    },
+    {
+      name: "keeps and shows the archive countdown",
+      archived: 3,
+      active: 25,
+      outcome: "kept",
+      reason: "Archived for 3 of 7 days",
+    },
+    {
+      name: "keeps and shows the inactivity countdown",
+      archived: 1,
+      active: 29,
+      outcome: "kept",
+      reason: "Inactive for 29 of 30 days",
+    },
+  ])("with both day rules on, $name when it is closer", ({ archived, active, outcome, reason }) =>
+    runCleanupTest(
+      Effect.gen(function* () {
+        const { service, worktree, setThreads, setStorageCleanup } = yield* cleanupFixture;
+        setStorageCleanup({ worktreeAfterDays: 30, worktreeAfterArchivedDays: 7 });
+        setThreads([yield* archivedThread(worktree, archived, active)]);
+        const report = yield* service.runNow;
+        expect(report.entries[0]).toMatchObject({ outcome, reason });
+      }),
+    ),
+  );
+  it.live("keeps the worktree of a thread unarchived while the cleanup runs", () =>
+    runCleanupTest(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const measuring = yield* Deferred.make<void>();
+        const resume = yield* Deferred.make<void>();
+        let measuredPath: string | undefined;
+        const fixture = yield* cleanupFixture.pipe(
+          Effect.provideService(FileSystem.FileSystem, {
+            ...fs,
+            readDirectory: (directory) =>
+              Effect.gen(function* () {
+                if (directory === measuredPath) {
+                  yield* Deferred.succeed(measuring, undefined);
+                  yield* Deferred.await(resume);
+                }
+                return yield* fs.readDirectory(directory);
+              }),
+          }),
+        );
+        measuredPath = yield* fs.realPath(fixture.worktree);
+        fixture.setStorageCleanup({ worktreeAfterDays: null, worktreeAfterArchivedDays: 7 });
+        const thread = yield* archivedThread(fixture.worktree, 10);
+        fixture.setThreads([thread]);
+        const cleanup = yield* fixture.service.runNow.pipe(Effect.forkChild);
+        yield* Deferred.await(measuring);
+        fixture.setThreads([{ ...thread, archivedAt: null }]);
+        yield* Deferred.succeed(resume, undefined);
+        const report = yield* Fiber.join(cleanup);
+        expect(report.entries[0]).toMatchObject({
+          outcome: "kept",
+          reason: "Thread activity or shared worktree changed since check",
+        });
+        expect(yield* fs.exists(fixture.worktree)).toBe(true);
       }),
     ),
   );

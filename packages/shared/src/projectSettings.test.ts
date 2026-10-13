@@ -15,6 +15,7 @@ import {
   resolveProjectSettings,
   resolveWorktreeCleanup,
   withProjectSettingsOverrides,
+  worktreeCleanupEnabled,
 } from "./projectSettings.ts";
 import { applyServerSettingsPatch } from "./serverSettings.ts";
 
@@ -512,4 +513,27 @@ it("inherits branch naming defaults and applies project overrides independently"
     },
   });
   expect(resolveProjectSettings(cleared, projectId).settings.branchNamingMode).toBe("static");
+});
+
+describe("worktreeCleanupEnabled", () => {
+  const none = {
+    ...resolveWorktreeCleanup(DEFAULT_SERVER_SETTINGS, null),
+    worktreeAfterDays: null,
+    worktreeAfterArchivedDays: null,
+    worktreeOnMerge: false,
+    worktreeOnDelete: false,
+    worktreeUnchanged: false,
+  };
+  it("is off when no worktree rule is set", () => {
+    expect(worktreeCleanupEnabled(none)).toBe(false);
+  });
+  it.each([
+    { worktreeAfterDays: 7 },
+    { worktreeAfterArchivedDays: 3 },
+    { worktreeOnMerge: true },
+    { worktreeOnDelete: true },
+    { worktreeUnchanged: true },
+  ])("is on when %o is set", (rule) => {
+    expect(worktreeCleanupEnabled({ ...none, ...rule })).toBe(true);
+  });
 });
