@@ -2,6 +2,7 @@ import type { BrowserImportSource, EnvironmentId } from "@t3tools/contracts";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { previewBridge } from "~/components/preview/previewBridge";
+import { toastManager } from "~/components/ui/toast";
 
 import {
   browserImportSupported,
@@ -9,7 +10,7 @@ import {
   useBrowserImportLauncher,
 } from "./BrowserImportLauncher";
 import {
-  freshBannerChoice,
+  chooseFromBanner,
   importableBrowserSources,
   oncePerSession,
   previewImportLanded,
@@ -116,16 +117,19 @@ export function usePreviewCookieImport(input: {
   // The banner's sources may be from launch; open the wizard from a fresh
   // listing so availability and profiles are as they are now.
   const onChooseFromBanner = (chosen: BrowserImportSource) => {
-    if (!previewBridge) return;
-    void previewBridge.listBrowserImportSources().then(
-      (fresh) => {
-        const choice = freshBannerChoice(fresh, chosen.id);
-        if (choice.kind === "open") return onChoose(choice.source);
-        setBannerSources(choice.sources);
+    const bridge = previewBridge;
+    if (!bridge) return;
+    void chooseFromBanner(chosen.id, {
+      listSources: () => bridge.listBrowserImportSources(),
+      wizardOpen: launcher.isWizardOpen,
+      open: onChoose,
+      refreshBanner: (fresh) => {
+        setBannerSources(fresh);
         loadSources();
       },
-      () => loadSources(),
-    );
+      notifyFailure: () =>
+        toastManager.add({ type: "error", title: "Couldn't check your browsers. Try again." }),
+    });
   };
 
   const showBanner = shouldShowCookieImportBanner({ dismissed, sources: bannerSources });

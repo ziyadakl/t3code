@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import type { BrowserImportSource } from "@t3tools/contracts";
 
 import {
   importFailureReason,
   importableBrowserSources,
   listSitesOutcome,
+  chooseFromBanner,
   freshBannerChoice,
   oncePerSession,
   previewImportLanded,
@@ -200,5 +201,52 @@ describe("freshBannerChoice", () => {
     const fresh = [source("chrome", "notInstalled"), source("safari")];
     expect(freshBannerChoice(fresh, "chrome")).toEqual({ kind: "refresh", sources: fresh });
     expect(freshBannerChoice([], "chrome")).toEqual({ kind: "refresh", sources: [] });
+  });
+});
+
+describe("chooseFromBanner", () => {
+  const deps = (listSources: () => Promise<ReadonlyArray<BrowserImportSource>>) => ({
+    listSources,
+    wizardOpen: vi.fn(() => false),
+    open: vi.fn(),
+    refreshBanner: vi.fn(),
+    notifyFailure: vi.fn(),
+  });
+
+  it("opens the wizard with the browser as the fresh listing has it, not the banner's copy", async () => {
+    const fresh = source("chrome", "browserRunning");
+    const d = deps(async () => [source("safari"), fresh]);
+    await chooseFromBanner("chrome", d);
+    expect(d.open).toHaveBeenCalledWith(fresh);
+    expect(d.refreshBanner).not.toHaveBeenCalled();
+    expect(d.notifyFailure).not.toHaveBeenCalled();
+  });
+
+  it("refreshes the banner from the fresh listing when the browser is gone, opening nothing", async () => {
+    const fresh = [source("chrome", "notInstalled"), source("safari")];
+    const d = deps(async () => fresh);
+    await chooseFromBanner("chrome", d);
+    expect(d.refreshBanner).toHaveBeenCalledWith(fresh);
+    expect(d.open).not.toHaveBeenCalled();
+  });
+
+  it("tells the user, and opens and refreshes nothing, when the fresh listing fails", async () => {
+    const d = deps(() => Promise.reject(new Error("bridge gone")));
+    await chooseFromBanner("chrome", d);
+    expect(d.notifyFailure).toHaveBeenCalledTimes(1);
+    expect(d.open).not.toHaveBeenCalled();
+    expect(d.refreshBanner).not.toHaveBeenCalled();
+  });
+
+  it("leaves alone a wizard the user opened while the listing was out", async () => {
+    let finishListing!: (sources: ReadonlyArray<BrowserImportSource>) => void;
+    const d = deps(() => new Promise((resolve) => (finishListing = resolve)));
+    const choosing = chooseFromBanner("chrome", d);
+    d.wizardOpen.mockReturnValue(true);
+    finishListing([source("chrome")]);
+    await choosing;
+    expect(d.open).not.toHaveBeenCalled();
+    expect(d.refreshBanner).not.toHaveBeenCalled();
+    expect(d.notifyFailure).not.toHaveBeenCalled();
   });
 });

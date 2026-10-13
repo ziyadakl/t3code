@@ -111,7 +111,26 @@ export function useBrowserImportLauncher() {
   const userProfiles = useClientSettings((settings) => settings.browserProfiles);
   const settingsHydrated = useClientSettingsHydrated();
   const [sources, setSources] = useState<ReadonlyArray<BrowserImportSource> | null>(null);
-  const [request, setRequest] = useState<BrowserImportRequest | null>(null);
+  // Each open gets its own id, and the wizard is keyed on it, so a new request
+  // remounts the wizard rather than swapping the source under a live one.
+  const [opened, setOpened] = useState<{
+    readonly id: number;
+    readonly request: BrowserImportRequest;
+  } | null>(null);
+  const request = opened?.request ?? null;
+  const lastOpenId = useRef(0);
+  const wizardOpenRef = useRef(false);
+  const open = useCallback((next: BrowserImportRequest) => {
+    lastOpenId.current += 1;
+    wizardOpenRef.current = true;
+    setOpened({ id: lastOpenId.current, request: next });
+  }, []);
+  const close = useCallback(() => {
+    wizardOpenRef.current = false;
+    setOpened(null);
+  }, []);
+  /** Whether a wizard is open now, current even inside a callback from an older render. */
+  const isWizardOpen = useCallback(() => wizardOpenRef.current, []);
   const importInFlightRef = useRef(false);
   const [importInFlight, setImportInFlight] = useState(false);
 
@@ -178,6 +197,7 @@ export function useBrowserImportLauncher() {
 
   const wizard: ReactNode = request ? (
     <BrowserImportWizard
+      key={opened?.id}
       source={request.source}
       destinationEnvironmentName={request.destination.environmentName}
       targetProfiles={targetProfiles}
@@ -205,7 +225,7 @@ export function useBrowserImportLauncher() {
             });
           });
       }}
-      onClose={() => setRequest(null)}
+      onClose={close}
     />
   ) : null;
 
@@ -214,7 +234,8 @@ export function useBrowserImportLauncher() {
     loadSources,
     importInFlight,
     isImportInFlight,
-    open: setRequest,
+    open,
+    isWizardOpen,
     wizard,
   };
 }

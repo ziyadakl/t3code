@@ -93,6 +93,39 @@ export function freshBannerChoice(
   return source ? { kind: "open", source } : { kind: "refresh", sources: fresh };
 }
 
+/** What the banner's choose button needs from the pane that hosts it. */
+export interface BannerChooseDeps {
+  readonly listSources: () => Promise<ReadonlyArray<BrowserImportSource>>;
+  readonly wizardOpen: () => boolean;
+  readonly open: (source: BrowserImportSource) => void;
+  readonly refreshBanner: (sources: ReadonlyArray<BrowserImportSource>) => void;
+  readonly notifyFailure: () => void;
+}
+
+/**
+ * The banner's choose button: list fresh, then open the wizard on what it
+ * found (see `freshBannerChoice`). A failed listing is reported, since the
+ * click would otherwise do nothing visible.
+ */
+export async function chooseFromBanner(
+  sourceId: BrowserImportSource["id"],
+  deps: BannerChooseDeps,
+): Promise<void> {
+  let fresh: ReadonlyArray<BrowserImportSource>;
+  try {
+    fresh = await deps.listSources();
+  } catch {
+    deps.notifyFailure();
+    return;
+  }
+  // The listing takes a moment; a wizard the user opened meanwhile, from the
+  // menu, is theirs and stays as it is.
+  if (deps.wizardOpen()) return;
+  const choice = freshBannerChoice(fresh, sourceId);
+  if (choice.kind === "open") deps.open(choice.source);
+  else deps.refreshBanner(choice.sources);
+}
+
 /**
  * Runs `load` until it gives an answer worth keeping (any answer, by default),
  * then shares that answer for the rest of the app session, including with
