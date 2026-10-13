@@ -1,17 +1,23 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { BrowserImportSource } from "@t3tools/contracts";
+import type { BrowserImportSite, BrowserImportSource } from "@t3tools/contracts";
 
 import {
   canCloseWizard,
+  filterSites,
   initialWizardStep,
+  initialSiteSelection,
+  orderSites,
   initialTargetSelection,
   isRetryableReason,
+  blockedRetryAction,
   formatSkippedDomains,
   fullDiskAccessRecheckStep,
   outcomeToStep,
   refreshedSourceProfileDirectory,
   refreshedSourceStep,
   resolveWizardTarget,
+  siteSelectionFor,
+  sitesOutcomeToStep,
 } from "./browserImportWizard.logic";
 
 describe("wizard target selection", () => {
@@ -24,6 +30,26 @@ describe("wizard target selection", () => {
       kind: "existing",
       profileId: "new",
       name: "Existing new",
+    });
+  });
+
+  it("starts on the profile the preview tab is showing", () => {
+    const profiles = [
+      { id: "default", name: "Default" },
+      { id: "work", name: "Work" },
+    ];
+    expect(initialTargetSelection(true, profiles, "work")).toEqual({
+      kind: "existing",
+      profileId: "work",
+    });
+  });
+
+  it("ignores a requested profile that is not a target", () => {
+    const profiles = [{ id: "default", name: "Default" }];
+    expect(initialTargetSelection(true, profiles, "incognito")).toEqual({ kind: "new" });
+    expect(initialTargetSelection(false, profiles, "incognito")).toEqual({
+      kind: "existing",
+      profileId: "default",
     });
   });
 
@@ -121,10 +147,11 @@ describe("outcomeToStep", () => {
     });
   });
 
-  it("surfaces every other failure on the blocked screen", () => {
+  it("surfaces every other failure on the blocked screen, retrying the import", () => {
     expect(outcomeToStep({ kind: "blocked", reason: "readFailed" })).toEqual({
       step: "blocked",
       reason: "readFailed",
+      retry: "import",
     });
   });
 });
@@ -221,5 +248,165 @@ describe("formatSkippedDomains", () => {
     expect(formatSkippedDomains(["a.com", "b.com", "c.com", "d.com", "e.com"])).toBe(
       "a.com, b.com, c.com and 2 more",
     );
+  });
+});
+
+const site = (domain: string, over: Partial<BrowserImportSite> = {}): BrowserImportSite => ({
+  domain,
+  cookieCount: 3,
+  signedIn: true,
+  current: false,
+  ...over,
+});
+
+describe("orderSites", () => {
+  it("puts the current site first, then the most recently used, then by name", () => {
+    const ordered = orderSites([
+      site("zeta.com"),
+      site("old.com", { lastAccessedAt: 100 }),
+      site("alpha.com"),
+      site("here.com", { current: true, lastAccessedAt: 1 }),
+      site("recent.com", { lastAccessedAt: 900 }),
+    ]);
+    expect(ordered.map((entry) => entry.domain)).toEqual([
+      "here.com",
+      "recent.com",
+      "old.com",
+      "alpha.com",
+      "zeta.com",
+    ]);
+  });
+});
+
+describe("initialSiteSelection", () => {
+  it("pre-ticks signed-in sites but never banking, email or sign-in ones", () => {
+    expect(
+      initialSiteSelection([
+        site("bank.com", { sensitive: "banking" }),
+        site("github.com"),
+        site("cdn.com", { signedIn: false }),
+        site("gmail.com", { sensitive: "email" }),
+        site("okta.com", { sensitive: "signIn" }),
+        site("linear.app"),
+      ]),
+    ).toEqual(["github.com", "linear.app"]);
+  });
+
+  it("pre-ticks at most the first five", () => {
+    const sites = ["a", "b", "c", "d", "e", "f", "g"].map((name) => site(`${name}.com`));
+    expect(initialSiteSelection(sites)).toEqual(["a.com", "b.com", "c.com", "d.com", "e.com"]);
+  });
+});
+
+describe("filterSites", () => {
+  const sites = [site("github.com"), site("GitLab.com"), site("bbc.co.uk")];
+
+  it("matches part of a domain regardless of case and surrounding spaces", () => {
+    expect(filterSites(sites, "  GIT ").map((entry) => entry.domain)).toEqual([
+      "github.com",
+      "GitLab.com",
+    ]);
+  });
+
+  it("keeps every site for an empty query", () => {
+    expect(filterSites(sites, "   ")).toEqual(sites);
+  });
+});
+
+describe("sitesOutcomeToStep", () => {
+  it("lists the sites in import order", () => {
+    expect(
+      sitesOutcomeToStep({
+        kind: "sites",
+        sites: [site("b.com"), site("a.com", { current: true })],
+      }),
+    ).toEqual({ step: "sites", sites: [site("a.com", { current: true }), site("b.com")] });
+  });
+
+  it("routes a running browser back to the quit screen", () => {
+    expect(sitesOutcomeToStep({ kind: "blocked", reason: "browserRunning" })).toEqual({
+      step: "quit",
+    });
+  });
+
+  it("asks for Full Disk Access again before returning to configure", () => {
+    expect(sitesOutcomeToStep({ kind: "blocked", reason: "needsFullDiskAccess" })).toEqual({
+      step: "fullDiskAccess",
+      resume: "configure",
+      checked: true,
+    });
+  });
+
+  it("blocks on any other failure, retrying the listing rather than an import", () => {
+    expect(sitesOutcomeToStep({ kind: "blocked", reason: "readFailed" })).toEqual({
+      step: "blocked",
+      reason: "readFailed",
+      retry: "listSites",
+    });
+  });
+});
+
+describe("blockedRetryAction", () => {
+  it("re-runs whatever failed", () => {
+    expect(blockedRetryAction({ step: "blocked", reason: "readFailed", retry: "import" })).toBe(
+      "import",
+    );
+    expect(blockedRetryAction({ step: "blocked", reason: "readFailed", retry: "listSites" })).toBe(
+      "listSites",
+    );
+  });
+
+  it("starts over from configure when the source was blocked before anything ran", () => {
+    expect(blockedRetryAction({ step: "blocked", reason: "needsKeychainApproval" })).toBe(
+      "configure",
+    );
+  });
+
+  it("offers nothing for a failure a retry cannot clear", () => {
+    expect(
+      blockedRetryAction({ step: "blocked", reason: "unsupportedPlatform", retry: "import" }),
+    ).toBeUndefined();
+  });
+});
+
+describe("siteSelectionFor", () => {
+  const listed = [
+    site("github.com"),
+    site("linear.app"),
+    site("bank.com", { sensitive: "banking" }),
+  ];
+
+  it("keeps the user's ticks when the same profile is listed again", () => {
+    expect(
+      siteSelectionFor(
+        { sourceProfileDirectory: "Default", domains: ["bank.com"] },
+        "Default",
+        listed,
+      ),
+    ).toEqual({ sourceProfileDirectory: "Default", domains: ["bank.com"] });
+  });
+
+  it("drops ticks for sites the profile no longer lists", () => {
+    expect(
+      siteSelectionFor(
+        { sourceProfileDirectory: "Default", domains: ["gone.com", "linear.app"] },
+        "Default",
+        listed,
+      ),
+    ).toEqual({ sourceProfileDirectory: "Default", domains: ["linear.app"] });
+  });
+
+  it("starts from the default ticks for a different profile", () => {
+    expect(
+      siteSelectionFor(
+        { sourceProfileDirectory: "Default", domains: ["bank.com"] },
+        "Profile 2",
+        listed,
+      ),
+    ).toEqual({ sourceProfileDirectory: "Profile 2", domains: ["github.com", "linear.app"] });
+    expect(siteSelectionFor(undefined, "Default", listed)).toEqual({
+      sourceProfileDirectory: "Default",
+      domains: ["github.com", "linear.app"],
+    });
   });
 });

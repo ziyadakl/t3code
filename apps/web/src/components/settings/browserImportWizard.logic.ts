@@ -1,4 +1,8 @@
-import type { BrowserImportFailureReason, BrowserImportSource } from "@t3tools/contracts";
+import type {
+  BrowserImportFailureReason,
+  BrowserImportSite,
+  BrowserImportSource,
+} from "@t3tools/contracts";
 
 export interface WizardTargetProfile {
   readonly id: string;
@@ -13,10 +17,17 @@ export type WizardTargetSelection =
   | { readonly kind: "new" }
   | { readonly kind: "existing"; readonly profileId: string };
 
+/**
+ * Where "Into" starts: the requested profile when it is a valid target (the
+ * preview tab's own profile), else a new profile, else the first existing one.
+ */
 export function initialTargetSelection(
   canCreateProfile: boolean,
   targetProfiles: ReadonlyArray<WizardTargetProfile>,
+  initialTargetProfileId?: string,
 ): WizardTargetSelection {
+  const requested = targetProfiles.find((profile) => profile.id === initialTargetProfileId);
+  if (requested) return { kind: "existing", profileId: requested.id };
   if (canCreateProfile) return { kind: "new" };
   const first = targetProfiles[0];
   return first ? { kind: "existing", profileId: first.id } : { kind: "new" };
@@ -64,6 +75,9 @@ export type WizardStep =
       readonly checked?: boolean;
     }
   | { readonly step: "configure" }
+  | { readonly step: "loadingSites" }
+  /** Sites are already in `orderSites` order. */
+  | { readonly step: "sites"; readonly sites: ReadonlyArray<BrowserImportSite> }
   | { readonly step: "checking"; readonly check: "browser" | "fullDiskAccess" }
   | { readonly step: "importing" }
   | {
@@ -73,12 +87,22 @@ export type WizardStep =
       readonly skippedDomains: ReadonlyArray<string>;
       readonly targetName: string;
     }
-  | { readonly step: "blocked"; readonly reason: BrowserImportFailureReason };
+  | {
+      readonly step: "blocked";
+      readonly reason: BrowserImportFailureReason;
+      /** What "Try again" re-runs; absent when nothing was attempted yet. */
+      readonly retry?: "import" | "listSites";
+    };
 
 /** The import owns its target partition until the write finishes. */
 export function canCloseWizard(step: WizardStep): boolean {
   return step.step !== "importing";
 }
+
+/** What listing a source profile's sites produces; the parent reads the store. */
+export type SitesOutcome =
+  | { readonly kind: "sites"; readonly sites: ReadonlyArray<BrowserImportSite> }
+  | { readonly kind: "blocked"; readonly reason: BrowserImportFailureReason };
 
 /**
  * Where the wizard opens for a source. A running browser is the one thing we
@@ -115,7 +139,7 @@ export function outcomeToStep(outcome: ImportOutcome): WizardStep {
     // denied instead of returning to an indistinguishable permission screen.
     return { step: "fullDiskAccess", resume: "import", checked: true };
   }
-  return { step: "blocked", reason: outcome.reason };
+  return { step: "blocked", reason: outcome.reason, retry: "import" };
 }
 
 /** Where a fresh availability check lands the wizard after the user quits. */
@@ -171,4 +195,89 @@ export function formatSkippedDomains(domains: ReadonlyArray<string>): string {
   if (domains.length === 1) return domains[0]!;
   if (domains.length <= 3) return `${domains.slice(0, -1).join(", ")} and ${domains.at(-1)}`;
   return `${domains.slice(0, 3).join(", ")} and ${domains.length - 3} more`;
+}
+
+/**
+ * The order the sites step lists them in: the site the preview tab is showing,
+ * then the most recently used, then alphabetically.
+ */
+export function orderSites(sites: ReadonlyArray<BrowserImportSite>): BrowserImportSite[] {
+  return sites.toSorted((a, b) => {
+    if (a.current !== b.current) return a.current ? -1 : 1;
+    const aTime = a.lastAccessedAt ?? Number.NEGATIVE_INFINITY;
+    const bTime = b.lastAccessedAt ?? Number.NEGATIVE_INFINITY;
+    if (aTime !== bTime) return bTime - aTime;
+    return a.domain.localeCompare(b.domain);
+  });
+}
+
+const PRESELECTED_SITE_LIMIT = 5;
+
+/**
+ * The domains ticked when the sites step first opens: the first few signed-in
+ * sites, never a banking, email or sign-in one. Pass sites already ordered.
+ */
+export function initialSiteSelection(orderedSites: ReadonlyArray<BrowserImportSite>): string[] {
+  return orderedSites
+    .filter((entry) => entry.signedIn && entry.sensitive === undefined)
+    .slice(0, PRESELECTED_SITE_LIMIT)
+    .map((entry) => entry.domain);
+}
+
+/** Sites whose domain contains the query, ignoring case; all of them for an empty query. */
+export function filterSites<T extends BrowserImportSite>(
+  sites: ReadonlyArray<T>,
+  query: string,
+): ReadonlyArray<T> {
+  const needle = query.trim().toLowerCase();
+  if (needle === "") return sites;
+  return sites.filter((entry) => entry.domain.toLowerCase().includes(needle));
+}
+
+/** Where listing a profile's sites lands the wizard. */
+export function sitesOutcomeToStep(outcome: SitesOutcome): WizardStep {
+  if (outcome.kind === "sites") return { step: "sites", sites: orderSites(outcome.sites) };
+  if (outcome.reason === "browserRunning") return { step: "quit" };
+  if (outcome.reason === "needsFullDiskAccess") {
+    return { step: "fullDiskAccess", resume: "configure", checked: true };
+  }
+  return { step: "blocked", reason: outcome.reason, retry: "listSites" };
+}
+
+/**
+ * What the blocked screen's "Try again" does: re-run the import or listing
+ * that failed, with the same choices, or start over at configure when the
+ * source was blocked before anything ran. Undefined hides the button.
+ */
+export function blockedRetryAction(
+  step: Extract<WizardStep, { step: "blocked" }>,
+): "import" | "listSites" | "configure" | undefined {
+  if (!isRetryableReason(step.reason)) return undefined;
+  return step.retry ?? "configure";
+}
+
+/** The ticked domains, remembered for the source profile they were ticked in. */
+export interface SiteSelection {
+  readonly sourceProfileDirectory: string;
+  readonly domains: ReadonlyArray<string>;
+}
+
+/**
+ * The selection to show once a profile's sites are listed. Going Back and
+ * Continuing on the same profile keeps the user's ticks (minus any site that
+ * has since gone); another profile starts from the default ticks.
+ */
+export function siteSelectionFor(
+  previous: SiteSelection | undefined,
+  sourceProfileDirectory: string,
+  orderedSites: ReadonlyArray<BrowserImportSite>,
+): SiteSelection {
+  if (previous?.sourceProfileDirectory !== sourceProfileDirectory) {
+    return { sourceProfileDirectory, domains: initialSiteSelection(orderedSites) };
+  }
+  const listed = new Set(orderedSites.map((entry) => entry.domain));
+  return {
+    sourceProfileDirectory,
+    domains: previous.domains.filter((domain) => listed.has(domain)),
+  };
 }

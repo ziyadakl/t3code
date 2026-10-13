@@ -1,13 +1,14 @@
 import { PermissionChecklist, PermissionContinueButton } from "../permissions/PermissionChecklist";
 import { usePermissionStatus } from "../permissions/usePermissionStatus";
-import type { BrowserImportSource } from "@t3tools/contracts";
+import type { BrowserImportSite, BrowserImportSource } from "@t3tools/contracts";
 import { BROWSER_IMPORT_FAILURE_COPY } from "@t3tools/contracts";
 import { ArrowDownIcon, ArrowRightIcon, CheckIcon, HardDriveIcon } from "lucide-react";
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 
 import { cn, randomUUID } from "~/lib/utils";
 
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import {
   Dialog,
   DialogClose,
@@ -18,19 +19,25 @@ import {
   DialogPopup,
   DialogTitle,
 } from "../ui/dialog";
+import { Input } from "../ui/input";
 import { Spinner } from "../ui/spinner";
 import {
+  blockedRetryAction,
   initialWizardStep,
   initialTargetSelection,
   canCloseWizard,
-  isRetryableReason,
+  filterSites,
   formatSkippedDomains,
   fullDiskAccessRecheckStep,
   outcomeToStep,
   refreshedSourceProfileDirectory,
   refreshedSourceStep,
   resolveWizardTarget,
+  siteSelectionFor,
+  sitesOutcomeToStep,
   type ImportOutcome,
+  type SiteSelection,
+  type SitesOutcome,
   type WizardTarget,
   type WizardTargetProfile,
   type WizardTargetSelection,
@@ -48,6 +55,13 @@ interface BrowserImportWizardProps {
   /** Whether a new profile can still be created (profile cap). */
   readonly canCreateProfile: boolean;
   /**
+   * Starts "Into" on this existing profile when it is one of `targetProfiles`,
+   * so opening from a preview tab imports into the profile being viewed.
+   */
+  readonly initialTargetProfileId?: string | undefined;
+  /** Lists the sites a source profile holds cookies for, without decrypting. */
+  readonly onListSites: (sourceProfileDirectory: string) => Promise<SitesOutcome>;
+  /**
    * Runs the import and returns how it went. For a new target the caller only
    * registers the profile once the import succeeds, so a blocked attempt never
    * leaves an empty profile behind.
@@ -55,6 +69,8 @@ interface BrowserImportWizardProps {
   readonly onImport: (input: {
     readonly sourceProfileDirectory: string;
     readonly target: WizardTarget;
+    /** Registrable domains the user ticked; only their cookies are imported. */
+    readonly domains: ReadonlyArray<string>;
   }) => Promise<ImportOutcome>;
   /** Re-checks the source's availability after the user quits the browser. */
   readonly onRefreshSource: () => Promise<BrowserImportSource | undefined>;
@@ -76,6 +92,8 @@ export function BrowserImportWizard({
   destinationEnvironmentName,
   targetProfiles,
   canCreateProfile,
+  initialTargetProfileId,
+  onListSites,
   onImport,
   onRefreshSource,
   onOpenFullDiskAccessSettings,
@@ -88,8 +106,11 @@ export function BrowserImportWizard({
     () => initialSource.profiles[0]?.directory ?? "",
   );
   const [target, setTarget] = useState<WizardTargetSelection>(() =>
-    initialTargetSelection(canCreateProfile, targetProfiles),
+    initialTargetSelection(canCreateProfile, targetProfiles, initialTargetProfileId),
   );
+  // Survives Back and Continue on the same source profile; a listing for
+  // another profile replaces it with that profile's default ticks.
+  const [siteSelection, setSiteSelection] = useState<SiteSelection>();
   const [targetError, setTargetError] = useState<string>();
   // Stable across retries so a keychain re-approval lands in one profile, not
   // a new one each time.
@@ -111,12 +132,37 @@ export function BrowserImportWizard({
     setTargetError(undefined);
     importInFlight.current = true;
     setStep({ step: "importing" });
-    void onImport({ sourceProfileDirectory, target: chosen })
+    void onImport({
+      sourceProfileDirectory,
+      target: chosen,
+      domains: siteSelection?.domains ?? [],
+    })
       .then((outcome) => setStep(outcomeToStep(outcome)))
       .catch(() => setStep({ step: "blocked", reason: "readFailed" }))
       .finally(() => {
         importInFlight.current = false;
       });
+  };
+
+  const listSites = () => {
+    const directory = sourceProfileDirectory;
+    setStep({ step: "loadingSites" });
+    void onListSites(directory)
+      .then((outcome) => {
+        const next = sitesOutcomeToStep(outcome);
+        if (next.step === "sites") {
+          setSiteSelection((previous) => siteSelectionFor(previous, directory, next.sites));
+        }
+        setStep(next);
+      })
+      .catch(() => setStep({ step: "blocked", reason: "readFailed", retry: "listSites" }));
+  };
+
+  const retryAction = step.step === "blocked" ? blockedRetryAction(step) : undefined;
+  const retryBlocked = (action: NonNullable<typeof retryAction>) => {
+    if (action === "import") runImport();
+    else if (action === "listSites") listSites();
+    else setStep({ step: "configure" });
   };
 
   // Re-lists the source after the user did something outside the app (quit the
@@ -163,6 +209,20 @@ export function BrowserImportWizard({
           />
         ) : step.step === "importing" ? (
           <ImportingStep />
+        ) : step.step === "loadingSites" ? (
+          <LoadingSitesStep sourceName={source.name} />
+        ) : step.step === "sites" ? (
+          <SitesStep
+            profileName={
+              source.profiles.find((profile) => profile.directory === sourceProfileDirectory)
+                ?.name ?? source.name
+            }
+            sites={step.sites}
+            selected={siteSelection?.domains ?? []}
+            onSelectedChange={(domains) => setSiteSelection({ sourceProfileDirectory, domains })}
+            onBack={() => setStep({ step: "configure" })}
+            onImport={runImport}
+          />
         ) : step.step === "checking" ? (
           <CheckingStep sourceName={source.name} check={step.check} />
         ) : step.step === "done" ? (
@@ -176,7 +236,7 @@ export function BrowserImportWizard({
             source={source}
             reason={step.reason}
             onClose={onClose}
-            onRetry={isRetryableReason(step.reason) ? runImport : undefined}
+            onRetry={retryAction === undefined ? undefined : () => retryBlocked(retryAction)}
           />
         ) : (
           <ConfigureStep
@@ -193,7 +253,7 @@ export function BrowserImportWizard({
             }}
             targetError={targetError}
             onCancel={onClose}
-            onImport={runImport}
+            onContinue={listSites}
           />
         )}
       </DialogPopup>
@@ -250,7 +310,7 @@ type ConfigureStepProps = {
   readonly targetError: string | undefined;
   readonly onTargetChange: (target: WizardTargetSelection) => void;
   readonly onCancel: () => void;
-  readonly onImport: () => void;
+  readonly onContinue: () => void;
 };
 
 function FullDiskAccessStep({
@@ -350,7 +410,7 @@ function ConfigureStep({
   targetError,
   onTargetChange,
   onCancel,
-  onImport,
+  onContinue,
 }: ConfigureStepProps) {
   const targetMissing =
     target.kind === "existing" &&
@@ -430,9 +490,9 @@ function ConfigureStep({
         </Button>
         <Button
           disabled={sourceProfileDirectory === "" || targetMissing || targetUncreatable}
-          onClick={onImport}
+          onClick={onContinue}
         >
-          Import
+          Continue
         </Button>
       </DialogFooter>
     </>
@@ -496,6 +556,163 @@ function ImportingStep() {
           <span className="text-sm text-muted-foreground">Importing…</span>
         </div>
       </DialogPanel>
+    </>
+  );
+}
+
+function LoadingSitesStep({ sourceName }: { readonly sourceName: string }) {
+  return (
+    <>
+      <DialogHeader>
+        <DialogTitle>Finding your sites</DialogTitle>
+        <DialogDescription>Reading which sites {sourceName} has cookies for.</DialogDescription>
+      </DialogHeader>
+      <DialogPanel>
+        <div className="flex items-center gap-3 py-2">
+          <Spinner size="md" tone="muted" />
+          <span className="text-sm text-muted-foreground">Reading cookies…</span>
+        </div>
+      </DialogPanel>
+    </>
+  );
+}
+
+/** Past this many sites the list gets a filter field. */
+const SITE_FILTER_THRESHOLD = 8;
+
+const SENSITIVE_LABEL: Readonly<Record<NonNullable<BrowserImportSite["sensitive"]>, string>> = {
+  banking: "Banking",
+  email: "Email",
+  signIn: "Sign-in",
+};
+
+/** Lets the user tick which sites' cookies come over. */
+function SitesStep({
+  profileName,
+  sites,
+  selected,
+  onSelectedChange,
+  onBack,
+  onImport,
+}: {
+  readonly profileName: string;
+  readonly sites: ReadonlyArray<BrowserImportSite>;
+  readonly selected: ReadonlyArray<string>;
+  readonly onSelectedChange: (domains: ReadonlyArray<string>) => void;
+  readonly onBack: () => void;
+  readonly onImport: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const filterId = useId();
+  const visible = filterSites(sites, query);
+  const selectedSet = new Set(selected);
+  const setChecked = (domain: string, checked: boolean) =>
+    onSelectedChange(
+      checked ? [...selected, domain] : selected.filter((entry) => entry !== domain),
+    );
+  const selectVisible = () =>
+    onSelectedChange([
+      ...selected,
+      ...visible.map((entry) => entry.domain).filter((domain) => !selectedSet.has(domain)),
+    ]);
+  return (
+    <>
+      <DialogHeader>
+        <DialogTitle>Choose sites to import</DialogTitle>
+        <DialogDescription>
+          Only the sites you tick come over. Banking, email and sign-in sites start unticked.
+        </DialogDescription>
+      </DialogHeader>
+      <DialogPanel>
+        {sites.length === 0 ? (
+          <p className="text-sm text-muted-foreground">{profileName} has no cookies to import.</p>
+        ) : (
+          <>
+            {sites.length > SITE_FILTER_THRESHOLD ? (
+              <div className="mb-3">
+                <label htmlFor={filterId} className="sr-only">
+                  Filter sites
+                </label>
+                <Input
+                  id={filterId}
+                  type="search"
+                  placeholder="Filter sites"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                />
+              </div>
+            ) : null}
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="text-xs tabular-nums text-muted-foreground" aria-live="polite">
+                {selected.length} of {sites.length} selected
+              </span>
+              <div className="flex items-center gap-1">
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  disabled={visible.length === 0}
+                  onClick={selectVisible}
+                >
+                  Select all
+                </Button>
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  disabled={selected.length === 0}
+                  onClick={() => onSelectedChange([])}
+                >
+                  Clear
+                </Button>
+              </div>
+            </div>
+            {visible.length === 0 ? (
+              <p className="py-2 text-sm text-muted-foreground">
+                No sites match &ldquo;{query.trim()}&rdquo;.
+              </p>
+            ) : (
+              <ul className="max-h-72 divide-y divide-border/60 overflow-y-auto rounded-lg border border-border/60">
+                {visible.map((entry) => (
+                  <li key={entry.domain}>
+                    <label className="flex cursor-pointer items-center gap-3 px-3 py-2 transition-colors hover:bg-muted/40">
+                      <Checkbox
+                        checked={selectedSet.has(entry.domain)}
+                        onCheckedChange={(checked) => setChecked(entry.domain, checked === true)}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium text-foreground">
+                          {entry.domain}
+                        </span>
+                        <span className="block truncate text-xs tabular-nums text-muted-foreground">
+                          {cookieResultCount(entry.cookieCount)}
+                          {entry.signedIn ? " · Signed in" : ""}
+                        </span>
+                      </span>
+                      {entry.current || entry.sensitive ? (
+                        <span className="shrink-0 text-xs text-muted-foreground">
+                          {[
+                            entry.current ? "This site" : undefined,
+                            entry.sensitive ? SENSITIVE_LABEL[entry.sensitive] : undefined,
+                          ]
+                            .filter((label) => label !== undefined)
+                            .join(" · ")}
+                        </span>
+                      ) : null}
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
+        )}
+      </DialogPanel>
+      <DialogFooter>
+        <Button variant="outline" onClick={onBack}>
+          Back
+        </Button>
+        <Button disabled={selected.length === 0} onClick={onImport}>
+          {selected.length === 1 ? "Import 1 site" : `Import ${selected.length} sites`}
+        </Button>
+      </DialogFooter>
     </>
   );
 }
