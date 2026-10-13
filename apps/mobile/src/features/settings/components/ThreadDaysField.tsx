@@ -6,13 +6,16 @@ import {
 
 import { AppTextInput } from "../../../components/AppText";
 
-export interface AutoSettleDaysFieldProps {
+export interface ThreadDaysFieldProps {
   readonly value: number;
   readonly onValueChange: (value: number) => void;
   readonly disabled?: boolean;
+  /** Names what the days count toward, such as "Days before auto-settle". */
+  readonly accessibilityLabel: string;
 }
 
-export function AutoSettleDaysField(props: AutoSettleDaysFieldProps) {
+/** A day-count field for thread settings such as auto-settle and auto-archive. */
+export function ThreadDaysField(props: ThreadDaysFieldProps) {
   const [draft, setDraft] = useState<string | null>(null);
   const commit = () => {
     if (props.disabled) {
@@ -41,7 +44,7 @@ export function AutoSettleDaysField(props: AutoSettleDaysFieldProps) {
       onChangeText={setDraft}
       onBlur={commit}
       onSubmitEditing={commit}
-      accessibilityLabel="Days before auto-settle"
+      accessibilityLabel={props.accessibilityLabel}
       editable={!props.disabled}
     />
   );

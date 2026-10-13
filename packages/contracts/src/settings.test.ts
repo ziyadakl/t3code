@@ -729,6 +729,18 @@ describe("ServerSettings thread settlement", () => {
     expect(() => decodeServerSettings({ sidebarAutoSettleAfterDays: value })).toThrow();
     expect(() => decodeServerSettingsPatch({ sidebarAutoSettleAfterDays: value })).toThrow();
   });
+
+  it("archives settled threads after seven days by default, and can be turned off", () => {
+    expect(decodeServerSettings({}).sidebarAutoArchiveSettledAfterDays).toBe(7);
+    expect(
+      decodeServerSettings({ sidebarAutoArchiveSettledAfterDays: null })
+        .sidebarAutoArchiveSettledAfterDays,
+    ).toBeNull();
+    expect(decodeServerSettingsPatch({ sidebarAutoArchiveSettledAfterDays: 14 })).toMatchObject({
+      sidebarAutoArchiveSettledAfterDays: 14,
+    });
+    expect(() => decodeServerSettings({ sidebarAutoArchiveSettledAfterDays: 0 })).toThrow();
+  });
 });
 
 describe("ClientSettings pull request merge methods", () => {

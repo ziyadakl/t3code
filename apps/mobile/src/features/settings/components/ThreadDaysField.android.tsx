@@ -6,9 +6,9 @@ import { View } from "react-native";
 
 import { AppText } from "../../../components/AppText";
 import { MaterialIconButton } from "../../../components/MaterialIconButton";
-import type { AutoSettleDaysFieldProps } from "./AutoSettleDaysField";
+import type { ThreadDaysFieldProps } from "./ThreadDaysField";
 
-export function AutoSettleDaysField(props: AutoSettleDaysFieldProps) {
+export function ThreadDaysField(props: ThreadDaysFieldProps) {
   const adjust = (amount: number) => {
     if (props.disabled) return;
     const next = Math.max(
@@ -28,21 +28,21 @@ export function AutoSettleDaysField(props: AutoSettleDaysFieldProps) {
       />
       <MaterialIconButton
         icon="minus"
-        accessibilityLabel="Decrease days before auto-settle"
+        accessibilityLabel={`Decrease ${props.accessibilityLabel.toLowerCase()}`}
         disabled={props.disabled || props.value <= MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS}
         onPress={() => adjust(-1)}
       />
       <AppText
         className="min-w-8 text-center text-base"
         style={{ fontVariant: ["tabular-nums"] }}
-        accessibilityLabel={`${props.value} ${props.value === 1 ? "day" : "days"} before auto-settle`}
+        accessibilityLabel={`${props.accessibilityLabel}: ${props.value}`}
         accessibilityLiveRegion="polite"
       >
         {props.value}
       </AppText>
       <MaterialIconButton
         icon="plus"
-        accessibilityLabel="Increase days before auto-settle"
+        accessibilityLabel={`Increase ${props.accessibilityLabel.toLowerCase()}`}
         disabled={props.disabled || props.value >= MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS}
         onPress={() => adjust(1)}
       />

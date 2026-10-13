@@ -1,6 +1,6 @@
 import { AuthSettingsWriteScope } from "@t3tools/contracts";
 import { readEnvironmentScope, useEnvironmentsWithScope } from "../../state/session";
-import { AutoSettleDaysField } from "./components/AutoSettleDaysField";
+import { ThreadDaysField } from "./components/ThreadDaysField";
 import { ScreenScrollView as ScrollView } from "../../components/ScreenScrollView";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
@@ -56,6 +56,7 @@ export function SettingsThreadsRouteScreen() {
 }
 
 const AUTO_SETTLE_DEFAULT_DAYS = DEFAULT_SERVER_SETTINGS.sidebarAutoSettleAfterDays ?? 3;
+const AUTO_ARCHIVE_DEFAULT_DAYS = DEFAULT_SERVER_SETTINGS.sidebarAutoArchiveSettledAfterDays ?? 7;
 
 /**
  * Mobile edits auto-settle defaults across selected capable targets.
@@ -121,6 +122,13 @@ function AutoSettleSettingsRows() {
     });
   };
 
+  // An environment-wide setting, so it is hidden while a project is selected.
+  const supportsAutoArchive =
+    !projectSelected &&
+    syncTargets.every(
+      (target) =>
+        target.environment.serverConfig.environment.capabilities.threadAutoArchive === true,
+    );
   const { patch: autoSettlePatch, mismatches } = planAutoSettleSettingsSync(
     {
       environmentId: reference.environment.environmentId,
@@ -133,6 +141,7 @@ function AutoSettleSettingsRows() {
       label: target.environment.label,
       settings: target.settings,
     })),
+    { includeAutoArchive: supportsAutoArchive },
   );
 
   const supportsProjectOverrides = syncTargets.every(
@@ -176,6 +185,8 @@ function AutoSettleSettingsRows() {
   };
 
   const afterDays = referenceSettings.sidebarAutoSettleAfterDays;
+  // Like auto-settle, a mixed selection shows the reference value and lists the rest below.
+  const archiveAfterDays = referenceSettings.sidebarAutoArchiveSettledAfterDays;
 
   return (
     <View className="gap-6">
@@ -228,18 +239,50 @@ function AutoSettleSettingsRows() {
           <View className="flex-row items-center gap-4 px-4 py-4 android:min-h-14 android:py-3">
             <View className="w-[22px] android:w-6" />
             <Text className="flex-1 text-foreground text-lg android:text-base">Inactive days</Text>
-            <AutoSettleDaysField
+            <ThreadDaysField
               value={afterDays}
               disabled={disabled}
+              accessibilityLabel="Days before auto-settle"
               onValueChange={(value) => writeToAll({ sidebarAutoSettleAfterDays: value })}
             />
           </View>
         ) : null}
       </SettingsSection>
+      {supportsAutoArchive ? (
+        <SettingsSection title="Auto-archive">
+          <SettingsSwitchRow
+            icon="archivebox"
+            label="Auto-archive settled threads"
+            value={archiveAfterDays !== null}
+            disabled={disabled}
+            onValueChange={(value) =>
+              writeToAll({
+                sidebarAutoArchiveSettledAfterDays: value ? AUTO_ARCHIVE_DEFAULT_DAYS : null,
+              })
+            }
+          />
+          {archiveAfterDays !== null ? (
+            <View className="flex-row items-center gap-4 px-4 py-4 android:min-h-14 android:py-3">
+              <View className="w-[22px] android:w-6" />
+              <Text className="flex-1 text-foreground text-lg android:text-base">Settled days</Text>
+              <ThreadDaysField
+                value={archiveAfterDays}
+                disabled={disabled}
+                accessibilityLabel="Days settled before auto-archive"
+                onValueChange={(value) => writeToAll({ sidebarAutoArchiveSettledAfterDays: value })}
+              />
+            </View>
+          ) : null}
+        </SettingsSection>
+      ) : null}
       {pendingWrites === 0 && mismatches.length > 0 ? (
         <SettingsSection title="Across environments">
           <View className="gap-3 p-4">
-            <Text className="text-base text-foreground">Auto-settle defaults differ</Text>
+            <Text className="text-base text-foreground">
+              {supportsAutoArchive
+                ? "Auto-settle and auto-archive defaults differ"
+                : "Auto-settle defaults differ"}
+            </Text>
             <Text className="text-sm text-foreground-muted">
               {mismatches.map((mismatch) => mismatch.label).join(", ")}
             </Text>
@@ -250,7 +293,7 @@ function AutoSettleSettingsRows() {
               className="self-start rounded-full bg-subtle px-4 py-2 active:opacity-70"
             >
               <Text className="text-sm font-t3-medium text-foreground">
-                Apply auto-settle defaults
+                {supportsAutoArchive ? "Apply these defaults" : "Apply auto-settle defaults"}
               </Text>
             </Pressable>
           </View>

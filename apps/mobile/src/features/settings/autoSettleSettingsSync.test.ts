@@ -89,4 +89,34 @@ describe("auto-settle settings sync", () => {
       otherCheckout,
     ]);
   });
+
+  it("notices differing auto-archive days and applies them when auto-archive is included", () => {
+    const target = {
+      environmentId: EnvironmentId.make("remote"),
+      label: "Remote",
+      settings: { ...reference.settings, sidebarAutoArchiveSettledAfterDays: 30 },
+    };
+
+    const plan = planAutoSettleSettingsSync(reference, [target], { includeAutoArchive: true });
+
+    expect(plan.mismatches).toEqual([target]);
+    expect(plan.patch).toEqual({
+      sidebarAutoSettleAfterDays: 7,
+      sidebarAutoSettleOnMerge: true,
+      sidebarAutoArchiveSettledAfterDays: 7,
+    });
+  });
+
+  it("leaves auto-archive out where it cannot be written", () => {
+    const target = {
+      environmentId: EnvironmentId.make("remote"),
+      label: "Remote",
+      settings: { ...reference.settings, sidebarAutoArchiveSettledAfterDays: null },
+    };
+
+    const plan = planAutoSettleSettingsSync(reference, [target], { includeAutoArchive: false });
+
+    expect(plan.mismatches).toEqual([]);
+    expect(plan.patch).not.toHaveProperty("sidebarAutoArchiveSettledAfterDays");
+  });
 });

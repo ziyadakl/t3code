@@ -60,6 +60,9 @@ export function useAvailableSettingsSearchItems(scopeSearch: SettingsScopeSearch
         }),
         hasThreadAutoSettlement:
           getThreadAutoSettlementSearchAvailability(environments).eligibleEnvironmentIds.length > 0,
+        hasThreadAutoArchive:
+          getThreadAutoSettlementSearchAvailability(environments, undefined, "threadAutoArchive")
+            .eligibleEnvironmentIds.length > 0,
         managedTunnelActive,
       }),
     [

@@ -50,7 +50,9 @@ function SettingsScopeBoundary({ pathname, children }: { pathname: string; child
   const searchTarget = getSettingsSearchTargetScope(hash);
   const autoSettlementAvailability = searchTarget?.requiresThreadAutoSettlement
     ? getThreadAutoSettlementSearchAvailability(environments, scope)
-    : null;
+    : searchTarget?.requiresThreadAutoArchive
+      ? getThreadAutoSettlementSearchAvailability(environments, scope, "threadAutoArchive")
+      : null;
   if (
     scope.kind !== "unavailable" &&
     searchTarget &&

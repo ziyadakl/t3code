@@ -167,6 +167,17 @@ rules to connected environments that support shared settings. Offline environmen
 and older servers keep their previous values. Changing a rule does not reopen
 already settled threads.
 
+Threads that stay settled for seven days are archived. Any change to a settled thread, including
+unarchiving it, restarts that count. Pinned, snoozed, and working threads, and threads a scheduled
+task posts into, are never archived automatically. Change the number of days or turn this off with **Auto-archive settled threads** in
+the same settings.
+
+Archiving a thread also archives the helper threads its agent started, and unarchiving it brings
+back the ones archived with it; a helper you archived earlier stays archived. A helper that is still
+working is left alone and archived once it has been idle for a day. Helpers whose parent thread is archived or
+deleted are archived even with auto-archive off. If you unarchive one to read it, it is archived
+again a day later unless you unarchive its parent.
+
 ## Link a pull request
 
 The server finds the PR for each unsettled thread's saved branch, even when your
