@@ -84,10 +84,21 @@ describe("resolveAutoArchiveReason", () => {
     const orphan = candidate("orphan", {
       orphaned: true,
       settledSince: null,
-      updatedAt: at(-60 * 1_000),
+      updatedAt: at(-DAY_MS),
     });
     expect(resolve(orphan)).toBe("orphaned");
     expect(resolve(orphan, null)).toBe("orphaned");
+  });
+
+  it("keeps an orphaned child for a day after it last changed, such as an unarchive", () => {
+    const unarchived = candidate("unarchived-orphan", {
+      orphaned: true,
+      settledSince: null,
+      updatedAt: at(-60 * 1_000),
+    });
+    expect(resolve(unarchived)).toBeNull();
+    expect(resolve(unarchived, null)).toBeNull();
+    expect(resolve({ ...unarchived, updatedAt: at(-DAY_MS + 60 * 1_000) })).toBeNull();
   });
 });
 

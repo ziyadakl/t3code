@@ -16,13 +16,17 @@ import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
+/** How long an orphaned subagent child stays after its last change, such as an unarchive. */
+const ORPHAN_GRACE_MS = DAY_MS;
 
 /**
  * Why the sweep archives a thread, or null to keep it. A settled thread is
  * archived once it has been settled, and untouched, for `archiveSettledAfterDays`
  * (null turns that off). A subagent child whose parent is archived, deleted or
- * missing is always archived: it is the backlog of the parent cascade. Pinned,
- * snoozed, running and blocked threads are never archived by the sweep.
+ * missing is archived once it has been untouched for a day, whatever the
+ * setting: it is the backlog of the parent cascade, and the day lets a user
+ * unarchive one to read it. Pinned, snoozed, running and blocked threads are
+ * never archived by the sweep.
  */
 export function resolveAutoArchiveReason(
   thread: ProjectionStore.ProjectionAutoArchiveCandidate,
@@ -33,7 +37,9 @@ export function resolveAutoArchiveReason(
   if (thread.snoozedUntil !== null && DateTime.toEpochMillis(thread.snoozedUntil) > nowMs) {
     return null;
   }
-  if (thread.orphaned) return "orphaned";
+  if (thread.orphaned) {
+    return DateTime.toEpochMillis(thread.updatedAt) <= nowMs - ORPHAN_GRACE_MS ? "orphaned" : null;
+  }
   if (archiveSettledAfterDays === null || thread.settledSince === null) return null;
   // Any later change (an unarchive, a rename, a mode switch) restarts the
   // clock, so a thread the user just unarchived is not archived again at once.
