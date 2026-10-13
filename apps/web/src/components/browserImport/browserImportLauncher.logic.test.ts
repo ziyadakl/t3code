@@ -5,6 +5,7 @@ import {
   importFailureReason,
   importableBrowserSources,
   listSitesOutcome,
+  freshBannerChoice,
   oncePerSession,
   previewImportLanded,
   shouldShowCookieImportBanner,
@@ -166,5 +167,38 @@ describe("oncePerSession", () => {
 
     await expect(listed()).rejects.toThrow("bridge not ready");
     await expect(listed()).resolves.toEqual([source("chrome")]);
+  });
+
+  it("keeps listing until it finds something to keep, then stops", async () => {
+    let calls = 0;
+    const listed = oncePerSession(
+      async () => {
+        calls += 1;
+        return calls === 1 ? [] : [source("chrome")];
+      },
+      (sources) => sources.length > 0,
+    );
+
+    await expect(listed()).resolves.toEqual([]);
+    await expect(listed()).resolves.toEqual([source("chrome")]);
+    await listed();
+
+    expect(calls).toBe(2);
+  });
+});
+
+describe("freshBannerChoice", () => {
+  it("opens the wizard with the fresh listing of the chosen browser, not the cached one", () => {
+    const fresh = { ...source("chrome", "browserRunning"), profiles: [] };
+    expect(freshBannerChoice([source("safari"), fresh], "chrome")).toEqual({
+      kind: "open",
+      source: fresh,
+    });
+  });
+
+  it("refreshes the banner instead when the chosen browser is no longer importable", () => {
+    const fresh = [source("chrome", "notInstalled"), source("safari")];
+    expect(freshBannerChoice(fresh, "chrome")).toEqual({ kind: "refresh", sources: fresh });
+    expect(freshBannerChoice([], "chrome")).toEqual({ kind: "refresh", sources: [] });
   });
 });

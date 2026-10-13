@@ -9,6 +9,8 @@ import {
   useBrowserImportLauncher,
 } from "./BrowserImportLauncher";
 import {
+  freshBannerChoice,
+  importableBrowserSources,
   oncePerSession,
   previewImportLanded,
   shouldShowCookieImportBanner,
@@ -17,14 +19,19 @@ import { useCookieImportBannerDismissal } from "./cookieImportBannerDismissal";
 import { PreviewCookieImportBanner } from "./PreviewCookieImportBanner";
 
 /**
- * Whether the banner has anything to offer barely changes while the app runs,
- * so one listing serves every preview pane this session. Menus still list
- * fresh when they open, since the state of each browser does change.
+ * Once the banner has something to offer, that barely changes while the app
+ * runs, so one listing serves every preview pane this session. A listing with
+ * nothing to offer is not kept: a browser installed later shows the banner on
+ * the next pane. Menus, and the banner's own button, still list fresh, since
+ * the state of each browser does change.
  */
-const listSourcesForBanner = oncePerSession(async () => {
-  if (!previewBridge) return [];
-  return previewBridge.listBrowserImportSources();
-});
+const listSourcesForBanner = oncePerSession(
+  async () => {
+    if (!previewBridge) return [];
+    return previewBridge.listBrowserImportSources();
+  },
+  (sources) => importableBrowserSources(sources).length > 0,
+);
 
 /** What the ⋮ menu needs to offer "Import cookies from browser". */
 export interface PreviewCookieImportMenu {
@@ -106,6 +113,21 @@ export function usePreviewCookieImport(input: {
       },
     });
 
+  // The banner's sources may be from launch; open the wizard from a fresh
+  // listing so availability and profiles are as they are now.
+  const onChooseFromBanner = (chosen: BrowserImportSource) => {
+    if (!previewBridge) return;
+    void previewBridge.listBrowserImportSources().then(
+      (fresh) => {
+        const choice = freshBannerChoice(fresh, chosen.id);
+        if (choice.kind === "open") return onChoose(choice.source);
+        setBannerSources(choice.sources);
+        loadSources();
+      },
+      () => loadSources(),
+    );
+  };
+
   const showBanner = shouldShowCookieImportBanner({ dismissed, sources: bannerSources });
 
   return {
@@ -115,7 +137,7 @@ export function usePreviewCookieImport(input: {
         <PreviewCookieImportBanner
           sources={sources ?? bannerSources}
           loadSources={loadSources}
-          onChoose={onChoose}
+          onChoose={onChooseFromBanner}
           onDismiss={dismiss}
         />
       ) : null,

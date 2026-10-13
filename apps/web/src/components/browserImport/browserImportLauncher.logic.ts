@@ -78,17 +78,45 @@ export function singleImportableSource(
 }
 
 /**
- * Runs `load` at most once per app session and shares the answer, including
- * with callers that arrive while it is still running. A failure is not kept,
- * so the next caller tries again.
+ * The banner's one-click button opens the wizard from a fresh listing, never
+ * the one the banner was built from: a browser quit or a profile added since
+ * then must show as it is now. A browser no longer worth offering doesn't
+ * open at all; the banner takes the fresh listing instead.
  */
-export function oncePerSession<T>(load: () => Promise<T>): () => Promise<T> {
+export function freshBannerChoice(
+  fresh: ReadonlyArray<BrowserImportSource>,
+  sourceId: BrowserImportSource["id"],
+):
+  | { readonly kind: "open"; readonly source: BrowserImportSource }
+  | { readonly kind: "refresh"; readonly sources: ReadonlyArray<BrowserImportSource> } {
+  const source = importableBrowserSources(fresh).find((candidate) => candidate.id === sourceId);
+  return source ? { kind: "open", source } : { kind: "refresh", sources: fresh };
+}
+
+/**
+ * Runs `load` until it gives an answer worth keeping (any answer, by default),
+ * then shares that answer for the rest of the app session, including with
+ * callers that arrive while it is still running. A failure, or an answer
+ * `keep` rejects, is not kept, so the next caller tries again.
+ */
+export function oncePerSession<T>(
+  load: () => Promise<T>,
+  keep: (value: T) => boolean = () => true,
+): () => Promise<T> {
   let pending: Promise<T> | null = null;
   return () => {
-    pending ??= load().catch((cause: unknown) => {
-      pending = null;
-      throw cause;
-    });
-    return pending;
+    if (pending) return pending;
+    const attempt = load().then(
+      (value) => {
+        if (!keep(value) && pending === attempt) pending = null;
+        return value;
+      },
+      (cause: unknown) => {
+        if (pending === attempt) pending = null;
+        throw cause;
+      },
+    );
+    pending = attempt;
+    return attempt;
   };
 }
