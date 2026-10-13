@@ -68,6 +68,8 @@ interface Props {
   profileName: string | undefined;
   /** Absent where this machine's browsers cannot be imported into the tab's profile. */
   cookieImport?: PreviewCookieImportMenu | undefined;
+  /** Reopens the tab in the other browser it can run in. */
+  move?: { readonly label: string; readonly onMove: () => void };
 }
 
 const MenuTriggerButton = () => (
@@ -96,6 +98,7 @@ export function PreviewMoreMenu({
   nativePictureInPicture,
   profileName,
   cookieImport,
+  move,
 }: Props) {
   const zoomLabel = `${Math.round(zoomFactor * 100)}%`;
   const disabled = !enabled;
@@ -118,6 +121,7 @@ export function PreviewMoreMenu({
               : "Open separate preview window"}
           </MenuItem>
         ) : null}
+        {move ? <MenuItem onClick={move.onMove}>{move.label}</MenuItem> : null}
         <MenuItem onClick={onToggleDeviceToolbar} disabled={disabled}>
           {deviceToolbarVisible ? "Hide device toolbar" : "Show device toolbar"}
         </MenuItem>

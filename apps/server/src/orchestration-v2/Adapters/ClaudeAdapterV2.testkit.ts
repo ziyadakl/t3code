@@ -9,7 +9,7 @@ import {
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 import {
   ProviderReplayEntry,
@@ -18,6 +18,7 @@ import {
   type ProviderReplayTranscript,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
+import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -31,15 +32,15 @@ import {
   resolveClaudeSdkExecutablePath,
 } from "../../provider/Drivers/ClaudeExecutable.ts";
 import * as ClaudeAdapterV2 from "./ClaudeAdapterV2.ts";
-import * as IdAllocator from "../IdAllocator.ts";
-import { ProviderAdapterDriverCreateError } from "../ProviderAdapterDriver.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import { ProviderAdapterDriverCreateError } from "@t3tools/provider-core/server/adapterDriver";
 import * as ProviderAdapterRegistry from "../ProviderAdapterRegistry.ts";
-import { randomUuidV4 } from "../RandomUuid.ts";
+import { randomUuidV4 } from "@t3tools/provider-core/server/randomUuid";
 import {
   makeReplayServerConfig,
   type OrchestratorV2ProviderReplayHarness,
 } from "../testkit/ProviderReplayHarness.ts";
-import type { ProviderReplayGate } from "../testkit/ProviderReplayGate.testkit.ts";
+import type { ProviderReplayGate } from "@t3tools/provider-testing/replayGate";
 
 export const CLAUDE_AGENT_SDK_REPLAY_PROTOCOL = "claude-agent-sdk.query" as const;
 /**
@@ -250,6 +251,7 @@ interface ClaudeQueryRewindFilesFrame {
 type ClaudeFilesRewoundFrame = { readonly type: "files.rewound" } & RewindFilesResult;
 
 type ClaudeOutboundFrame =
+  | { readonly type: "query.stop_task"; readonly taskId: string }
   | ClaudeQueryOpenFrame
   | ClaudePromptOfferFrame
   | ClaudeQuerySetModelFrame
@@ -835,6 +837,10 @@ function makeReplayQueryRunner(
               type: "query.set_permission_mode",
               mode,
             });
+          }),
+        stopTask: (taskId) =>
+          replayEffect(() => {
+            assertNextOutboundFrame({ type: "query.stop_task", taskId });
           }),
         interrupt: replayEffect(() => {
           assertNextOutboundFrame({ type: "query.interrupt" });
@@ -1478,7 +1484,7 @@ async function recordMessagesUntilToolUse(input: {
 const resolveClaudeRecordingExecutablePath = Effect.fn("resolveClaudeRecordingExecutablePath")(
   function* (environment: NodeJS.ProcessEnv) {
     const resolveExecutable = yield* SpawnExecutableResolution;
-    const platform = yield* HostProcessPlatform;
+    const platform = yield* HostProcess.Platform;
     const resolved = resolveExecutable("claude", platform, environment);
     if (resolved === undefined) {
       return undefined;
@@ -1616,11 +1622,13 @@ async function recordClaudeStreamingQuery(input: {
   };
   try {
     for (const [index, prompt] of input.prompts.entries()) {
-      // Like the adapter, give each prompt a uuid Claude echoes on its turn.
+      // Like the adapter, give each prompt a fresh uuid Claude echoes on its turn.
       const message = ClaudeAdapterV2.makeClaudeUserMessage({
         text: prompt,
         uuid: await Effect.runPromise(
-          ClaudeAdapterV2.claudePromptUuid(`${input.sessionId}:prompt:${index + 1}`).pipe(
+          Crypto.Crypto.pipe(
+            Effect.flatMap((crypto) => crypto.randomUUIDv4),
+            Effect.filterOrFail(ClaudeAdapterV2.isClaudePromptUuid),
             Effect.provide(NodeServices.layer),
           ),
         ),
