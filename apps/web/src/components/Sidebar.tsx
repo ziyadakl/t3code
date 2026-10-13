@@ -191,6 +191,10 @@ import {
   applySidebarThreadDrop,
   filterSidebarV2VisibleThreads,
   buildBulkTitleRegenerationContextMenuItem,
+  archiveThreadsAndReport,
+  buildBulkArchiveContextMenuItem,
+  refreshBulkArchiveTargets,
+  resolveBulkArchiveCompletion,
   buildBulkUnpinContextMenuItem,
   deleteSelectedThreadEntries,
   filterSidebarProjectScopeItems,
@@ -4474,6 +4478,9 @@ export default function Sidebar() {
       const unpinMenuItem = buildBulkUnpinContextMenuItem({
         pinnedCount: pinnedSelectedThreads.length,
       });
+      const { item: archiveMenuItem, targets: archivableThreads } = buildBulkArchiveContextMenuItem(
+        { threads: selectedThreads },
+      );
       const snoozePresets = resolveSnoozePresets(new Date(), timestampFormat);
       const clicked = await settlePromise(() =>
         api.contextMenu.show(
@@ -4520,6 +4527,11 @@ export default function Sidebar() {
               : []),
             { id: "mark-unread", label: `Mark unread (${count})` },
             {
+              ...archiveMenuItem,
+              separatorBefore: true,
+              disabled: archiveMenuItem.disabled || !canOperateThreads(archivableThreads),
+            },
+            {
               id: "delete",
               label: `Delete (${count})`,
               destructive: true,
@@ -4530,19 +4542,21 @@ export default function Sidebar() {
         ),
       );
       if (clicked._tag === "Failure" || clicked.value === null) return;
-      const actionTargets =
-        clicked.value === "unpin"
-          ? pinnedSelectedThreads
-          : clicked.value === "regenerate-title"
-            ? regeneratableTitleThreads
-            : clicked.value === "settle"
-              ? settlingThreads.flatMap((thread) => {
-                  const current = threadByKeyRef.current.get(
-                    scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-                  );
-                  return current && current.settledOverride !== "settled" ? [current] : [];
-                })
-              : selectedThreads;
+      const currentThread = (thread: (typeof selectedThreads)[number]) =>
+        threadByKeyRef.current.get(
+          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+        );
+      const targetsByMenuId: Partial<Record<string, readonly (typeof selectedThreads)[number][]>> =
+        {
+          unpin: pinnedSelectedThreads,
+          "regenerate-title": regeneratableTitleThreads,
+          archive: archivableThreads,
+          settle: settlingThreads.flatMap((thread) => {
+            const current = currentThread(thread);
+            return current && current.settledOverride !== "settled" ? [current] : [];
+          }),
+        };
+      const actionTargets = targetsByMenuId[clicked.value] ?? selectedThreads;
       if (clicked.value === "settle" && actionTargets.length === 0) return;
       if (clicked.value !== "mark-unread" && !checkThreadOperations(actionTargets)) return;
       if (clicked.value?.startsWith("snooze:")) {
@@ -4633,6 +4647,41 @@ export default function Sidebar() {
         clearSelection();
         return;
       }
+      if (clicked.value === "archive") {
+        if (confirmThreadArchive) {
+          const confirmed = await settlePromise(() =>
+            api.dialogs.confirm(
+              `Archive ${archivableThreads.length} thread${archivableThreads.length === 1 ? "" : "s"}?`,
+            ),
+          );
+          if (confirmed._tag === "Failure" || !confirmed.value) return;
+        }
+        const stillArchivable = refreshBulkArchiveTargets(archivableThreads, currentThread);
+        if (!checkThreadOperations(stillArchivable)) return;
+        await archiveThreadsAndReport({
+          entries: stillArchivable.map((thread) => {
+            const threadRef = scopeThreadRef(thread.environmentId, thread.id);
+            return { threadKey: scopedThreadKey(threadRef), threadRef };
+          }),
+          archive: ({ threadRef }, onArchived) => archiveThread(threadRef, { onArchived }),
+          reportError: (title, description) =>
+            toastManager.add(stackedThreadToast({ type: "error", title, description })),
+          removeFromSelection,
+          onAllArchived: (archivedThreadKeys) => {
+            const completion = resolveBulkArchiveCompletion({
+              archivedThreadKeys,
+              skippedCount: archivableThreads.length - stillArchivable.length,
+            });
+            if (completion.selection === "clear") {
+              clearSelection();
+              return;
+            }
+            removeFromSelection(archivedThreadKeys);
+            toastManager.add(stackedThreadToast({ type: "warning", ...completion.notice }));
+          },
+        });
+        return;
+      }
       if (clicked.value !== "delete") return;
       if (confirmThreadDelete) {
         const confirmed = await settlePromise(() =>
@@ -4683,8 +4732,10 @@ export default function Sidebar() {
       );
     },
     [
+      archiveThread,
       attemptUnpin,
       clearSelection,
+      confirmThreadArchive,
       confirmThreadDelete,
       deleteThread,
       markThreadUnread,

@@ -183,7 +183,7 @@ import {
 } from "../threadSelectionStore";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import {
-  archiveSelectedThreadEntries,
+  archiveThreadsAndReport,
   buildMultiSelectThreadContextMenuItems,
   deleteSelectedThreadEntries,
   getSidebarThreadIdsToPrewarm,
@@ -2003,36 +2003,14 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           return;
         }
 
-        const archiveOutcome = await archiveSelectedThreadEntries({
+        await archiveThreadsAndReport({
           entries: selectedThreadEntries,
           archive: ({ threadRef }, onArchived) => archiveThread(threadRef, { onArchived }),
+          reportError: (title, description) =>
+            toastManager.add(stackedThreadToast({ type: "error", title, description })),
+          removeFromSelection,
+          onAllArchived: () => removeFromSelection(threadKeys),
         });
-        for (const failure of archiveOutcome.followupFailures) {
-          if (isAtomCommandInterrupted(failure)) continue;
-          const error = squashAtomCommandFailure(failure);
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Thread archived, but navigation failed",
-              description: error instanceof Error ? error.message : "An error occurred.",
-            }),
-          );
-        }
-        if (archiveOutcome.mutationFailure) {
-          removeFromSelection(archiveOutcome.archivedThreadKeys);
-          if (!isAtomCommandInterrupted(archiveOutcome.mutationFailure)) {
-            const error = squashAtomCommandFailure(archiveOutcome.mutationFailure);
-            toastManager.add(
-              stackedThreadToast({
-                type: "error",
-                title: "Failed to archive threads",
-                description: error instanceof Error ? error.message : "An error occurred.",
-              }),
-            );
-          }
-          return;
-        }
-        removeFromSelection(threadKeys);
         return;
       }
 
