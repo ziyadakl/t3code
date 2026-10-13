@@ -50,6 +50,8 @@ import { openPreviewSession } from "./openPreviewSession";
 import { PreviewChromeRow } from "./PreviewChromeRow";
 import { PreviewEmptyState } from "./PreviewEmptyState";
 import { PreviewMoreMenu, type PreviewMoreMenuActions } from "./PreviewMoreMenu";
+import { usePreviewCookieImport } from "~/components/browserImport/usePreviewCookieImport";
+import { previewTabTakesCookieImport } from "~/components/browserImport/browserImportLauncher.logic";
 import {
   commitBrowserViewportChange,
   subscribeBrowserViewportChange,
@@ -90,13 +92,6 @@ interface Props {
     annotation: PreviewAnnotationPayload,
     image: ComposerImageAttachment | null,
   ) => void;
-}
-
-function previewProfileName(
-  profiles: ReadonlyArray<{ readonly id: string; readonly name: string }>,
-  profileId: string,
-): string {
-  return profiles.find((profile) => profile.id === profileId)?.name ?? "Removed profile";
 }
 
 const localApi = typeof window === "undefined" ? null : ensureLocalApi();
@@ -205,7 +200,8 @@ export function PreviewView({
   // Passing the snapshot's raw `undefined` through would reach the IPC layer
   // as "every profile".
   const activeProfileId = snapshot?.profileId ?? DEFAULT_BROWSER_PROFILE_ID;
-  const activeProfileName = previewProfileName(browserDefaults.profiles, activeProfileId);
+  const activeProfile = browserDefaults.profiles.find((profile) => profile.id === activeProfileId);
+  const activeProfileName = activeProfile?.name ?? "Removed profile";
   const panelRect = useBrowserSurfaceStore((state) =>
     runtimeTabId ? (state.byTabId[runtimeTabId]?.rect ?? null) : null,
   );
@@ -287,6 +283,20 @@ export function PreviewView({
     if (isServerTab) serverSurfaceRef.current?.reload();
     else if (previewBridge && runtimeTabId) void previewBridge.refresh(runtimeTabId);
   }, [isServerTab, runtimeTabId]);
+
+  // Imports write into this machine's partition for the tab's profile, which
+  // this desktop's own server tabs read too; a streamed tab never does.
+  const cookieImport = usePreviewCookieImport({
+    available: previewTabTakesCookieImport({
+      runtime: snapshot?.runtime,
+      rendersNatively: nativeServerTab,
+    }),
+    environmentId: threadRef.environmentId,
+    profileId: activeProfileId,
+    profilePersistent: activeProfile?.kind === "persistent",
+    currentUrl: url || undefined,
+    reload: handleRefresh,
+  });
 
   /** Appearance and zoom of a server tab, through the server for every client. */
   const adjustServerTab = useCallback(
@@ -912,6 +922,7 @@ export function PreviewView({
               }
               actions={moreMenuActions}
               profileName={activeProfileName}
+              cookieImport={cookieImport.menu}
               zoomFactor={
                 serverOwnsRendering ? serverZoomFactor : (desktopOverlay?.zoomFactor ?? 1)
               }
@@ -927,6 +938,8 @@ export function PreviewView({
           ) : null
         }
       />
+
+      {cookieImport.banner}
 
       <div ref={serverBodyRef} className="relative min-h-0 flex-1 overflow-hidden">
         {runtimeTabId && snapshot && isServerTab ? (
@@ -1016,6 +1029,7 @@ export function PreviewView({
           </div>
         ) : null}
       </div>
+      {cookieImport.wizard}
     </div>
   );
 }

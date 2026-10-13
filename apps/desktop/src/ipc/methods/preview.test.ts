@@ -86,6 +86,7 @@ describe("preview IPC methods", () => {
       [];
     const browserImport = BrowserImport.BrowserImport.of({
       listSources: Effect.succeed([]),
+      listSites: () => Effect.die("listSites must not be reached"),
       importCookies: (input) =>
         Effect.sync(() => {
           received.push(input);
@@ -98,6 +99,7 @@ describe("preview IPC methods", () => {
         sourceId: "helium",
         sourceProfileDirectory: "Default",
         targetProfileId,
+        domains: [],
       });
 
     return Effect.gen(function* () {
@@ -110,6 +112,16 @@ describe("preview IPC methods", () => {
       );
       expect(received[0]?.namespace).toBe("profile");
       expect(received[1]?.namespace).toBeUndefined();
+
+      // The chosen sites ride along untouched, so main imports only those.
+      yield* PreviewIpc.importBrowserCookies.handler({
+        environmentId: "a",
+        sourceId: "helium",
+        sourceProfileDirectory: "Default",
+        targetProfileId: "b",
+        domains: ["github.com"],
+      });
+      expect(received[2]?.input.domains).toEqual(["github.com"]);
     }).pipe(Effect.provideService(BrowserImport.BrowserImport, browserImport));
   });
 

@@ -9,8 +9,11 @@ import * as Path from "effect/Path";
 import * as Scope from "effect/Scope";
 import * as NodeSqlite from "node:sqlite";
 
-import { readFirefoxCookies } from "./FirefoxCookies.ts";
+import { readFirefoxCookieMetadata, readFirefoxCookies } from "./FirefoxCookies.ts";
 import { parseFirefoxProfiles } from "./Sources.ts";
+
+/** Reads every cookie: these tests are about decoding, not site choice. */
+const everyHost = () => true;
 
 const parsePosixFirefoxProfiles = (ini: string, root = "/home/user/.mozilla/firefox") =>
   Effect.gen(function* () {
@@ -37,6 +40,8 @@ const writeFirefoxCookieDatabase = Effect.fnUntraced(function* (
     sameSite: number | null;
     rawSameSite?: number;
     originAttributes?: string;
+    /** Microseconds since the UNIX epoch. */
+    lastAccessed?: number;
   }>,
   // Firefox stamps `PRAGMA user_version`; schema 16+ stores `expiry` in
   // milliseconds, earlier ones in seconds.
@@ -54,14 +59,15 @@ const writeFirefoxCookieDatabase = Effect.fnUntraced(function* (
        id integer primary key, host text, name text, value text, path text,
        expiry integer, isSecure integer, isHttpOnly integer, sameSite integer,
        ${hasRawSameSite ? "rawSameSite integer," : ""}
+       lastAccessed integer not null default 0,
        originAttributes text not null default ''
      )`,
   );
   const insert = database.prepare(
     `insert into moz_cookies
        (host, name, value, path, expiry, isSecure, isHttpOnly, sameSite,
-        ${hasRawSameSite ? "rawSameSite," : ""} originAttributes)
-     values (?, ?, ?, ?, ?, ?, ?, ?, ${hasRawSameSite ? "?," : ""} ?)`,
+        ${hasRawSameSite ? "rawSameSite," : ""} lastAccessed, originAttributes)
+     values (?, ?, ?, ?, ?, ?, ?, ?, ${hasRawSameSite ? "?," : ""} ?, ?)`,
   );
   for (const row of rows) {
     insert.run(
@@ -74,6 +80,7 @@ const writeFirefoxCookieDatabase = Effect.fnUntraced(function* (
       row.isHttpOnly,
       row.sameSite,
       ...(hasRawSameSite ? [row.rawSameSite ?? row.sameSite] : []),
+      row.lastAccessed ?? 0,
       row.originAttributes ?? "",
     );
   }
@@ -100,11 +107,15 @@ describe("readFirefoxCookies", () => {
           isHttpOnly: 0,
           sameSite: 0,
         };
-        const modern = yield* readFirefoxCookies(yield* writeFirefoxCookieDatabase([row], 16));
+        const modern = yield* readFirefoxCookies(
+          yield* writeFirefoxCookieDatabase([row], 16),
+          everyHost,
+        );
         expect(modern[0]?.expirationDate).toBe(1_800_000_000);
 
         const legacy = yield* readFirefoxCookies(
           yield* writeFirefoxCookieDatabase([{ ...row, expiry: 1_800_000_000 }], 15),
+          everyHost,
         );
         expect(legacy[0]?.expirationDate).toBe(1_800_000_000);
       }),
@@ -138,7 +149,7 @@ describe("readFirefoxCookies", () => {
           },
         ]);
 
-        const cookies = yield* readFirefoxCookies(file);
+        const cookies = yield* readFirefoxCookies(file, everyHost);
 
         expect(cookies).toEqual([
           {
@@ -193,6 +204,7 @@ describe("readFirefoxCookies", () => {
             { ...row, name: "unset", sameSite: 256 },
             { ...row, name: "none", sameSite: 0 },
           ]),
+          everyHost,
         );
         expect(cookies.map(({ name, sameSite }) => ({ name, sameSite }))).toEqual([
           { name: "unset", sameSite: "unspecified" },
@@ -224,6 +236,7 @@ describe("readFirefoxCookies", () => {
             ],
             9,
           ),
+          everyHost,
         );
         expect(cookies.map(({ name, sameSite }) => ({ name, sameSite }))).toEqual([
           { name: "legacy", sameSite: "unspecified" },
@@ -258,6 +271,7 @@ describe("readFirefoxCookies", () => {
             ],
             14,
           ),
+          everyHost,
         );
         expect(cookies.map(({ name, sameSite }) => ({ name, sameSite }))).toEqual([
           { name: "defaulted", sameSite: "unspecified" },
@@ -309,7 +323,7 @@ describe("readFirefoxCookies", () => {
           },
         ]);
 
-        const cookies = yield* readFirefoxCookies(file);
+        const cookies = yield* readFirefoxCookies(file, everyHost);
 
         expect(cookies.map((cookie) => cookie.value)).toEqual(["default-container"]);
       }),
@@ -334,12 +348,76 @@ describe("readFirefoxCookies", () => {
         ]);
         const before = yield* fileSystem.stat(file);
 
-        yield* readFirefoxCookies(file);
+        yield* readFirefoxCookies(file, everyHost);
 
         // The browser's own file is snapshotted, never opened for writing.
         const after = yield* fileSystem.stat(file);
         expect(after.mtime).toEqual(before.mtime);
         expect(after.size).toBe(before.size);
+      }),
+    ),
+  );
+});
+
+describe("readFirefoxCookieMetadata", () => {
+  const base = { name: "c", value: "v", path: "/", sameSite: 0 };
+
+  it.effect("reads hosts, flags and timestamps of the default container", () =>
+    run(
+      Effect.gen(function* () {
+        const file = yield* writeFirefoxCookieDatabase(
+          [
+            {
+              ...base,
+              host: ".github.com",
+              expiry: 1_900_000_000_000,
+              isSecure: 1,
+              isHttpOnly: 1,
+              lastAccessed: 1_750_000_000_123_456,
+            },
+            { ...base, host: "tab.example", expiry: 0, isSecure: 0, isHttpOnly: 0 },
+            {
+              ...base,
+              host: "container.example",
+              expiry: 0,
+              isSecure: 0,
+              isHttpOnly: 0,
+              originAttributes: "^userContextId=2",
+            },
+          ],
+          16,
+        );
+
+        const metadata = yield* readFirefoxCookieMetadata(file);
+        expect(metadata).toEqual([
+          {
+            host: ".github.com",
+            secure: true,
+            httpOnly: true,
+            expiresAt: 1_900_000_000,
+            lastAccessedAt: 1_750_000_000_123,
+          },
+          {
+            host: "tab.example",
+            secure: false,
+            httpOnly: false,
+            expiresAt: undefined,
+            lastAccessedAt: undefined,
+          },
+        ]);
+      }),
+    ),
+  );
+
+  it.effect("reads only the chosen hosts when importing", () =>
+    run(
+      Effect.gen(function* () {
+        const file = yield* writeFirefoxCookieDatabase([
+          { ...base, host: ".github.com", expiry: 0, isSecure: 1, isHttpOnly: 1 },
+          { ...base, host: "other.example", expiry: 0, isSecure: 0, isHttpOnly: 0 },
+        ]);
+        const cookies = yield* readFirefoxCookies(file, (host) => host === ".github.com");
+        expect(cookies.map((cookie) => cookie.domain)).toEqual([".github.com"]);
       }),
     ),
   );

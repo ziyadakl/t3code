@@ -9,11 +9,15 @@ import * as PlatformError from "effect/PlatformError";
 import {
   isPermissionDenied,
   parseBinaryCookies,
+  readSafariCookieMetadata,
   readSafariCookies,
   safariAccessDenied,
   safariAccessGranted,
   SafariCookieReadError,
 } from "./SafariCookies.ts";
+
+/** Reads every cookie: these tests are about decoding, not site choice. */
+const everyHost = () => true;
 
 const APPLE_EPOCH_OFFSET_SECONDS = 978_307_200;
 
@@ -104,7 +108,7 @@ describe("parseBinaryCookies", () => {
       },
     ]);
 
-    expect(parseBinaryCookies(file)).toEqual([
+    expect(parseBinaryCookies(file, everyHost)).toEqual([
       {
         url: "https://apple.com/",
         name: "session",
@@ -139,7 +143,7 @@ describe("parseBinaryCookies", () => {
       { domain: "example.test", name: "__Host-id", path: "/", value: "v", flags: 0x1, expiry: 0 },
     ]);
 
-    expect(parseBinaryCookies(file)[0]).toMatchObject({
+    expect(parseBinaryCookies(file, everyHost)[0]).toMatchObject({
       url: "https://example.test/",
       name: "__Host-id",
       domain: undefined,
@@ -151,7 +155,7 @@ describe("parseBinaryCookies", () => {
       { domain: "::1", name: "local", path: "/", value: "v", flags: 0, expiry: 0 },
     ]);
 
-    expect(parseBinaryCookies(file)[0]).toMatchObject({
+    expect(parseBinaryCookies(file, everyHost)[0]).toMatchObject({
       url: "http://[::1]/",
       domain: undefined,
     });
@@ -175,7 +179,7 @@ describe("parseBinaryCookies", () => {
     header.writeUInt32BE(firstPage.length, 8);
     header.writeUInt32BE(secondPage.length, 12);
 
-    const parsed = parseBinaryCookies(Buffer.concat([header, firstPage, secondPage]));
+    const parsed = parseBinaryCookies(Buffer.concat([header, firstPage, secondPage]), everyHost);
 
     expect(parsed.map((cookie) => cookie.name)).toEqual(["one", "two"]);
   });
@@ -199,9 +203,9 @@ describe("parseBinaryCookies", () => {
     header.writeUInt32BE(firstPage.length + secondPage.length + 32, 8);
     header.writeUInt32BE(secondPage.length, 12);
 
-    expect(() => parseBinaryCookies(Buffer.concat([header, firstPage, secondPage]))).toThrow(
-      SafariCookieReadError,
-    );
+    expect(() =>
+      parseBinaryCookies(Buffer.concat([header, firstPage, secondPage]), everyHost),
+    ).toThrow(SafariCookieReadError);
   });
 
   it("rejects a record whose declared size runs past its page", () => {
@@ -215,7 +219,7 @@ describe("parseBinaryCookies", () => {
     const corrupt = Buffer.from(valid);
     corrupt.writeUInt32LE(0xffff, recordStart);
 
-    expect(() => parseBinaryCookies(corrupt)).toThrow(SafariCookieReadError);
+    expect(() => parseBinaryCookies(corrupt, everyHost)).toThrow(SafariCookieReadError);
   });
 
   it("rejects records truncated inside the 56-byte header", () => {
@@ -228,7 +232,7 @@ describe("parseBinaryCookies", () => {
     for (let size = 48; size < 56; size += 1) {
       const corrupt = Buffer.from(valid);
       corrupt.writeUInt32LE(size, recordStart);
-      expect(() => parseBinaryCookies(corrupt), `record size ${size}`).toThrow(
+      expect(() => parseBinaryCookies(corrupt, everyHost), `record size ${size}`).toThrow(
         SafariCookieReadError,
       );
     }
@@ -246,15 +250,15 @@ describe("parseBinaryCookies", () => {
     // table bytes parse as a fabricated record.
     const intoTable = Buffer.from(valid);
     intoTable.writeUInt32LE(4, pageStart + 12);
-    expect(() => parseBinaryCookies(intoTable)).toThrow(SafariCookieReadError);
+    expect(() => parseBinaryCookies(intoTable, everyHost)).toThrow(SafariCookieReadError);
 
     // Pointing it back at the first record makes the same bytes count twice.
     const overlapping = Buffer.from(valid);
     overlapping.writeUInt32LE(firstRecord, pageStart + 12);
-    expect(() => parseBinaryCookies(overlapping)).toThrow(SafariCookieReadError);
+    expect(() => parseBinaryCookies(overlapping, everyHost)).toThrow(SafariCookieReadError);
 
     // And a well-formed two-record page still parses.
-    expect(parseBinaryCookies(valid)).toHaveLength(2);
+    expect(parseBinaryCookies(valid, everyHost)).toHaveLength(2);
   });
 
   it("rejects string offsets that point into the record header", () => {
@@ -267,7 +271,7 @@ describe("parseBinaryCookies", () => {
     for (const offsetField of [16, 20, 24, 28]) {
       const corrupt = Buffer.from(valid);
       corrupt.writeUInt32LE(55, recordStart + offsetField);
-      expect(() => parseBinaryCookies(corrupt), `offset field ${offsetField}`).toThrow(
+      expect(() => parseBinaryCookies(corrupt, everyHost), `offset field ${offsetField}`).toThrow(
         SafariCookieReadError,
       );
     }
@@ -282,8 +286,10 @@ describe("parseBinaryCookies", () => {
     const plistLength = Buffer.alloc(4);
     plistLength.writeUInt32BE(plist.length, 0);
 
-    expect(parseBinaryCookies(Buffer.concat([file, checksum]))).toHaveLength(1);
-    expect(parseBinaryCookies(Buffer.concat([file, checksum, plistLength, plist]))).toHaveLength(1);
+    expect(parseBinaryCookies(Buffer.concat([file, checksum]), everyHost)).toHaveLength(1);
+    expect(
+      parseBinaryCookies(Buffer.concat([file, checksum, plistLength, plist]), everyHost),
+    ).toHaveLength(1);
   });
 
   it("rejects a jar whose page table stops short of its contents", () => {
@@ -297,19 +303,22 @@ describe("parseBinaryCookies", () => {
       { domain: "b.test", name: "d", path: "/", value: "w", flags: 0, expiry: 0 },
     ]).subarray(12);
 
-    expect(() => parseBinaryCookies(Buffer.concat([first, extraPage]))).toThrow(
+    expect(() => parseBinaryCookies(Buffer.concat([first, extraPage]), everyHost)).toThrow(
       SafariCookieReadError,
     );
     // A trailer that claims a property list it doesn't contain is refused too.
     const badLength = Buffer.alloc(4);
     badLength.writeUInt32BE(99, 0);
     expect(() =>
-      parseBinaryCookies(Buffer.concat([first, Buffer.alloc(8), badLength, Buffer.from("x")])),
+      parseBinaryCookies(
+        Buffer.concat([first, Buffer.alloc(8), badLength, Buffer.from("x")]),
+        everyHost,
+      ),
     ).toThrow(SafariCookieReadError);
   });
 
   it("rejects a file that is not binarycookies", () => {
-    expect(() => parseBinaryCookies(Buffer.from("not a cookie jar"))).toThrow(
+    expect(() => parseBinaryCookies(Buffer.from("not a cookie jar"), everyHost)).toThrow(
       SafariCookieReadError,
     );
   });
@@ -323,7 +332,7 @@ describe("readSafariCookies", () => {
       const jar = `${directory}/Cookies.binarycookies`;
       yield* fileSystem.writeFileString(jar, "not a cookie jar");
 
-      const error = yield* readSafariCookies(jar).pipe(Effect.flip);
+      const error = yield* readSafariCookies(jar, everyHost).pipe(Effect.flip);
 
       assert.equal(error.reason, "readFailed");
       assert.equal(error.cookieDatabasePath, jar);
@@ -346,7 +355,7 @@ describe("readSafariCookies", () => {
         cause: Object.assign(new Error("operation not permitted"), { code: "EPERM" }),
       });
 
-      const error = yield* readSafariCookies("/protected/Cookies.binarycookies").pipe(
+      const error = yield* readSafariCookies("/protected/Cookies.binarycookies", everyHost).pipe(
         Effect.flip,
         Effect.provide(FileSystem.layerNoop({ readFile: () => Effect.fail(denied) })),
       );
@@ -365,7 +374,7 @@ describe("readSafariCookies", () => {
       // it, so it must not be routed to that grant.
       yield* fileSystem.chmod(jar, 0o000);
 
-      const error = yield* readSafariCookies(jar).pipe(Effect.flip);
+      const error = yield* readSafariCookies(jar, everyHost).pipe(Effect.flip);
 
       assert.equal(error.reason, "readFailed");
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
@@ -376,9 +385,57 @@ describe("readSafariCookies", () => {
       const fileSystem = yield* FileSystem.FileSystem;
       const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3code-safari-" });
 
-      const error = yield* readSafariCookies(`${directory}/absent.binarycookies`).pipe(Effect.flip);
+      const error = yield* readSafariCookies(`${directory}/absent.binarycookies`, everyHost).pipe(
+        Effect.flip,
+      );
 
       assert.equal(error.reason, "readFailed");
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+});
+
+describe("Safari site listing", () => {
+  const writeJar = Effect.fnUntraced(function* (cookies: ReadonlyArray<FixtureCookie>) {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3code-safari-" });
+    const jar = `${directory}/Cookies.binarycookies`;
+    yield* fileSystem.writeFile(jar, encodeBinaryCookies(cookies));
+    return jar;
+  });
+  const fixture = [
+    {
+      domain: ".github.com",
+      name: "s",
+      path: "/",
+      value: "v",
+      flags: 0x1 | 0x4,
+      expiry: 800_000_000,
+    },
+    { domain: "tab.example", name: "t", path: "/", value: "v", flags: 0, expiry: 0 },
+  ];
+
+  it.effect("reads hosts, flags and expiry, with no last access to report", () =>
+    Effect.gen(function* () {
+      const metadata = yield* readSafariCookieMetadata(yield* writeJar(fixture));
+      expect(metadata).toEqual([
+        {
+          host: ".github.com",
+          secure: true,
+          httpOnly: true,
+          expiresAt: 800_000_000 + APPLE_EPOCH_OFFSET_SECONDS,
+        },
+        { host: "tab.example", secure: false, httpOnly: false, expiresAt: undefined },
+      ]);
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.effect("imports only the chosen hosts", () =>
+    Effect.gen(function* () {
+      const cookies = yield* readSafariCookies(
+        yield* writeJar(fixture),
+        (host) => host === "tab.example",
+      );
+      expect(cookies.map((cookie) => cookie.name)).toEqual(["t"]);
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 });

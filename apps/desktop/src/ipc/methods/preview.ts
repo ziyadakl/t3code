@@ -11,6 +11,8 @@ import {
   DesktopPreviewSetColorSchemeInputSchema,
   DesktopPreviewSetZoomFactorInputSchema,
   BrowserImportResult,
+  BrowserImportSite,
+  BrowserImportSitesInput,
   BrowserImportSource,
   DesktopPreviewClearDataInputSchema,
   DesktopPreviewImportCookiesInputSchema,
@@ -318,6 +320,16 @@ export const listBrowserImportSources = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.preview.listBrowserImportSources")(function* () {
     const browserImport = yield* BrowserImport.BrowserImport;
     return yield* browserImport.listSources;
+  }),
+});
+
+export const listBrowserImportSites = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_IMPORT_SITES_CHANNEL,
+  payload: BrowserImportSitesInput,
+  result: Schema.Array(BrowserImportSite),
+  handler: Effect.fn("desktop.ipc.preview.listBrowserImportSites")(function* (input) {
+    const browserImport = yield* BrowserImport.BrowserImport;
+    return yield* browserImport.listSites(input);
   }),
 });
 

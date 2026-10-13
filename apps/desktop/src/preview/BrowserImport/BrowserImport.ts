@@ -7,10 +7,13 @@
 import type {
   BrowserImportInput,
   BrowserImportResult,
+  BrowserImportSite,
+  BrowserImportSitesInput,
   BrowserImportSource,
   BrowserImportUnavailableReason,
 } from "@t3tools/contracts";
 import { BrowserImportFailureReason } from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import type { Session } from "electron";
 import * as Effect from "effect/Effect";
@@ -24,10 +27,24 @@ import { ChildProcessSpawner } from "effect/process";
 import { HostProcessExecutablePath, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 import * as BrowserSession from "../BrowserSession.ts";
-import { ChromiumCookieReadError, readChromiumCookies } from "./ChromiumCookies.ts";
-import type { CookieReadResult } from "./CookieDatabase.ts";
-import { FirefoxCookieReadError, readFirefoxCookies } from "./FirefoxCookies.ts";
-import { readSafariCookies, safariAccessDenied, SafariCookieReadError } from "./SafariCookies.ts";
+import {
+  ChromiumCookieReadError,
+  readChromiumCookieMetadata,
+  readChromiumCookies,
+} from "./ChromiumCookies.ts";
+import type { CookieMetadata, CookieReadResult, ImportedCookie } from "./CookieDatabase.ts";
+import {
+  FirefoxCookieReadError,
+  readFirefoxCookieMetadata,
+  readFirefoxCookies,
+} from "./FirefoxCookies.ts";
+import {
+  readSafariCookieMetadata,
+  readSafariCookies,
+  safariAccessDenied,
+  SafariCookieReadError,
+} from "./SafariCookies.ts";
+import { groupSites, siteDomain } from "./Sites.ts";
 import {
   BROWSER_IMPORT_SOURCES,
   resolveCookieDatabase,
@@ -35,6 +52,7 @@ import {
   isSourceRunning,
   listSourceProfiles,
   sourcePathContext,
+  type BrowserImportEngine,
   type BrowserImportPathContext,
   type BrowserImportSourceDefinition,
 } from "./Sources.ts";
@@ -72,6 +90,13 @@ export class BrowserImport extends Context.Service<
   BrowserImport,
   {
     readonly listSources: Effect.Effect<ReadonlyArray<BrowserImportSource>>;
+    /**
+     * The sites a source profile holds cookies for, read from plaintext
+     * metadata only: it never asks the keychain or decrypts a value.
+     */
+    readonly listSites: (
+      input: BrowserImportSitesInput,
+    ) => Effect.Effect<ReadonlyArray<BrowserImportSite>, BrowserImportFailedError>;
     readonly importCookies: (input: {
       readonly input: BrowserImportInput;
       /** Partition scope of the target profile, derived by the caller in main. */
@@ -103,6 +128,23 @@ const unavailableReason = Effect.fn("BrowserImport.unavailableReason")(function*
     if (jar !== undefined && (yield* safariAccessDenied(jar))) return "needsFullDiskAccess";
   }
   return undefined;
+});
+
+type CookieStoreReadError =
+  | ChromiumCookieReadError
+  | FirefoxCookieReadError
+  | SafariCookieReadError;
+type CookieStoreServices =
+  | FileSystem.FileSystem
+  | Path.Path
+  | Scope.Scope
+  | ChildProcessSpawner.ChildProcessSpawner;
+
+/** A plaintext engine's cookies, in the shape the Chromium read reports. */
+const plaintextRead = (cookies: ReadonlyArray<ImportedCookie>): CookieReadResult => ({
+  cookies,
+  undecryptable: 0,
+  undecryptableHosts: [],
 });
 
 /** The host a constructed cookie URL points at, for naming what was skipped. */
@@ -194,20 +236,17 @@ export const make = Effect.gen(function* BrowserImportMake() {
     }),
   ).pipe(Effect.provide(platformServices));
 
-  const importCookies = Effect.fn("BrowserImport.importCookies")(function* (input: {
-    readonly input: BrowserImportInput;
-    readonly scope: string;
-    readonly persistent: boolean;
-    readonly namespace?: BrowserSession.BrowserSessionPartitionNamespace;
-  }) {
-    const definition = BROWSER_IMPORT_SOURCES.find(
-      (candidate) => candidate.id === input.input.sourceId,
-    );
+  /**
+   * The checks both listing and importing make before touching a cookie
+   * store: the source exists, is usable right now, and reported this profile.
+   */
+  const resolveSourceDatabase = Effect.fn("BrowserImport.resolveSourceDatabase")(function* (
+    sourceId: string,
+    sourceProfileDirectory: string,
+  ) {
+    const definition = BROWSER_IMPORT_SOURCES.find((candidate) => candidate.id === sourceId);
     if (!definition) {
-      return yield* new BrowserImportFailedError({
-        sourceId: input.input.sourceId,
-        reason: "unknownSource",
-      });
+      return yield* new BrowserImportFailedError({ sourceId, reason: "unknownSource" });
     }
 
     const blocked = yield* unavailableReason(definition, pathContext).pipe(
@@ -215,16 +254,6 @@ export const make = Effect.gen(function* BrowserImportMake() {
     );
     if (blocked !== undefined) {
       return yield* new BrowserImportFailedError({ sourceId: definition.id, reason: blocked });
-    }
-
-    if (platform === "darwin" && definition.engine === "chromium") {
-      // macOS attributes the Keychain prompt and the resulting ACL grant to the
-      // executable that asks, so record which one that was — in a packaged build
-      // it is the signed app, in dev whatever binary hosts the main process.
-      yield* Effect.logInfo("Reading browser cookie key from the keychain", {
-        sourceId: definition.id,
-        executablePath,
-      });
     }
 
     // The profile directory arrives over IPC, so it is only honoured when the
@@ -235,7 +264,7 @@ export const make = Effect.gen(function* BrowserImportMake() {
       Effect.provide(platformServices),
     );
     const requestedProfile = sourceProfiles.find(
-      (profile) => profile.directory === input.input.sourceProfileDirectory,
+      (profile) => profile.directory === sourceProfileDirectory,
     );
     if (requestedProfile === undefined) {
       return yield* new BrowserImportFailedError({
@@ -257,39 +286,62 @@ export const make = Effect.gen(function* BrowserImportMake() {
       // failure, not a platform problem.
       return yield* new BrowserImportFailedError({ sourceId: definition.id, reason: "readFailed" });
     }
+    return { definition, databasePath };
+  });
 
-    // Both branches fail with a tagged error, so the union stays structurally
-    // identifiable and each tag is handled on its own below. The success side
-    // is normalized to one shape too, so the skipped tally survives either
-    // engine — Firefox stores plaintext, so nothing there is ever unreadable.
-    const userDataDirectory = definition.userDataDirectory(pathContext);
-    const read: Effect.Effect<
-      CookieReadResult,
-      ChromiumCookieReadError | FirefoxCookieReadError | SafariCookieReadError,
-      FileSystem.FileSystem | Path.Path | Scope.Scope | ChildProcessSpawner.ChildProcessSpawner
-    > =
-      definition.engine === "safari"
-        ? readSafariCookies(databasePath).pipe(
-            Effect.map((cookies) => ({ cookies, undecryptable: 0, undecryptableHosts: [] })),
-          )
-        : definition.engine === "firefox"
-          ? readFirefoxCookies(databasePath).pipe(
-              Effect.map((cookies) => ({ cookies, undecryptable: 0, undecryptableHosts: [] })),
-            )
-          : readChromiumCookies({
-              cookieDatabasePath: databasePath,
-              keychainService: definition.keychainService,
-              keychainAccount: definition.keychainAccount,
-              linuxSecretApplication: definition.linuxSecretApplication,
-              ...(platform === "win32" && userDataDirectory !== undefined
-                ? {
-                    windowsLocalStatePath: pathContext.path.join(userDataDirectory, "Local State"),
-                  }
-                : {}),
-              platform,
-            });
+  /**
+   * How each engine reads a profile's store: its plaintext metadata for
+   * listing, and its cookies for import. Firefox and Safari store plaintext,
+   * so nothing there is ever undecryptable.
+   */
+  const engines: Record<
+    BrowserImportEngine,
+    {
+      readonly readMetadata: (
+        databasePath: string,
+      ) => Effect.Effect<ReadonlyArray<CookieMetadata>, CookieStoreReadError, CookieStoreServices>;
+      readonly readCookies: (
+        definition: BrowserImportSourceDefinition,
+        databasePath: string,
+        includeHost: (host: string) => boolean,
+      ) => Effect.Effect<CookieReadResult, CookieStoreReadError, CookieStoreServices>;
+    }
+  > = {
+    chromium: {
+      readMetadata: readChromiumCookieMetadata,
+      readCookies: (definition, databasePath, includeHost) => {
+        const userDataDirectory = definition.userDataDirectory(pathContext);
+        return readChromiumCookies({
+          cookieDatabasePath: databasePath,
+          keychainService: definition.keychainService,
+          keychainAccount: definition.keychainAccount,
+          linuxSecretApplication: definition.linuxSecretApplication,
+          ...(platform === "win32" && userDataDirectory !== undefined
+            ? { windowsLocalStatePath: pathContext.path.join(userDataDirectory, "Local State") }
+            : {}),
+          platform,
+          includeHost,
+        });
+      },
+    },
+    firefox: {
+      readMetadata: readFirefoxCookieMetadata,
+      readCookies: (_definition, databasePath, includeHost) =>
+        readFirefoxCookies(databasePath, includeHost).pipe(Effect.map(plaintextRead)),
+    },
+    safari: {
+      readMetadata: readSafariCookieMetadata,
+      readCookies: (_definition, databasePath, includeHost) =>
+        readSafariCookies(databasePath, includeHost).pipe(Effect.map(plaintextRead)),
+    },
+  };
 
-    const result = yield* read.pipe(
+  /** Runs a read against the source's store and maps each engine's failure. */
+  const readStore = <A>(
+    definition: BrowserImportSourceDefinition,
+    read: Effect.Effect<A, CookieStoreReadError, CookieStoreServices>,
+  ) =>
+    read.pipe(
       Effect.scoped,
       Effect.provide(platformServices),
       Effect.catchTags({
@@ -313,6 +365,54 @@ export const make = Effect.gen(function* BrowserImportMake() {
       }),
     );
 
+  const listSites = Effect.fn("BrowserImport.listSites")(function* (
+    input: BrowserImportSitesInput,
+  ) {
+    const { definition, databasePath } = yield* resolveSourceDatabase(
+      input.sourceId,
+      input.sourceProfileDirectory,
+    );
+    const metadata = yield* readStore(
+      definition,
+      engines[definition.engine].readMetadata(databasePath),
+    );
+    return groupSites(metadata, {
+      now: yield* Clock.currentTimeMillis,
+      currentUrl: input.currentUrl,
+    });
+  });
+
+  const importCookies = Effect.fn("BrowserImport.importCookies")(function* (input: {
+    readonly input: BrowserImportInput;
+    readonly scope: string;
+    readonly persistent: boolean;
+    readonly namespace?: BrowserSession.BrowserSessionPartitionNamespace;
+  }) {
+    const { definition, databasePath } = yield* resolveSourceDatabase(
+      input.input.sourceId,
+      input.input.sourceProfileDirectory,
+    );
+
+    if (platform === "darwin" && definition.engine === "chromium") {
+      // macOS attributes the Keychain prompt and the resulting ACL grant to the
+      // executable that asks, so record which one that was — in a packaged build
+      // it is the signed app, in dev whatever binary hosts the main process.
+      yield* Effect.logInfo("Reading browser cookie key from the keychain", {
+        sourceId: definition.id,
+        executablePath,
+      });
+    }
+
+    // Chosen sites are matched on the same registrable domain the listing
+    // grouped by, and applied by each reader before anything is decrypted.
+    const chosen = new Set(input.input.domains);
+    const includeHost = (host: string) => chosen.has(siteDomain(host));
+
+    const result = yield* readStore(
+      definition,
+      engines[definition.engine].readCookies(definition, databasePath, includeHost),
+    );
+
     const session = yield* browserSession
       .getSession(input.scope, input.persistent, input.namespace)
       .pipe(
@@ -331,7 +431,7 @@ export const make = Effect.gen(function* BrowserImportMake() {
     return yield* writeCookies(session, result);
   });
 
-  return BrowserImport.of({ listSources, importCookies });
+  return BrowserImport.of({ listSources, listSites, importCookies });
 });
 
 export const layer = Layer.effect(BrowserImport, make);

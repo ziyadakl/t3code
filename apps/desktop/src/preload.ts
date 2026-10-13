@@ -327,6 +327,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     openDevTools: (tabId) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_OPEN_DEVTOOLS_CHANNEL, { tabId }),
     listBrowserImportSources: () => ipcRenderer.invoke(IpcChannels.PREVIEW_IMPORT_SOURCES_CHANNEL),
+    listBrowserImportSites: (input) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_IMPORT_SITES_CHANNEL, input),
     importBrowserCookies: (input) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_IMPORT_COOKIES_CHANNEL, input),
     clearCookies: (environmentId, profileId) =>

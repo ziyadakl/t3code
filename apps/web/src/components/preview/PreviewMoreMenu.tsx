@@ -19,6 +19,8 @@ import {
   MenuTrigger,
 } from "~/components/ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
+import { BrowserImportSourceItems } from "~/components/browserImport/BrowserImportLauncher";
+import type { PreviewCookieImportMenu } from "~/components/browserImport/usePreviewCookieImport";
 
 const COLOR_SCHEME_OPTIONS: ReadonlyArray<{
   value: DesktopPreviewColorScheme;
@@ -64,6 +66,8 @@ interface Props {
   nativePictureInPicture: boolean;
   /** Profile display name, shown so the menu says which data is being cleared. */
   profileName: string | undefined;
+  /** Absent where this machine's browsers cannot be imported into the tab's profile. */
+  cookieImport?: PreviewCookieImportMenu | undefined;
 }
 
 const MenuTriggerButton = () => (
@@ -91,6 +95,7 @@ export function PreviewMoreMenu({
   onToggleDeviceToolbar,
   nativePictureInPicture,
   profileName,
+  cookieImport,
 }: Props) {
   const zoomLabel = `${Math.round(zoomFactor * 100)}%`;
   const disabled = !enabled;
@@ -196,6 +201,19 @@ export function PreviewMoreMenu({
           ) : null}
           <MenuItem onClick={actions.clearCookies}>Clear cookies</MenuItem>
           <MenuItem onClick={actions.clearCache}>Clear cache</MenuItem>
+          {cookieImport ? (
+            // Listed when opened: the answer changes as the user quits and
+            // opens browsers, and detection reads the other browser's files.
+            <MenuSub onOpenChange={(open) => open && cookieImport.loadSources()}>
+              <MenuSubTrigger>Import cookies from browser</MenuSubTrigger>
+              <MenuSubPopup>
+                <BrowserImportSourceItems
+                  sources={cookieImport.sources}
+                  onChoose={cookieImport.onChoose}
+                />
+              </MenuSubPopup>
+            </MenuSub>
+          ) : null}
         </MenuGroup>
       </MenuPopup>
     </Menu>
