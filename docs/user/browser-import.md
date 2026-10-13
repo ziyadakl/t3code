@@ -4,11 +4,16 @@ The desktop app can import cookies from another browser so you can reuse its sig
 in the preview browser.
 
 Open **Settings → Integrations → Browser profiles → Add profile**, then choose a browser under
-**Import from**. Close the source browser before importing, and allow an operating-system keyring
-unlock prompt if one appears.
+**Import from**. You can import into a new profile or an existing one. Close the source browser
+before importing, and allow an operating-system keyring unlock prompt if one appears.
 
 You can also start from the preview: open its **⋮** menu and choose **Import cookies from browser**.
-The cookies go into the profile the tab uses, and the page reloads once they arrive.
+From there, cookies always go into the profile the tab is using, and the page reloads once they
+arrive.
+
+Either way, you then choose which sites to import. Up to five sites you are signed in to start
+ticked. Banking, email, and sign-in sites always start unticked, so tick one only if you want that
+session in T3 Code too.
 
 This is a one-time copy. Later login changes stay separate between the two browsers, and some
 sites may still require you to sign in again.
