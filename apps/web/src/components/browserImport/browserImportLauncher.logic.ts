@@ -4,7 +4,7 @@ import {
   type BrowserImportSource,
 } from "@t3tools/contracts";
 
-import type { SitesOutcome } from "../settings/browserImportWizard.logic";
+import type { SitesOutcome } from "./browserImportWizard.logic";
 
 /**
  * IPC flattens the failure to its message, so the reason token travels inside

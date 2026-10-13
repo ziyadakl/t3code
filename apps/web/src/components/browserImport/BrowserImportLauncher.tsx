@@ -17,8 +17,8 @@ import { useCallback, useRef, useState, type ReactNode } from "react";
 import { clearBrowserProfileData } from "~/browser/browserProfileData";
 import { resolveEnvironmentOptionLabel } from "~/components/BranchToolbar.logic";
 import { previewBridge } from "~/components/preview/previewBridge";
-import { BrowserImportWizard, type WizardTarget } from "~/components/settings/BrowserImportWizard";
-import type { ImportOutcome } from "~/components/settings/browserImportWizard.logic";
+import { BrowserImportWizard, type WizardTarget } from "./BrowserImportWizard";
+import type { ImportOutcome } from "./browserImportWizard.logic";
 import { MenuItem } from "~/components/ui/menu";
 import { toastManager } from "~/components/ui/toast";
 import {
