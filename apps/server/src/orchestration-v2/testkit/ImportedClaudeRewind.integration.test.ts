@@ -20,7 +20,7 @@ import * as ImportedRewindHeal from "../../project/ImportedRewindHeal.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
 import { ClaudeOrchestratorReplayHarness } from "../Adapters/ClaudeAdapterV2.testkit.ts";
 import * as EventSink from "../EventSink.ts";
-import * as IdAllocator from "../IdAllocator.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as Orchestrator from "../Orchestrator.ts";
 import * as ThreadCodeRewindService from "../ThreadCodeRewindService.ts";
 import { provideDeterministicTestRuntime } from "./DeterministicRuntime.ts";
@@ -32,10 +32,8 @@ import {
 } from "./fixtures/shared.ts";
 import { runOrchestratorV2Scenario } from "./OrchestratorScenario.ts";
 import * as ProviderReplayHarness from "./ProviderReplayHarness.ts";
-import {
-  materializeReplayTranscriptRuntimeInstructions,
-  readProviderReplayTranscript,
-} from "./ReplayTranscriptNdjson.ts";
+import { readProviderReplayTranscript } from "@t3tools/provider-testing/replayTranscript";
+import { materializeReplayTranscriptRuntimeInstructions } from "./ReplayRuntimeInstructions.ts";
 
 const claudeInstanceId = ProviderInstanceId.make("claudeAgent");
 

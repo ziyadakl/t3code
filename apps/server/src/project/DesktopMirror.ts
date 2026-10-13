@@ -15,7 +15,7 @@
 import * as NodeOS from "node:os";
 
 import { CommandId, ProjectId, ThreadId, type DesktopMirrorSettings } from "@t3tools/contracts";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -138,7 +138,7 @@ const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const crypto = yield* Crypto.Crypto;
-  const platform = yield* HostProcessPlatform;
+  const platform = yield* HostProcess.Platform;
   const caseInsensitive = platform === "darwin";
   const homeDir = NodeOS.homedir();
   const cardCache: ClaudeSessionSources.DesktopCardCache = new Map();

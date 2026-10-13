@@ -9,7 +9,7 @@
  * copies a transcript into another Claude home and never touches the source.
  */
 import { ProviderInstanceId } from "@t3tools/contracts";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -338,7 +338,7 @@ export const listClaudeSessions = Effect.fn("ClaudeSessionSources.listClaudeSess
   }) {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const caseInsensitive = (yield* HostProcessPlatform) === "darwin";
+    const caseInsensitive = (yield* HostProcess.Platform) === "darwin";
     const projectsDir = path.join(input.claudeHome, "projects");
     const mtimeMs = (target: string) =>
       fileSystem.stat(target).pipe(
