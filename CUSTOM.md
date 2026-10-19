@@ -38,4 +38,4 @@ Dropped so far:
 
 **Conflict memory.** The script turns on git rerere. It mainly helps when an aborted sync is redone; hunks already resolved in an earlier merge do not conflict again on later merges.
 
-**Rolling back.** A newer build may run database migrations (this sync adds upstream migrations 059–061), so going back to an older build is not guaranteed safe. Copy `~/.t3/userdata/statev2.sqlite` before installing.
+**Rolling back.** A newer build may run database migrations (the 2026-10-19 sync adds upstream migrations 062–064; 063 drops old V1 projection tables), so going back to an older build is not guaranteed safe. Copy `~/.t3/userdata/statev2.sqlite` before installing.
