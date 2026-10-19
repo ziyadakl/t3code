@@ -153,12 +153,12 @@ export function useBrowserImportLauncher() {
     if (importInFlightRef.current) return { kind: "blocked", reason: "readFailed" };
     importInFlightRef.current = true;
     setImportInFlight(true);
-    try {
-      return await runBrowserImport(previewBridge, browserProfileStore, current, choice);
-    } finally {
+    // `.finally` rather than try/finally: React Compiler cannot compile a
+    // `finally` without a `catch`.
+    return runBrowserImport(previewBridge, browserProfileStore, current, choice).finally(() => {
       importInFlightRef.current = false;
       setImportInFlight(false);
-    }
+    });
   };
 
   // Re-checks a source's availability after the user quits the browser, and

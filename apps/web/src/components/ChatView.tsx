@@ -5824,15 +5824,15 @@ export default function ChatView(props: ChatViewProps) {
     useComposerDraftStore.setState((store) => ({
       rewindingThreadKeys: new Set(store.rewindingThreadKeys).add(routeThreadKey),
     }));
-    try {
-      await run();
-    } finally {
+    // `.finally` rather than try/finally: React Compiler cannot compile a
+    // `finally` without a `catch`.
+    await run().finally(() => {
       useComposerDraftStore.setState((store) => {
         const remaining = new Set(store.rewindingThreadKeys);
         remaining.delete(routeThreadKey);
         return { rewindingThreadKeys: remaining };
       });
-    }
+    });
   };
   /**
    * Rewinds to before `messageId` with `chosenAction`; without one, rewinds
@@ -5987,67 +5987,70 @@ export default function ChatView(props: ChatViewProps) {
     }
     const askInMenu = () => setPendingRewind({ turnCount, messageId, routeThreadKey });
     messageRewindStartingRef.current = true;
-    try {
-      await withRewindProgress(async () => {
-        let heldPreview: (() => void) | null = null;
-        try {
-          if (step.kind === "stop-first") {
-            const result = await interruptThreadTurn({ environmentId, input: { threadId } });
-            if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-              throw squashAtomCommandFailure(result);
-            }
-            step = planMessageRewind({
-              canInterrupt: false,
-              isWorking: false,
-              supportsMessageRewind,
-              afterStop: true,
-              runs: await waitForThreadToStop(routeThreadRef),
-            });
+    await withRewindProgress(async () => {
+      let heldPreview: (() => void) | null = null;
+      // Promise `.catch`/`.finally` below, not try/catch/finally: React Compiler
+      // cannot compile `finally`, nor a `throw` inside a `try`.
+      const start = async () => {
+        if (step.kind === "stop-first") {
+          const result = await interruptThreadTurn({ environmentId, input: { threadId } });
+          if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+            throw squashAtomCommandFailure(result);
           }
-          switch (step.kind) {
-            case "refuse":
-              throw new Error(step.reason);
-            case "ask":
+          step = planMessageRewind({
+            canInterrupt: false,
+            isWorking: false,
+            supportsMessageRewind,
+            afterStop: true,
+            runs: await waitForThreadToStop(routeThreadRef),
+          });
+        }
+        switch (step.kind) {
+          case "refuse":
+            throw new Error(step.reason);
+          case "ask":
+            askInMenu();
+            return;
+          case "check-files": {
+            const loaded = await loadThreadRewindPreview({
+              environmentId,
+              threadId,
+              messageId,
+            });
+            heldPreview = loaded.release;
+            if (decideMessageRewindStart(loaded).kind === "ask") {
+              // Left this thread (or unmounted, which nulls the ref) during
+              // the dry run: no menu opens, so `finally` releases it now.
+              if (currentRouteThreadKeyRef.current !== routeThreadKey) return;
+              heldRewindPreviewRef.current?.();
+              heldRewindPreviewRef.current = heldPreview;
+              heldPreview = null;
               askInMenu();
               return;
-            case "check-files": {
-              const loaded = await loadThreadRewindPreview({
-                environmentId,
-                threadId,
-                messageId,
-              });
-              heldPreview = loaded.release;
-              if (decideMessageRewindStart(loaded).kind === "ask") {
-                // Left this thread (or unmounted, which nulls the ref) during
-                // the dry run: no menu opens, so `finally` releases it now.
-                if (currentRouteThreadKeyRef.current !== routeThreadKey) return;
-                heldRewindPreviewRef.current?.();
-                heldRewindPreviewRef.current = heldPreview;
-                heldPreview = null;
-                askInMenu();
-                return;
-              }
-              await performRewind(turnCount, messageId, {
-                type: "rewind",
-                choice: "conversation",
-              });
-              return;
             }
-            default:
-              await performRewind(turnCount, messageId);
+            await performRewind(turnCount, messageId, {
+              type: "rewind",
+              choice: "conversation",
+            });
+            return;
           }
-        } catch (error) {
+          default:
+            await performRewind(turnCount, messageId);
+        }
+      };
+      await start()
+        .catch((error: unknown) => {
           setThreadError(
             threadId,
             error instanceof Error ? error.message : "Failed to start the rewind.",
           );
-        } finally {
+        })
+        .finally(() => {
           heldPreview?.();
-        }
-      });
-    } finally {
+        });
+    }).finally(() => {
       messageRewindStartingRef.current = false;
-    }
+    });
   };
   const requestMessageRewindStable = useStableCallback(requestMessageRewind);
 

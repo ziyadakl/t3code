@@ -2230,7 +2230,9 @@ describe("subagent continued by a later turn", () => {
     assistant("answer-1", runId, 1_000_004, 3),
     user("prompt-2", run2, 2_000_001, 30),
     reasoning("reasoning-2", run2, 2_000_002, 31),
-    assistant("answer-2", run2, 2_000_003, 32),
+    // A multi-line message is real content, so it stays visible; a one-line
+    // note would fold into the run (see isFoldableProgressNote).
+    { ...assistant("answer-2", run2, 2_000_003, 32), text: "Answer answer-2\nSecond line" },
     {
       ...item("send-message", run2, 2_000_004, 33),
       type: "dynamic_tool",
