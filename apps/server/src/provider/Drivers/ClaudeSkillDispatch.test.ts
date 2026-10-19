@@ -13,13 +13,12 @@ const SKILLS = new Set([
 describe("planClaudeSkillDispatch", () => {
   it("leaves a prompt without a known skill untouched", () => {
     expect(planClaudeSkillDispatch("fix the build", SKILLS)).toBeUndefined();
-    // Not a discovered skill, so it stays prose rather than becoming a command.
     expect(planClaudeSkillDispatch("echo $HOME then $unknown", SKILLS)).toBeUndefined();
   });
 
-  it("moves a mid-prompt mention into a trailing slash command", () => {
+  it("keeps the whole request ahead of a mid-prompt slash command", () => {
     expect(planClaudeSkillDispatch("ok, now $implement all the tickets", SKILLS)).toEqual({
-      leadingText: "ok, now",
+      leadingText: "ok, now /implement all the tickets",
       commandText: "/implement all the tickets",
       skillName: "implement",
     });
@@ -35,7 +34,7 @@ describe("planClaudeSkillDispatch", () => {
 
   it("dispatches a known skill whose name begins with a digit", () => {
     expect(planClaudeSkillDispatch("use $2spec for this", SKILLS)).toEqual({
-      leadingText: "use",
+      leadingText: "use /2spec for this",
       commandText: "/2spec for this",
       skillName: "2spec",
     });
@@ -43,7 +42,7 @@ describe("planClaudeSkillDispatch", () => {
 
   it("dispatches the last mention and rewrites earlier ones inline", () => {
     expect(planClaudeSkillDispatch("$review the diff, then $implement the fixes", SKILLS)).toEqual({
-      leadingText: "/review the diff, then",
+      leadingText: "/review the diff, then /implement the fixes",
       commandText: "/implement the fixes",
       skillName: "implement",
     });
@@ -57,7 +56,7 @@ describe("planClaudeSkillDispatch", () => {
           SKILLS,
         ),
       ).toEqual({
-        leadingText: "/review the diff, then",
+        leadingText: "/review the diff, then /implement the fixes",
         commandText: "/implement the fixes",
         skillName: "implement",
       });
@@ -72,7 +71,7 @@ describe("planClaudeSkillDispatch", () => {
 
   it("dispatches a typed slash command that ends the prompt", () => {
     expect(planClaudeSkillDispatch("hey there. audit the checks\n\n/review", SKILLS)).toEqual({
-      leadingText: "hey there. audit the checks",
+      leadingText: "hey there. audit the checks\n\n/review",
       commandText: "/review",
       skillName: "review",
     });
@@ -82,7 +81,7 @@ describe("planClaudeSkillDispatch", () => {
     expect(
       planClaudeSkillDispatch("see what checks we have\n\n/mattpocock-skills:ask-matt", SKILLS),
     ).toEqual({
-      leadingText: "see what checks we have",
+      leadingText: "see what checks we have\n\n/mattpocock-skills:ask-matt",
       commandText: "/mattpocock-skills:ask-matt",
       skillName: "mattpocock-skills:ask-matt",
     });
@@ -90,12 +89,12 @@ describe("planClaudeSkillDispatch", () => {
 
   it("drops sentence punctuation after a typed command", () => {
     expect(planClaudeSkillDispatch("try /mattpocock-skills:ask-matt? thanks", SKILLS)).toEqual({
-      leadingText: "try",
+      leadingText: "try /mattpocock-skills:ask-matt thanks",
       commandText: "/mattpocock-skills:ask-matt thanks",
       skillName: "mattpocock-skills:ask-matt",
     });
     expect(planClaudeSkillDispatch("then run /review.", SKILLS)).toEqual({
-      leadingText: "then run",
+      leadingText: "then run /review",
       commandText: "/review",
       skillName: "review",
     });
@@ -103,12 +102,12 @@ describe("planClaudeSkillDispatch", () => {
 
   it("orders typed and chip mentions by position, dispatching the last", () => {
     expect(planClaudeSkillDispatch("/review first, then $implement it", SKILLS)).toEqual({
-      leadingText: "/review first, then",
+      leadingText: "/review first, then /implement it",
       commandText: "/implement it",
       skillName: "implement",
     });
     expect(planClaudeSkillDispatch("$review first, then /implement it", SKILLS)).toEqual({
-      leadingText: "/review first, then",
+      leadingText: "/review first, then /implement it",
       commandText: "/implement it",
       skillName: "implement",
     });

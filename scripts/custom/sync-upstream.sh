@@ -98,7 +98,8 @@ check() {
     "vp run lint:mobile"
   )
   for cmd in "${cmds[@]}"; do
-    if ! grep -qF "run: $cmd" "$ci"; then
+    # A command may sit on its own "run:" line or inside a multi-line run block.
+    if ! grep -qE "^[[:space:]]*(- )?(run: )?${cmd}[[:space:]]*\$" "$ci"; then
       echo "$ci no longer runs '$cmd'. Update the list in $0 to match it." >&2
       return 1
     fi

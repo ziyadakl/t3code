@@ -71,6 +71,9 @@ jobs:
     env:
       RUST_TARGET: ${{ matrix.rust_target }}
       RESOURCE_KEY: ${{ matrix.resource_key }}
+      # Release notes and update links name the official repo; this fork has no
+      # releases. Without it the web build falls back to GITHUB_REPOSITORY.
+      T3CODE_DESKTOP_UPDATE_REPOSITORY: pingdotgg/t3code
     steps:
       # This repository is public, so Git needs no credentials. checkout's
       # credential cleanup runs submodule foreach even with submodules disabled,

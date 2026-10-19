@@ -54,11 +54,8 @@ export type { WizardTarget } from "./browserImportWizard.logic";
 
 interface BrowserImportWizardProps {
   readonly source: BrowserImportSource;
-  /** Captured when the wizard opens so destination copy and writes stay stable. */
   readonly destinationEnvironmentName: string;
-  /** Existing profiles the import can go into. Incognito is excluded upstream. */
   readonly targetProfiles: ReadonlyArray<WizardTargetProfile>;
-  /** Whether a new profile can still be created (profile cap). */
   readonly canCreateProfile: boolean;
   /**
    * Starts "Into" on this existing profile when it is one of `targetProfiles`,
@@ -83,21 +80,12 @@ interface BrowserImportWizardProps {
     /** Registrable domains the user ticked; only their cookies are imported. */
     readonly domains: ImportDomains;
   }) => Promise<ImportOutcome>;
-  /** Re-checks the source's availability after the user quits the browser. */
   readonly onRefreshSource: () => Promise<BrowserImportSource | undefined>;
-  /** Opens the OS setting that grants access to a protected cookie store. */
   readonly onOpenFullDiskAccessSettings: () => void | Promise<void>;
   readonly onCheckFullDiskAccess?: (() => Promise<boolean>) | undefined;
   readonly onClose: () => void;
 }
 
-/**
- * Guides one browser's cookies into a profile.
- *
- * Every state the import can be in — the browser is open, a profile has to be
- * chosen, the read failed — is a screen the user can move forward from, rather
- * than a disabled row that only says no.
- */
 export function BrowserImportWizard({
   source: initialSource,
   destinationEnvironmentName,
@@ -125,8 +113,6 @@ export function BrowserImportWizard({
   // another profile replaces it with that profile's default ticks.
   const [siteSelection, setSiteSelection] = useState<SiteSelection>();
   const [targetError, setTargetError] = useState<string>();
-  // Stable across retries so a keychain re-approval lands in one profile, not
-  // a new one each time.
   const newProfileId = useRef(`profile-${randomUUID()}`);
   // A second Import click before React has left the configure screen would
   // start a second run; the parent refuses it, and applying that refusal here
@@ -308,7 +294,6 @@ function QuitStep({
   );
 }
 
-/** "5,065 cookies", or "no cookies", or nothing when the store is unreadable. */
 function cookieCountLabel(count: number | undefined): string | undefined {
   if (count === undefined) return undefined;
   if (count === 0) return "no cookies";
@@ -543,7 +528,6 @@ function ConfigureStep({
   );
 }
 
-/** One selectable option: a name, an optional detail line, and a check. */
 function SelectableTile({
   selected,
   title,

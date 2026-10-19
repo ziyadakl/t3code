@@ -4,10 +4,9 @@
  * The allow-list is `trustedTailscaleDevices` in the server's settings.json
  * (MagicDNS short names). Empty, the default, means every caller pairs, exactly
  * as without this module. A trusted caller gets an ordinary browser session
- * with standard client scopes, never access-management scopes.
+ * with standard client scopes, the same as a paired device.
  *
  * What is trusted, and why
- * ------------------------
  * The caller's device is decided from the TCP peer address of the request
  * (the socket, never a header), in one of three ways:
  *

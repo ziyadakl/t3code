@@ -76,7 +76,7 @@ export const make = Effect.gen(function* () {
   // sessions detach and terminals clean up exactly as for a user's archive.
   const dispatch = Effect.fn("ThreadArchiveServiceV2.dispatch")(
     function* (type: "thread.archive" | "thread.unarchive", threadId: ThreadId, reason: string) {
-      const uuid = yield* crypto.randomUUIDv4;
+      const uuid = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
       yield* orchestrator.dispatch({
         type,
         commandId: CommandId.make(`server:${reason}:${threadId}:${uuid}`),

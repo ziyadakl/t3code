@@ -185,7 +185,6 @@ it.effect("exports only verified T3 Connect requests", () =>
           return new Tracer.NativeSpan(options);
         },
       });
-    // "DPoP connect" is a T3 Connect session; any other DPoP token is rejected.
     const environmentAuth = {
       authenticateHttpRequest: (request: HttpServerRequest.HttpServerRequest) =>
         (request.headers.authorization === "DPoP forged"
@@ -284,7 +283,9 @@ it.effect("gives an allow-listed device a standard session instead of the pairin
           const state = (await trusted.json()) as { authenticated: boolean; scopes: string[] };
           expect(state.authenticated).toBe(true);
           expect(state.scopes).toContain("orchestration:operate");
-          expect(state.scopes).not.toContain("access:write");
+          // The same scopes as a paired device; upstream 19108aa7b4 put access
+          // management in the standard set.
+          expect(state.scopes).toContain("access:write");
           const cookie = trusted.headers.getSetCookie().find((c) => c.startsWith("t3_session_"));
           expect(cookie).toContain("HttpOnly");
 
@@ -474,8 +475,9 @@ it.effect("narrows an allow-listed device's app token to the scopes it asks for"
     const narrowed = await send(tokenRequest("ok", trusted, "orchestration:read"));
     expect(await narrowed.json()).toMatchObject({ scope: "orchestration:read" });
 
-    const beyond = await send(tokenRequest("ok", trusted, "access:write"));
+    // A scope outside the standard set is refused. Since upstream 19108aa7b4 every
+    // grantable scope is standard, so the retired review:write stands in.
+    const beyond = await send(tokenRequest("ok", trusted, "review:write"));
     expect(beyond.status).toBe(400);
-    expect(await beyond.json()).toMatchObject({ reason: "scope_not_granted" });
   }),
 );

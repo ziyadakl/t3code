@@ -8,18 +8,22 @@ import { HttpClient, HttpClientRequest } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 export const DEFAULT_TAILSCALE_SERVE_PORT = 443;
-export const TAILSCALE_STATUS_TIMEOUT = Duration.millis(1_500);
+/**
+ * Bounds `tailscale status` and `tailscale debug prefs`. Allows the 1.8-2.6 s
+ * `tailscale status` has been measured at when T3 Code spawns it on Windows.
+ * A CLI that never answers takes longer than this to fail, because the kill
+ * that follows the timeout also takes time (`taskkill` on Windows).
+ */
+export const TAILSCALE_STATUS_TIMEOUT = Duration.millis(3_500);
 const TAILSCALE_SERVE_TIMEOUT = Duration.seconds(10);
 const TAILSCALE_PROBE_TIMEOUT = Duration.millis(2_500);
 
-// tailscale is a real executable everywhere (`tailscale.exe` on Windows), so
-// it is always spawned directly rather than through cmd.exe shell mode.
 const tailscaleCommandForPlatform = (platform: NodeJS.Platform): "tailscale" | "tailscale.exe" =>
   platform === "win32" ? "tailscale.exe" : "tailscale";
 
 const TailscaleCommandContext = {
   executable: Schema.Literals(["tailscale", "tailscale.exe"]),
-  subcommand: Schema.Literals(["status", "serve", "whois"]),
+  subcommand: Schema.Literals(["status", "serve", "debug", "whois"]),
   argumentCount: Schema.Number,
 };
 
@@ -36,8 +40,6 @@ export const TailscaleStderrDiagnostic = Schema.Literals([
 ]);
 export type TailscaleStderrDiagnostic = typeof TailscaleStderrDiagnostic.Type;
 
-// Matched against stderr, most specific first. Patterns are deliberately short
-// and anchored on tailscale's own wording.
 const STDERR_DIAGNOSTIC_PATTERNS: ReadonlyArray<
   readonly [RegExp, Exclude<TailscaleStderrDiagnostic, "unknown">]
 > = [
@@ -46,7 +48,6 @@ const STDERR_DIAGNOSTIC_PATTERNS: ReadonlyArray<
   [/permission denied|access denied|must be root|operation not permitted/i, "permission-denied"],
 ];
 
-/** Classifies stderr into a safe label, dropping the text itself. */
 const stderrDiagnosticOf = (stderr: string): TailscaleStderrDiagnostic | undefined => {
   if (stderr.trim().length === 0) {
     return undefined;
@@ -85,11 +86,6 @@ export class TailscaleCommandExitError extends Schema.TaggedError<TailscaleComma
     exitCode: Schema.Number,
     stdoutLength: Schema.optional(Schema.Number),
     stderrLength: Schema.Number,
-    // A classified diagnostic, never raw CLI output. `tailscale` prints auth
-    // keys and node identifiers into stderr, and this field is surfaced in
-    // dev-runner logs — so it carries only a known-safe label from the closed
-    // set below. Callers that need to recognize a specific failure (e.g.
-    // `serve off` on a port with no mapping) match on the label.
     stderrDiagnostic: Schema.optional(TailscaleStderrDiagnostic),
   },
 ) {
@@ -214,11 +210,7 @@ export const parseTailscaleStatus = (
     }),
   );
 
-// Runs a read-only `tailscale <subcommand> ... --json` and returns stdout.
-const readTailscaleJsonCommand = (
-  subcommand: "status" | "whois",
-  args: readonly string[],
-): Effect.Effect<string, TailscaleCommandError, ChildProcessSpawner.ChildProcessSpawner> =>
+const readTailscaleOutput = (subcommand: "status" | "debug" | "whois", args: readonly string[]) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const hostPlatform = yield* HostProcess.Platform;
@@ -229,7 +221,7 @@ const readTailscaleJsonCommand = (
       argumentCount: args.length,
     };
     return yield* Effect.gen(function* () {
-      const child = yield* spawner.spawn(ChildProcess.make(executable, args)).pipe(
+      const child = yield* spawner.spawn(ChildProcess.make(executable, [...args])).pipe(
         Effect.mapError((cause) => new TailscaleCommandSpawnError({ ...commandContext, cause })),
         // Spawning can also fail as a defect rather than a typed error - a
         // non-directory entry on PATH makes node throw ENOTDIR synchronously.
@@ -276,8 +268,31 @@ const readTailscaleJsonCommand = (
     );
   });
 
-export const readTailscaleStatus = readTailscaleJsonCommand("status", ["status", "--json"]).pipe(
+export const readTailscaleStatus = readTailscaleOutput("status", ["status", "--json"]).pipe(
   Effect.flatMap(parseTailscaleStatus),
+);
+
+const TailscalePrefsJson = Schema.Struct({
+  RunSSH: Schema.optional(Schema.Unknown),
+  WantRunning: Schema.optional(Schema.Unknown),
+});
+
+const decodeTailscalePrefsJson = Schema.decodeEffect(Schema.fromJsonString(TailscalePrefsJson));
+
+/**
+ * `tailscale status --json` does not report this for the local node. `tailscale
+ * down` clears WantRunning but keeps RunSSH, so check both.
+ */
+export const parseTailscaleSshEnabled = (
+  rawPrefsJson: string,
+): Effect.Effect<boolean, TailscaleStatusParseError> =>
+  decodeTailscalePrefsJson(rawPrefsJson).pipe(
+    Effect.mapError((cause) => new TailscaleStatusParseError({ cause })),
+    Effect.map((prefs) => prefs.RunSSH === true && prefs.WantRunning !== false),
+  );
+
+export const readTailscaleSshEnabled = readTailscaleOutput("debug", ["debug", "prefs"]).pipe(
+  Effect.flatMap(parseTailscaleSshEnabled),
 );
 
 export class TailscaleWhoisParseError extends Schema.TaggedError<TailscaleWhoisParseError>()(
@@ -322,9 +337,7 @@ export const readTailscaleWhois = (
   TailscaleCommandError | TailscaleWhoisParseError,
   ChildProcessSpawner.ChildProcessSpawner
 > =>
-  readTailscaleJsonCommand("whois", ["whois", "--json", ip]).pipe(
-    Effect.flatMap(parseTailscaleWhois),
-  );
+  readTailscaleOutput("whois", ["whois", "--json", ip]).pipe(Effect.flatMap(parseTailscaleWhois));
 
 export function buildTailscaleHttpsBaseUrl(input: {
   readonly magicDnsName: string;

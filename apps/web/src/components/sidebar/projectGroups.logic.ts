@@ -186,7 +186,14 @@ export function toggleSidebarProjectGroupOpen(
   return openFoldKeys.includes(foldKey) ? kept : [...kept, foldKey];
 }
 
-export type SidebarTopStatusIcon = "working" | "approval" | "input" | "failed" | "woke" | "done";
+export type SidebarTopStatusIcon =
+  | "working"
+  | "waiting"
+  | "approval"
+  | "input"
+  | "failed"
+  | "woke"
+  | "done";
 
 /**
  * One table for how each top status reads: the row's badge, a group
@@ -204,7 +211,7 @@ export const SIDEBAR_TOP_STATUS_DISPLAY = {
   done: { label: "Done", icon: "done", className: "text-success" },
   // Waiting is calm background presence (post-settle background roster), not
   // active progress, so the label keeps full strength.
-  waiting: { label: "Waiting", icon: null, className: "text-muted-foreground" },
+  waiting: { label: "Waiting", icon: "waiting", className: "text-muted-foreground" },
   // No shimmer: a label that animates forever is noise in a sidebar full of
   // them (and repaints every vsync on high-refresh displays).
   working: { label: "Working", icon: "working", className: "text-info" },

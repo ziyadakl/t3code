@@ -145,7 +145,6 @@ describe("readChromiumCookieDatabase", () => {
         expect(partial.cookies.map((cookie) => cookie.value)).toEqual(["kept"]);
         expect(partial.undecryptable).toBe(1);
 
-        // A partitioned-only jar does not need its key: it is skipped separately.
         yield* Effect.gen(function* () {
           const sql = yield* SqlClient.SqlClient;
           yield* sql`delete from cookies where name = 'readable'`;
@@ -342,8 +341,6 @@ describe("readChromiumCookieDatabase", () => {
           ('ev11.example', 'empty-v11', '', ${encryptChromium("v11", "empty v11 value", cbcEmpty)}, '/', 0, 1, 0, 0)`;
       }).pipe(Effect.provide(NodeSqliteClient.layer({ filename })));
 
-      // The records' own keys fail, and the empty key recovers both — the
-      // retry Chromium itself performs.
       const recovered = yield* readChromiumCookieDatabase(
         filename,
         { cbcV10, cbcV11, cbcEmpty },

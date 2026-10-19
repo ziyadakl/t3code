@@ -201,7 +201,8 @@ const make = Effect.gen(function* () {
   `;
 
   const commandId = (operation: string, sessionId: string) =>
-    crypto.randomUUIDv4.pipe(
+    crypto.randomUUIDv4().pipe(
+      Effect.orDie,
       Effect.map((uuid) =>
         CommandId.make(`server:desktop-mirror:${operation}:${sessionId}:${uuid}`),
       ),
@@ -235,7 +236,7 @@ const make = Effect.gen(function* () {
     if (existing !== undefined) return existing;
     const { project } = yield* projects.bootstrap({
       commandId: yield* commandId("project", folder),
-      projectId: ProjectId.make(yield* crypto.randomUUIDv4),
+      projectId: ProjectId.make(yield* crypto.randomUUIDv4().pipe(Effect.orDie)),
       title: path.basename(folder) || folder,
       workspaceRoot: folder,
     });
