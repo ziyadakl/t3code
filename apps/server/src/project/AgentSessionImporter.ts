@@ -574,7 +574,8 @@ const make = Effect.gen(function* () {
   /**
    * Write one transcript's conversation as a settled T3 Code thread bound to the
    * provider's native session, so the next turn resumes it. Returns false when the
-   * thread was already imported and only the transcript identity was refreshed.
+   * thread was already imported and only the transcript identity was refreshed, and null
+   * when `skipIfNativeOwned` found the native session owned by another thread.
    */
   const importThread = Effect.fn("importAgentThreadV2")(function* (input: {
     readonly projectId: ProjectId;
@@ -589,6 +590,8 @@ const make = Effect.gen(function* () {
      * at this time, instead of importing it settled.
      */
     readonly activeAt?: DateTime.Utc;
+    /** Write nothing, and return null, when another thread already owns the native session. */
+    readonly skipIfNativeOwned?: boolean;
   }) {
     const { thread, source, threadId } = input;
     if (
@@ -600,6 +603,24 @@ const make = Effect.gen(function* () {
         providerSessionId: thread.providerSessionId,
       });
     }
+    const driver = ProviderDriverKind.make(thread.source);
+    const persistRuntime = runtimes.upsert(
+      {
+        threadId,
+        providerName: driver,
+        providerInstanceId: thread.providerInstanceId,
+        adapterKey: driver,
+        runtimeMode: DEFAULT_RUNTIME_MODE,
+        status: "stopped",
+        lastSeenAt: thread.updatedAt,
+        resumeCursor:
+          thread.source === "codex"
+            ? { threadId: thread.providerSessionId }
+            : { threadId, resume: thread.providerSessionId },
+        runtimePayload: { cwd: input.workspaceRoot },
+      },
+      { onConflict: "ignore" },
+    );
     const existing = yield* Effect.option(orchestrator.getThreadRecords(threadId, []));
     if (Option.isSome(existing)) {
       if (existing.value.thread.projectId !== input.projectId) {
@@ -612,14 +633,15 @@ const make = Effect.gen(function* () {
       if (existing.value.thread.historyOrigin !== "v1_import") {
         return yield* new AgentSessionThreadModifiedError({ threadId });
       }
+      yield* persistRuntime;
       yield* runtimes.recordImportedTranscript({ threadId, source });
       return false;
     }
 
-    const driver = ProviderDriverKind.make(thread.source);
     const model = thread.model ?? DEFAULT_MODEL_BY_PROVIDER[driver] ?? DEFAULT_MODEL;
     const providerThreadId = idAllocator.derive.providerThread({
       driver,
+      providerInstanceId: thread.providerInstanceId,
       nativeThreadId: thread.providerSessionId,
     });
     const createdAt = dateTime(thread.createdAt);
@@ -684,24 +706,8 @@ const make = Effect.gen(function* () {
       updatedAt,
     };
 
-    yield* runtimes.upsert(
-      {
-        threadId,
-        providerName: driver,
-        providerInstanceId: thread.providerInstanceId,
-        adapterKey: driver,
-        runtimeMode: DEFAULT_RUNTIME_MODE,
-        status: "stopped",
-        lastSeenAt: thread.updatedAt,
-        resumeCursor:
-          thread.source === "codex"
-            ? { threadId: thread.providerSessionId }
-            : { threadId, resume: thread.providerSessionId },
-        runtimePayload: { cwd: input.workspaceRoot },
-      },
-      { onConflict: "ignore" },
-    );
-    yield* eventSink.write({
+    const committed = yield* eventSink.write({
+      ...(input.skipIfNativeOwned === true ? { unlessNativeThreadOwned: providerThread } : {}),
       events: [
         {
           id: EventId.make(`${IMPORT_EVENT_PREFIX}:thread:${threadId}:created`),
@@ -731,6 +737,9 @@ const make = Effect.gen(function* () {
         },
       ],
     });
+    // Bulk import only: a thread started in T3 Code already owns this native session.
+    if (input.skipIfNativeOwned === true && committed.length === 0) return null;
+    yield* persistRuntime;
     yield* runtimes.recordImportedTranscript({ threadId, source });
     return true;
   });
@@ -1065,8 +1074,9 @@ const make = Effect.gen(function* () {
           threadId,
           thread: outcome.thread,
           source,
+          skipIfNativeOwned: true,
         }).pipe(
-          Effect.as(true),
+          Effect.map((result) => (result === null ? null : true)),
           Effect.catch((cause) =>
             Effect.logWarning("Could not import an agent session", {
               provider: outcome.thread.source,
@@ -1075,10 +1085,10 @@ const make = Effect.gen(function* () {
             }).pipe(Effect.as(false)),
           ),
         );
-        if (imported) {
+        if (imported === true) {
           importedThreadIds.add(threadId);
           importedCount += 1;
-        } else {
+        } else if (imported === false) {
           skippedCount += 1;
         }
       }),
@@ -1089,7 +1099,8 @@ const make = Effect.gen(function* () {
 
   return {
     importRecentAgentThreads,
-    importThread,
+    importThread: (input: Omit<Parameters<typeof importThread>[0], "skipIfNativeOwned">) =>
+      importThread(input).pipe(Effect.map((imported) => imported === true)),
     appendImportedMessages,
     healImportedThread,
     isUntouchedImport: (threadId: ThreadId) =>

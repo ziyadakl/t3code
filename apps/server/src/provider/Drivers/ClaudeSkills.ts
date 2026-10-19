@@ -22,6 +22,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { parseCliArgs } from "@t3tools/shared/cliArgs";
 import { fromLenientJson } from "@t3tools/shared/schemaJson";
 import { parse as parseYamlDocument } from "yaml";
 
@@ -44,9 +45,7 @@ type SkillFrontmatter =
 /**
  * Claude Code accepts the YAML 1.1 boolean spellings (`yes`/`no`, `on`/`off`,
  * `1`/`0`), which the 1.2 core schema this parser uses leaves as strings and
- * numbers. Verified against the CLI: a skill carrying `user-invocable: no` is
- * absent from its published slash commands, so a strict `=== false` here would
- * offer a command the CLI rejects.
+ * numbers.
  */
 function parseFrontmatterBoolean(value: unknown): boolean | undefined {
   if (typeof value === "boolean") return value;
@@ -117,11 +116,6 @@ function parseSkillFrontmatter(contents: string): SkillFrontmatter {
   };
 }
 
-/**
- * Where an administrator installs the policy file whose settings outrank every
- * user and project one. Absent on almost every machine, which is why a missing
- * file is the normal case rather than an error.
- */
 function claudeManagedSettingsPath(
   path: Path.Path,
   platform: NodeJS.Platform,
@@ -137,18 +131,6 @@ function claudeManagedSettingsPath(
   return "/etc/claude-code/managed-settings.json";
 }
 
-/**
- * Settings files Claude Code merges for `skillOverrides`, in increasing
- * precedence: user, project, project-local, then the administrator's managed
- * policy, which wins outright. When the workspace sits inside a git
- * repository, the repository root's `settings.local.json` is read too and
- * outranks the workspace's own local file. Verified against the CLI from a
- * nested cwd: a root local file switching a skill off wins over a cwd one
- * switching it on, the root's plain `settings.json` is not consulted, and
- * without a `.git` above the cwd no root file is read. A skill the user
- * switched off is reported disabled rather than dropped, so the picker can
- * grey it out instead of silently losing it.
- */
 export function skillOverrideSettingsPaths(
   path: Path.Path,
   configDirPath: string,
@@ -172,11 +154,6 @@ export function skillOverrideSettingsPaths(
   ];
 }
 
-/**
- * Nearest ancestor of `cwd` (inclusive) holding a `.git` entry, which is the
- * boundary Claude Code walks up to for project settings. `undefined` outside
- * a repository.
- */
 const findRepositoryRoot = Effect.fn("findRepositoryRoot")(function* (
   cwd: string,
 ): Effect.fn.Return<string | undefined, never, FileSystem.FileSystem | Path.Path> {
@@ -199,10 +176,10 @@ const findRepositoryRoot = Effect.fn("findRepositoryRoot")(function* (
 });
 
 /**
- * The four states Claude Code accepts. The CLI validates the whole map, not
- * each entry: verified against it, one entry with an unknown value (or a
- * boolean) makes it drop every override in that file, so this schema does the
- * same rather than applying the valid siblings the CLI ignores.
+ * The CLI validates the whole map, not each entry: verified against it, one
+ * entry with an unknown value (or a boolean) makes it drop every override in
+ * that file, so this schema does the same rather than applying the valid
+ * siblings the CLI ignores.
  */
 const SkillOverrideValue = Schema.Literals(["on", "name-only", "user-invocable-only", "off"]);
 
@@ -215,11 +192,6 @@ const SkillOverrideSettings = fromLenientJson(
 );
 const decodeSkillOverrideSettings = Schema.decodeUnknownEffect(SkillOverrideSettings);
 
-/**
- * What a `skillOverrides` entry says about one skill. `"user-invocable-only"`
- * hides it from the agent exactly as `disable-model-invocation` does, so it is
- * kept apart from a plain on/off decision rather than collapsed into one.
- */
 type SkillOverride = {
   readonly enabled: boolean;
   readonly userInvocationOnly: boolean;
@@ -305,12 +277,6 @@ const readClaudeSkillSettings = Effect.fn("readClaudeSkillSettings")(function* (
   return { skillOverrides: overridesByName, enabledPlugins };
 });
 
-/**
- * Resolve the Claude config directory the CLI would use, matching the
- * precedence the spawned CLI sees: the instance's `homePath` (exported as
- * `CLAUDE_CONFIG_DIR` by `makeClaudeEnvironment`), then a `CLAUDE_CONFIG_DIR`
- * already present in the process environment, then `~/.claude`.
- */
 const resolveClaudeConfigDirPath = Effect.fn("resolveClaudeConfigDirPath")(function* (
   config: Pick<ClaudeSettings, "homePath">,
   environment: NodeJS.ProcessEnv,
@@ -566,7 +532,7 @@ const pluginCandidates = Effect.fn("pluginCandidates")(function* (
  * metadata to a command Claude Code resolves elsewhere.
  */
 export const discoverClaudeSkills = Effect.fn("discoverClaudeSkills")(function* (
-  config: Pick<ClaudeSettings, "homePath">,
+  config: Pick<ClaudeSettings, "homePath"> & Partial<Pick<ClaudeSettings, "launchArgs">>,
   cwd?: string,
   environment?: NodeJS.ProcessEnv,
 ): Effect.fn.Return<ReadonlyArray<ServerProviderSkill>, never, FileSystem.FileSystem | Path.Path> {
@@ -587,10 +553,18 @@ export const discoverClaudeSkills = Effect.fn("discoverClaudeSkills")(function* 
     enabledPlugins,
   );
 
+  // Use the session's argument parser so discovery sees the same --add-dir value.
+  const additionalDirectory = parseCliArgs(config.launchArgs ?? "").flags["add-dir"];
   const candidates: ReadonlyArray<SkillCandidate> = [
     ...(yield* skillFolderCandidates(path.join(configDirPath, "skills"), "user")),
     ...(projectClaudeDir
       ? yield* skillFolderCandidates(path.join(projectClaudeDir, "skills"), "project")
+      : []),
+    ...(additionalDirectory && (cwd || path.isAbsolute(additionalDirectory))
+      ? yield* skillFolderCandidates(
+          path.join(path.resolve(cwd ?? ".", additionalDirectory), ".claude", "skills"),
+          "project",
+        )
       : []),
     ...plugins.skills,
     ...(yield* commandFileCandidates(path.join(configDirPath, "commands"), "user")),

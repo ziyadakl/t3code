@@ -27,7 +27,6 @@ const parseWindowsFirefoxProfiles = (ini: string, root = "C:\\Users\\user\\Firef
     return parseFirefoxProfiles(ini, path, root);
   }).pipe(Effect.provide(NodePath.layerWin32));
 
-/** Builds a `cookies.sqlite` with Firefox's real `moz_cookies` shape. */
 const writeFirefoxCookieDatabase = Effect.fnUntraced(function* (
   rows: ReadonlyArray<{
     host: string;
@@ -141,7 +140,6 @@ describe("readFirefoxCookies", () => {
             name: "plain",
             value: "v",
             path: "/app",
-            // Firefox writes 0 for a session cookie.
             expiry: 0,
             isSecure: 0,
             isHttpOnly: 0,
@@ -153,8 +151,6 @@ describe("readFirefoxCookies", () => {
 
         expect(cookies).toEqual([
           {
-            // The leading dot stays on the domain but not in the URL, which is
-            // what Electron matches against.
             url: "https://github.com/",
             name: "session",
             value: "abc",
@@ -169,13 +165,10 @@ describe("readFirefoxCookies", () => {
             url: "http://example.test/app",
             name: "plain",
             value: "v",
-            // Host-only in Firefox, so no `domain`: supplying one would make
-            // Electron widen it to every subdomain of example.test.
             domain: undefined,
             path: "/app",
             secure: false,
             httpOnly: false,
-            // Session cookies carry no expiry rather than one at the epoch.
             expirationDate: undefined,
             sameSite: "no_restriction",
           },
@@ -350,7 +343,6 @@ describe("readFirefoxCookies", () => {
 
         yield* readFirefoxCookies(file, everyHost);
 
-        // The browser's own file is snapshotted, never opened for writing.
         const after = yield* fileSystem.stat(file);
         expect(after.mtime).toEqual(before.mtime);
         expect(after.size).toBe(before.size);

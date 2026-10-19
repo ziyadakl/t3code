@@ -1,51 +1,23 @@
-import { useState } from "react";
 import {
   MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
   MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
 } from "@t3tools/contracts";
+import type { ComponentProps } from "react";
+import { NumberField } from "../../../components/ui/NumberField";
 
-import { AppTextInput } from "../../../components/AppText";
-
-export interface ThreadDaysFieldProps {
-  readonly value: number;
-  readonly onValueChange: (value: number) => void;
-  readonly disabled?: boolean;
-  /** Names what the days count toward, such as "Days before auto-settle". */
-  readonly accessibilityLabel: string;
-}
+export type ThreadDaysFieldProps = Pick<
+  ComponentProps<typeof NumberField>,
+  "value" | "onValueChange" | "disabled" | "label"
+>;
 
 /** A day-count field for thread settings such as auto-settle and auto-archive. */
 export function ThreadDaysField(props: ThreadDaysFieldProps) {
-  const [draft, setDraft] = useState<string | null>(null);
-  const commit = () => {
-    if (props.disabled) {
-      setDraft(null);
-      return;
-    }
-    const text = (draft ?? "").trim();
-    setDraft(null);
-    // Validate the whole input; decimals and trailing text must not become whole days.
-    const parsed = /^\d+$/.test(text) ? Number(text) : Number.NaN;
-    if (
-      Number.isInteger(parsed) &&
-      parsed >= MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS &&
-      parsed <= MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS &&
-      parsed !== props.value
-    ) {
-      props.onValueChange(parsed);
-    }
-  };
   return (
-    <AppTextInput
-      className="min-h-10 w-20 rounded-xl px-3 py-2 text-center text-base"
-      keyboardType="number-pad"
-      returnKeyType="done"
-      value={draft ?? String(props.value)}
-      onChangeText={setDraft}
-      onBlur={commit}
-      onSubmitEditing={commit}
-      accessibilityLabel={props.accessibilityLabel}
-      editable={!props.disabled}
+    <NumberField
+      {...props}
+      min={MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS}
+      max={MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS}
+      formatValue={(value) => `${value} ${value === 1 ? "day" : "days"}`}
     />
   );
 }

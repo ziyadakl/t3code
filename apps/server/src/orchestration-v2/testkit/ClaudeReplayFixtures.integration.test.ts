@@ -599,7 +599,6 @@ describe("Claude Agent SDK replay fixtures", () => {
           })
           .pipe(Effect.flip);
         assert.equal(refused._tag, "OrchestratorSubagentThreadReadOnlyError");
-        // The wire error carries this text to the web toast and mobile outbox.
         assert.equal(
           userFacingDispatchErrorMessage(refused),
           "This subagent is run by its provider and cannot take messages. Message the parent thread instead.",
