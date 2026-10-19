@@ -169,8 +169,8 @@ An empty list, the default, means every device pairs. There is no setting for
 this in the apps: a list that decides who skips pairing can only be changed by
 someone who can already edit the server's files.
 
-What a listed device gets is an ordinary session with normal app permissions,
-not the ability to manage access. Revoke one at any time under
+What a listed device gets is the same session a paired device gets, which
+includes managing access and T3 Connect. Revoke one at any time under
 **Settings → Connections**; removing the device from the list stops new
 sessions.
 
