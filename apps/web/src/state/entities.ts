@@ -25,7 +25,6 @@ import type {
 import type { ThreadCheckpointSummary } from "@t3tools/client-runtime/state/thread-checkpoints";
 import { withoutArchivedProjects } from "@t3tools/client-runtime/state/projects";
 import { Atom } from "effect/reactivity";
-import { useMemo } from "react";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentProjects } from "./projects";
 import { environmentPresentations } from "./presentation";
@@ -117,7 +116,7 @@ export function useUnarchivedProjectsAndThreads(): {
 } {
   const projects = useProjects();
   const threads = useThreadShells();
-  return useMemo(() => withoutArchivedProjects(projects, threads), [projects, threads]);
+  return withoutArchivedProjects(projects, threads);
 }
 
 export function useAllEnvironmentShellsBootstrapped(): boolean {

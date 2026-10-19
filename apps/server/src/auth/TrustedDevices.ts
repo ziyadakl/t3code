@@ -7,7 +7,6 @@
  * with standard client scopes, never access-management scopes.
  *
  * What is trusted, and why
- * ------------------------
  * The caller's device is decided from the TCP peer address of the request
  * (the socket, never a header), in one of three ways:
  *

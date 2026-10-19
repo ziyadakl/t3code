@@ -3167,9 +3167,13 @@ export default function Sidebar() {
   });
   // Scope flips drop the selection: rows selected under the old scope may be
   // hidden now, and bulk actions must never count or touch invisible rows.
+  const scopeSignature = JSON.stringify([environmentFilterId, projectScopeKey]);
+  const clearedScopeSignatureRef = useRef<string | null>(null);
   useEffect(() => {
+    if (clearedScopeSignatureRef.current === scopeSignature) return;
+    clearedScopeSignatureRef.current = scopeSignature;
     clearSelection();
-  }, [clearSelection, environmentFilterId, projectScopeKey]);
+  }, [clearSelection, scopeSignature]);
 
   const openProjectSettings = useStableCallback(
     (projectGroup: SidebarProjectSnapshot, projectRef?: ScopedProjectRef) => {

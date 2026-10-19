@@ -10,7 +10,7 @@ import { threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
 import { resolveSidebarFloatToTopStatusSet } from "@t3tools/contracts/settings";
 import * as Schema from "effect/Schema";
 import { FolderIcon, ChevronRightIcon } from "lucide-react";
-import { Fragment, useCallback, useMemo } from "react";
+import { Fragment } from "react";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { useClientSettings } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
@@ -58,27 +58,24 @@ export function useSidebarProjectGroups<TProject extends GroupedProject>(input: 
     NO_OPEN_PROJECT_GROUPS,
     OpenProjectGroupsSchema,
   );
-  const modelInput = useMemo(
-    () => ({
-      projects,
-      // A status the contracts' "Float to the top" record lacks fails to compile here.
-      floatStatuses: resolveSidebarFloatToTopStatusSet(
-        floatToTopStatuses satisfies Record<SidebarCountedStatus, boolean>,
-      ),
-      resolveAttention: (thread: EnvironmentThreadShell) =>
-        resolveSidebarThreadAttention({
-          thread,
-          localLastVisitedAt: threadLastVisitedAtById[threadKeyOf(thread)],
-          wokeAt: threadWokeAt(thread, { now: snoozeNow }),
-        }),
-      ...(observedReturnAt === undefined ? {} : { observedReturnAt }),
-    }),
-    [floatToTopStatuses, observedReturnAt, projects, snoozeNow, threadLastVisitedAtById],
-  );
-  const grouped = useMemo(() => {
-    if (!enabled) return null;
+  const modelInput = {
+    projects,
+    // A status the contracts' "Float to the top" record lacks fails to compile here.
+    floatStatuses: resolveSidebarFloatToTopStatusSet(
+      floatToTopStatuses satisfies Record<SidebarCountedStatus, boolean>,
+    ),
+    resolveAttention: (thread: EnvironmentThreadShell) =>
+      resolveSidebarThreadAttention({
+        thread,
+        localLastVisitedAt: threadLastVisitedAtById[threadKeyOf(thread)],
+        wokeAt: threadWokeAt(thread, { now: snoozeNow }),
+      }),
+    ...(observedReturnAt === undefined ? {} : { observedReturnAt }),
+  };
+  let grouped = null;
+  if (enabled) {
     const model = buildSidebarGroupedActiveModel({ ...modelInput, activeThreads });
-    return {
+    grouped = {
       model,
       ...buildSidebarGroupedActiveRows({
         model,
@@ -87,26 +84,17 @@ export function useSidebarProjectGroups<TProject extends GroupedProject>(input: 
         threadKey: threadKeyOf,
       }),
     };
-  }, [activeThreads, enabled, modelInput, openFoldKeys, routeThreadKey]);
-  const projectKeys = useMemo(() => projects.map((project) => project.projectKey), [projects]);
-  const toggleGroup = useCallback(
-    (foldKey: string) =>
-      setOpenFoldKeys((keys) => toggleSidebarProjectGroupOpen(keys, foldKey, projectKeys)),
-    [projectKeys, setOpenFoldKeys],
-  );
+  }
+  const projectKeys = projects.map((project) => project.projectKey);
+  const toggleGroup = (foldKey: string) =>
+    setOpenFoldKeys((keys) => toggleSidebarProjectGroupOpen(keys, foldKey, projectKeys));
   /** Opens the folded group a thread dropped into the inbox lands in. */
-  const openGroupForDrop = useCallback(
-    (thread: EnvironmentThreadShell) => {
-      if (!enabled) return;
-      const foldKey = sidebarProjectGroupToOpenOnDrop({ ...modelInput, thread, openFoldKeys });
-      if (foldKey !== null) toggleGroup(foldKey);
-    },
-    [enabled, modelInput, openFoldKeys, toggleGroup],
-  );
-  const projectByKey = useMemo(
-    () => new Map(projects.map((project) => [project.projectKey, project])),
-    [projects],
-  );
+  const openGroupForDrop = (thread: EnvironmentThreadShell) => {
+    if (!enabled) return;
+    const foldKey = sidebarProjectGroupToOpenOnDrop({ ...modelInput, thread, openFoldKeys });
+    if (foldKey !== null) toggleGroup(foldKey);
+  };
+  const projectByKey = new Map(projects.map((project) => [project.projectKey, project]));
   return { grouped, toggleGroup, openGroupForDrop, projectByKey };
 }
 

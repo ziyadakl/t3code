@@ -12,7 +12,7 @@ import {
   type BrowserImportSource,
   type EnvironmentId,
 } from "@t3tools/contracts";
-import { useCallback, useRef, useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 
 import { resolveEnvironmentOptionLabel } from "~/components/BranchToolbar.logic";
 import { previewBridge } from "~/components/preview/previewBridge";
@@ -120,29 +120,29 @@ export function useBrowserImportLauncher() {
   const request = opened?.request ?? null;
   const lastOpenId = useRef(0);
   const wizardOpenRef = useRef(false);
-  const open = useCallback((next: BrowserImportRequest) => {
+  const open = (next: BrowserImportRequest) => {
     lastOpenId.current += 1;
     wizardOpenRef.current = true;
     setOpened({ id: lastOpenId.current, request: next });
-  }, []);
-  const close = useCallback(() => {
+  };
+  const close = () => {
     wizardOpenRef.current = false;
     setOpened(null);
-  }, []);
+  };
   /** Whether a wizard is open now, current even inside a callback from an older render. */
-  const isWizardOpen = useCallback(() => wizardOpenRef.current, []);
+  const isWizardOpen = () => wizardOpenRef.current;
   const importInFlightRef = useRef(false);
   const [importInFlight, setImportInFlight] = useState(false);
 
-  const loadSources = useCallback(() => {
+  const loadSources = () => {
     if (!browserImportSupported || !previewBridge) return;
     void previewBridge
       .listBrowserImportSources()
       .then(setSources)
       .catch(() => setSources((previous) => previous ?? []));
-  }, []);
+  };
 
-  const isImportInFlight = useCallback(() => importInFlightRef.current, []);
+  const isImportInFlight = () => importInFlightRef.current;
 
   const runImport = async (
     current: BrowserImportRequest,
