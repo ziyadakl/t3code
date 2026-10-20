@@ -14,6 +14,8 @@ repo="$(cd "$repo" && pwd)"
 worktree="$(dirname "$repo")/wt-sync"
 upstream_url="https://github.com/pingdotgg/t3code.git"
 
+scratch_probe=
+scratch_log=
 indent() { sed 's/^/  /'; }
 
 # owner/name of a GitHub remote URL (https or ssh).
@@ -21,8 +23,26 @@ fork_slug() { sed -E 's#^.*github\.com[:/]##; s#\.git$##' <<<"$1"; }
 
 # Test files the sync added or changed since <base>, one path per line. Deleted files are skipped.
 touched_test_files() {
-  git diff --name-only --diff-filter=ACMR "$1" HEAD -- |
-    grep -E '\.(test|spec)\.[cm]?[jt]sx?$' || true
+  local changed
+  # Capture git's output first: inside a pipe its failure (a bad base) would read as "no files".
+  changed="$(git diff --name-only --diff-filter=ACMR "$1" HEAD --)" || return $?
+  grep -E '\.(test|spec)\.[cm]?[jt]sx?$' <<<"$changed" || true
+}
+
+# True when <dir>/package.json exists and defines scripts.test.
+has_test_script() {
+  [ -f "$1/package.json" ] || return 1
+  node -e 'process.exit(require(require("path").resolve(process.argv[1], "package.json")).scripts?.test ? 0 : 1)' "$1"
+}
+
+# Root-level test files in <files> (one per line), for one runner: "node" = the .github/scripts
+# *.test.cjs files (CI runs them with `node --test`), "vp" = everything else.
+split_root_tests() {
+  if [ "$1" = node ]; then
+    grep -E '^\.github/scripts/[^/]*\.test\.cjs$' <<<"$2" || true
+  else
+    grep -vE '^\.github/scripts/[^/]*\.test\.cjs$' <<<"$2" || true
+  fi
 }
 
 # Lists built files under <dist> that name <slug>; returns 1 when there are any. A fork has no
@@ -52,6 +72,12 @@ run_touched_tests() {
 web_build_and_links() {
   local slug update_repo workflow=.github/workflows/custom-mac-build.yml
   local cfg=apps/web/vite.config.ts probe=apps/web/vite.compiler-check.config.ts log
+  # The probe config and the log are scratch: remove them on exit or interrupt. Globals, because
+  # the trap runs after this function's locals are gone.
+  scratch_probe="$probe"
+  scratch_log=
+  trap 'rm -f "$scratch_probe" "$scratch_log"' EXIT
+  trap 'exit 130' INT TERM
   slug="$(fork_slug "$(git remote get-url origin)")"
   update_repo="$(sed -nE 's/^[[:space:]]*T3CODE_DESKTOP_UPDATE_REPOSITORY:[[:space:]]*([^[:space:]#]+).*$/\1/p' "$workflow" | head -1)"
   echo "> web build (React Compiler on, skipped components reported), GITHUB_REPOSITORY=$slug T3CODE_DESKTOP_UPDATE_REPOSITORY=${update_repo:-<unset>}"
@@ -64,9 +90,10 @@ web_build_and_links() {
     return 1
   fi
   log="$(mktemp)"
+  scratch_log="$log"
   rm -rf apps/web/dist
   local status=0
-  (cd apps/web && GITHUB_REPOSITORY="$slug" T3CODE_DESKTOP_UPDATE_REPOSITORY="$update_repo" \
+  (cd apps/web && NO_COLOR=1 GITHUB_REPOSITORY="$slug" T3CODE_DESKTOP_UPDATE_REPOSITORY="$update_repo" \
     pnpm exec vp build --config "$(basename "$probe")") >"$log" 2>&1 || status=$?
   rm -f "$probe"
   if [ "$status" -ne 0 ]; then
@@ -97,7 +124,7 @@ web_build_and_links() {
 touched_tests() {
   local base files pkgs pkg failed=()
   base="${SYNC_BASE:-$(git merge-base HEAD origin/custom-v2)}"
-  files="$(touched_test_files "$base")"
+  files="$(touched_test_files "$base")" || return $?
   if [ "$(uname)" = Darwin ]; then
     # Files named *Linux* test Linux-only behaviour (the Mac's file system ignores case, so they fail here).
     files="$(grep -v 'Linux[^/]*$' <<<"$files" || true)"
@@ -115,9 +142,26 @@ touched_tests() {
   for pkg in $pkgs; do
     echo "> touched tests in $pkg"
     if [ "$pkg" = . ]; then
-      # shellcheck disable=SC2046 # one path per line, none with spaces
-      pnpm exec vp test run --passWithNoTests $(grep -vE '^(apps|packages|infra)/' <<<"$files") || failed+=("$pkg")
-    elif [ -f "$pkg/package.json" ]; then
+      local root node_files vp_files
+      root="$(grep -vE '^(apps|packages|infra)/' <<<"$files")"
+      node_files="$(split_root_tests node "$root")"
+      vp_files="$(split_root_tests vp "$root")"
+      if [ -n "$node_files" ]; then
+        # CI runs these with node's own runner (ci.yml, "Test release checks").
+        # shellcheck disable=SC2086 # one path per line, none with spaces
+        node --test $node_files || failed+=("$pkg (node --test)")
+      fi
+      if [ -n "$vp_files" ]; then
+        # shellcheck disable=SC2086
+        pnpm exec vp test run --passWithNoTests $vp_files || failed+=("$pkg")
+      fi
+    elif [ ! -f "$pkg/package.json" ]; then
+      echo "  skipped: $pkg has no package.json, so these files did not run:"
+      grep "^$pkg/" <<<"$files" | indent
+    elif ! has_test_script "$pkg"; then
+      echo "  skipped: $pkg/package.json has no scripts.test, so these files did not run:"
+      grep "^$pkg/" <<<"$files" | indent
+    else
       # shellcheck disable=SC2046
       run_touched_tests "$pkg" $(grep "^$pkg/" <<<"$files") || failed+=("$pkg")
     fi

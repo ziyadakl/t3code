@@ -48,6 +48,25 @@ got="$(cd "$tmp/repo" && touched_test_files main | tr '\n' ' ')"
 expect "touched_test_files lists added and changed test files only" \
   "a.test.ts c.test.tsx dir/f.spec.js g.browser.test.tsx " "$got"
 
+(cd "$tmp/repo" && touched_test_files no-such-base >/dev/null 2>&1)
+expect "touched_test_files fails on a bad base instead of reporting none" "1" "$((($? != 0) ? 1 : 0))"
+
+# --- has_test_script: packages without scripts.test (apps/marketing) are skipped ---
+mkdir -p "$tmp/pk/with" "$tmp/pk/without" "$tmp/pk/nopkg"
+echo '{"scripts":{"test":"vitest run"}}' >"$tmp/pk/with/package.json"
+echo '{"scripts":{"build":"x"}}' >"$tmp/pk/without/package.json"
+has_test_script "$tmp/pk/with"
+expect "has_test_script true when scripts.test exists" "0" "$?"
+has_test_script "$tmp/pk/without"
+expect "has_test_script false when scripts.test is missing" "1" "$?"
+has_test_script "$tmp/pk/nopkg"
+expect "has_test_script false when there is no package.json" "1" "$?"
+
+# --- split_root_tests: .github/scripts/*.test.cjs run under node --test, the rest under vp ---
+root_files=$'.github/scripts/a.test.cjs\nscripts/x.test.ts\n.github/scripts/b.test.cjs'
+expect "split_root_tests node bucket" ".github/scripts/a.test.cjs .github/scripts/b.test.cjs " "$(split_root_tests node "$root_files" | tr '\n' ' ')"
+expect "split_root_tests vp bucket" "scripts/x.test.ts " "$(split_root_tests vp "$root_files" | tr '\n' ' ')"
+
 # --- fork_slug: owner/name of origin, for https and ssh remotes ---
 expect "fork_slug from an https remote" "ziyadakl/t3code" "$(fork_slug https://github.com/ziyadakl/t3code.git)"
 expect "fork_slug from an ssh remote" "ziyadakl/t3code" "$(fork_slug git@github.com:ziyadakl/t3code.git)"
