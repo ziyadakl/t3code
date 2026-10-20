@@ -139,6 +139,15 @@ touched_tests() {
   export TMPDIR
   # The package is the first two path segments (apps/web); files elsewhere run from the repo root.
   pkgs="$(awk -F/ '{ if ($1 == "apps" || $1 == "packages" || $1 == "infra") print $1 "/" $2; else print "." }' <<<"$files" | sort -u)"
+  # Browser tests need the Chromium build each package's Playwright pins, and a sync can bump it.
+  # Same install as ci.yml; a build already in ~/.cache is not downloaded again.
+  local cli
+  for cli in apps/web/node_modules/playwright/cli.js apps/server/node_modules/playwright-core/cli.js; do
+    if grep -qx "${cli%%/node_modules/*}" <<<"$pkgs" && [ -f "$cli" ]; then
+      echo "> test browser for ${cli%%/node_modules/*}"
+      node "$cli" install --only-shell chromium | indent
+    fi
+  done
   for pkg in $pkgs; do
     echo "> touched tests in $pkg"
     if [ "$pkg" = . ]; then
