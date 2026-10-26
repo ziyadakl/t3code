@@ -22,23 +22,12 @@ export class FirefoxCookieReadError extends Schema.TaggedError<FirefoxCookieRead
   }
 }
 
-/**
- * Unset is not the same thing as None — None is an explicit opt-in to
- * cross-site use — so it is imported as Electron's `unspecified`, which lets
- * the target browser apply its own default exactly as Firefox did. Anything
- * unrecognised also lands there rather than on `no_restriction`, since guessing
- * "none" would widen a cookie's scope on import.
- */
+/** Unset and unknown SameSite values stay unspecified; mapping them to None would permit cross-site use. */
 const SAMESITE_NONE = 0;
 const SAMESITE_LAX = 1;
 const SAMESITE_STRICT = 2;
 
-/**
- * Schemas 10–14 carried a second column, `rawSameSite`: the value the cookie
- * actually declared, beside a `sameSite` that Firefox had already defaulted to
- * Lax. Reading such a database before Firefox has migrated it must apply the
- * same rule, or an undeclared cookie is imported as an explicit Lax.
- */
+/** Schemas 10–14 defaulted sameSite to Lax; rawSameSite preserves the declared value until migration. */
 const FIREFOX_RAW_SAMESITE_FIRST_SCHEMA = 10;
 const FIREFOX_RAW_SAMESITE_LAST_SCHEMA = 14;
 
@@ -68,13 +57,7 @@ const CookieRow = Schema.Struct({
 });
 const decodeCookieRows = Schema.decodeUnknownEffect(Schema.Array(CookieRow));
 
-/**
- * Firefox schema 16 (Firefox 129) moved `expiry` from seconds to milliseconds
- * — the migration is `UPDATE moz_cookies SET expiry = expiry * 1000`. Electron
- * wants seconds, so the unit is decided by `PRAGMA user_version` rather than
- * assumed: importing a pre-16 profile as milliseconds would expire every cookie
- * at once, and a post-16 one as seconds would keep them for ~1000× too long.
- */
+/** Schema 16+ stores expiry in milliseconds; older schemas use seconds, which Electron expects. */
 const FIREFOX_EXPIRY_MILLISECONDS_SCHEMA = 16;
 
 const UserVersionRow = Schema.Struct({ user_version: Schema.Number });
@@ -105,11 +88,7 @@ const queryFirefoxCookies = <Row>(
       const sql = yield* SqlClient.SqlClient;
       const [versionRow] = yield* decodeUserVersion(yield* sql`pragma user_version`);
       const schemaVersion = versionRow?.user_version ?? 0;
-      // Only the default container. Firefox isolates cookies per container and
-      // per private window via `originAttributes` (`^userContextId=2`,
-      // `^privateBrowsingId=1`); Electron has no equivalent, so importing them
-      // all would collapse several identities onto one host/name/path and hand
-      // the profile an arbitrary container's session.
+      // Electron cannot represent Firefox containers/private windows; importing them would collapse distinct sessions.
       const rows = yield* decode(
         yield* sql`select ${sql.literal(columns(schemaVersion))}
           from moz_cookies

@@ -26,6 +26,7 @@
  *
  * @module provider/Drivers/ClaudeSkillDispatch
  */
+import type { ServerProviderSkill } from "@t3tools/contracts";
 
 import { SKILL_MENTION_PATTERN, SKILL_NAME_SOURCE } from "@t3tools/shared/composerInlineTokens";
 
@@ -36,6 +37,8 @@ import { SKILL_MENTION_PATTERN, SKILL_NAME_SOURCE } from "@t3tools/shared/compos
  * dropped, so it never becomes part of the command.
  */
 const TYPED_SLASH_PATTERN = new RegExp(`(^|\\s)\\/(${SKILL_NAME_SOURCE})[.,;?!]*(?=\\s|$)`, "gu");
+
+export type ClaudeSkillTarget = Pick<ServerProviderSkill, "path" | "userInvocationOnly">;
 
 export interface ClaudeSkillDispatch {
   /** The whole prompt with mentions as `/name`, or `undefined` when the mention opens it. */
@@ -54,37 +57,44 @@ export interface ClaudeSkillDispatch {
  */
 export function planClaudeSkillDispatch(
   prompt: string,
-  skillNames: ReadonlySet<string>,
+  skills: ReadonlyMap<string, ClaudeSkillTarget>,
 ): ClaudeSkillDispatch | undefined {
   // `$name` uses the composer's own pattern, so a rendered chip and a
-  // dispatched skill are always the same set.
+  // dispatched skill are always the same set; a typed `/name` joins them.
   const mentions = [SKILL_MENTION_PATTERN, TYPED_SLASH_PATTERN]
     .flatMap((pattern) => [...prompt.matchAll(pattern)])
-    .map((match) => ({
-      name: match[2] ?? "",
-      start: (match.index ?? 0) + (match[1]?.length ?? 0),
-      end: (match.index ?? 0) + match[0].length,
-    }))
-    .filter((mention) => skillNames.has(mention.name))
+    .flatMap((match) => {
+      const name = match[2] ?? "";
+      const skill = skills.get(name);
+      if (!skill) return [];
+      const start = (match.index ?? 0) + (match[1]?.length ?? 0);
+      return [{ name, skill, start, end: (match.index ?? 0) + match[0].length }];
+    })
     .sort((left, right) => left.start - right.start);
   const last = mentions.at(-1);
   if (!last) {
     return undefined;
   }
 
-  const trailing = prompt.slice(last.end);
-  const promptWithInlineSlashes = mentions
-    .reduceRight(
-      (text, mention) =>
-        `${text.slice(0, mention.start)}/${mention.name}${text.slice(mention.end)}`,
-      prompt,
-    )
-    .trimEnd();
+  // Only the final skill gets native expansion. Earlier user-only skills need
+  // a fallback to their raw file because Claude's Skill tool refuses them.
+  const annotated = new Set([last.name]);
+  let promptWithInlineSlashes = "";
+  let cursor = 0;
+  for (const mention of mentions) {
+    promptWithInlineSlashes += `${prompt.slice(cursor, mention.start)}/${mention.name}`;
+    if (mention.skill.userInvocationOnly === true && !annotated.has(mention.name)) {
+      promptWithInlineSlashes += ` [The user invoked this skill. Follow the instructions at: ${mention.skill.path}]`;
+      annotated.add(mention.name);
+    }
+    cursor = mention.end;
+  }
+  promptWithInlineSlashes = `${promptWithInlineSlashes}${prompt.slice(cursor)}`.trimEnd();
 
   return {
     leadingText:
       prompt.slice(0, last.start).trim().length > 0 ? promptWithInlineSlashes : undefined,
-    commandText: `/${last.name}${trailing}`.trimEnd(),
+    commandText: `/${last.name}${prompt.slice(last.end)}`.trimEnd(),
     skillName: last.name,
   };
 }

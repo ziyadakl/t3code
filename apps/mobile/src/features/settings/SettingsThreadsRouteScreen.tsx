@@ -1,3 +1,4 @@
+import { Button } from "../../components/ui/Button";
 import { AuthSettingsWriteScope } from "@t3tools/contracts";
 import { readEnvironmentScope, useEnvironmentsWithScope } from "../../state/session";
 import { AutoSettleDaysField } from "./components/AutoSettleDaysField";
@@ -6,7 +7,7 @@ import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScroll
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
 import { useRef, useState } from "react";
-import { Pressable, View } from "react-native";
+import { View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
@@ -190,14 +191,14 @@ function AutoSettleSettingsRows() {
         <SettingsSection title="Usage limits">
           <SettingsSwitchRow
             icon="clock"
-            label="Auto-resume limited threads"
+            label="Resume after usage limits"
             value={uniformMobileSetting(displayTargets, "autoResumeLimitedThreads")}
             disabled={disabled}
             onValueChange={(value) => writeToAll({ autoResumeLimitedThreads: value })}
           />
           <SettingsSwitchRow
             icon="clock"
-            label="Snooze limited threads"
+            label="Snooze until limits reset"
             value={uniformMobileSetting(displayTargets, "snoozeLimitedThreads")}
             disabled={disabled}
             onValueChange={(value) => writeToAll({ snoozeLimitedThreads: value })}
@@ -271,16 +272,12 @@ function AutoSettleSettingsRows() {
             <Text className="text-sm text-foreground-muted">
               {mismatches.map((mismatch) => mismatch.label).join(", ")}
             </Text>
-            <Pressable
-              accessibilityRole="button"
+            <Button
+              label={supportsAutoArchive ? "Apply these defaults" : "Apply auto-settle defaults"}
+              tone="secondary"
               disabled={disabled}
               onPress={() => writeToAll(autoSettlePatch)}
-              className="self-start rounded-full bg-subtle px-4 py-2 active:opacity-70"
-            >
-              <Text className="text-sm font-t3-medium text-foreground">
-                {supportsAutoArchive ? "Apply these defaults" : "Apply auto-settle defaults"}
-              </Text>
-            </Pressable>
+            />
           </View>
         </SettingsSection>
       ) : null}
@@ -292,7 +289,7 @@ function BetaSettingsSection() {
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const preferences = useAtomValue(mobilePreferencesAtom);
   const workingShelfEnabled =
-    AsyncResult.isSuccess(preferences) && preferences.value.workingShelfEnabled === true;
+    AsyncResult.isSuccess(preferences) && preferences.value.workingShelfEnabled !== false;
 
   return (
     <View className="gap-3">

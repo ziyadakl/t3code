@@ -1,10 +1,7 @@
 /**
- * Header control that narrows the sidebar to one machine (environment).
- *
- * Sits with the project scope as a 28px icon in the header group. The icon
- * swaps to the selected machine's icon while a filter is active, the way the
- * project scope swaps to the project favicon, so the header still names the
- * filter. The caller renders it only when more than one machine is known.
+ * Header control that narrows the sidebar to one machine (environment). Its
+ * icon swaps to the selected machine's icon while a filter is active. The
+ * caller renders it only when more than one machine is known.
  */
 import type { EnvironmentId, EnvironmentMachineKind } from "@t3tools/contracts";
 import { ComputerIcon } from "lucide-react";

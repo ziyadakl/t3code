@@ -191,30 +191,31 @@ export type SidebarTopStatusIcon =
   | "waiting"
   | "approval"
   | "input"
+  | "request"
   | "failed"
   | "woke"
   | "done";
 
 /**
- * One table for how each top status reads: the row's badge, a group
- * header's counts, and the counts' order (most urgent first, the key order
- * here). Hues follow the system-wide convention set by sidebar v1 and the
- * mobile Live Activity/widgets (amber approval, indigo input, sky working),
- * so a thread reads the same colour everywhere it surfaces.
+ * One table for how each top status reads: the row's badge, a group header's
+ * counts, and the counts' order (most urgent first, the key order here).
+ * Hues match the mobile Live Activity/widgets.
  */
 export const SIDEBAR_TOP_STATUS_DISPLAY = {
   approval: { label: "Approval", icon: "approval", className: "text-warning-foreground" },
   input: { label: "Input", icon: "input", className: "text-indigo-600 dark:text-indigo-300" },
-  failed: { label: "Failed", icon: "failed", className: "text-error" },
-  limited: { label: "Limited", icon: "failed", className: "text-warning" },
-  woke: { label: "Woke", icon: "woke", className: "text-warning" },
-  done: { label: "Done", icon: "done", className: "text-success" },
+  // A guest is waiting on the owner.
+  request: { label: "Request", icon: "request", className: "text-guest-foreground" },
+  failed: { label: "Failed", icon: "failed", className: "text-error-foreground" },
+  limited: { label: "Limited", icon: "failed", className: "text-warning-foreground" },
+  woke: { label: "Woke", icon: "woke", className: "text-warning-foreground" },
+  done: { label: "Done", icon: "done", className: "text-success-foreground" },
   // Waiting is calm background presence (post-settle background roster), not
   // active progress, so the label keeps full strength.
   waiting: { label: "Waiting", icon: "waiting", className: "text-muted-foreground" },
   // No shimmer: a label that animates forever is noise in a sidebar full of
   // them (and repaints every vsync on high-refresh displays).
-  working: { label: "Working", icon: "working", className: "text-info" },
+  working: { label: "Working", icon: "working", className: "text-info-foreground" },
 } as const satisfies Record<
   SidebarV2TopStatusKind,
   {
@@ -224,11 +225,12 @@ export const SIDEBAR_TOP_STATUS_DISPLAY = {
   }
 >;
 
-export type SidebarCountedStatus = Exclude<SidebarV2TopStatusKind, "working">;
+// A guest request has no "Float to the top" setting, so it is not counted either.
+export type SidebarCountedStatus = Exclude<SidebarV2TopStatusKind, "working" | "request">;
 
 const PROJECT_GROUP_COUNT_ORDER = (
   Object.keys(SIDEBAR_TOP_STATUS_DISPLAY) as SidebarV2TopStatusKind[]
-).filter((status): status is SidebarCountedStatus => status !== "working");
+).filter((status): status is SidebarCountedStatus => status !== "working" && status !== "request");
 
 /** The per-status counts a group header shows: only while folded, since an
     open group's rows carry their own badges. */
@@ -250,13 +252,9 @@ export function resolveSidebarProjectGroupCounts(
 }
 
 /**
- * The active section's rows in the grouped layout: the "Needs you" label and
- * its full rows, then each group's header with its one-line rows when open
- * (a row is one-line by sitting under a group header).
- * A folded group shows only its header, except for the open thread, which
- * stays visible beneath it (the shelves make the same exception) without
- * opening the group. `visibleThreads` is the rendered order, for keyboard
- * navigation and jump hints.
+ * The active section's rows in the grouped layout: "Needs you" and its rows,
+ * then each group's header with its one-line rows when open. A folded group
+ * keeps the open thread visible. `visibleThreads` is the rendered order.
  */
 export function buildSidebarGroupedActiveRows<TThread>(input: {
   readonly model: SidebarGroupedActiveModel<TThread>;

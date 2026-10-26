@@ -455,9 +455,9 @@ describe("resolveSidebarProjectGroupCounts", () => {
         { open: false },
       ),
     ).toEqual([
-      { status: "failed", count: 1, label: "Failed", className: "text-error" },
-      { status: "woke", count: 4, label: "Woke", className: "text-warning" },
-      { status: "done", count: 2, label: "Done", className: "text-success" },
+      { status: "failed", count: 1, label: "Failed", className: "text-error-foreground" },
+      { status: "woke", count: 4, label: "Woke", className: "text-warning-foreground" },
+      { status: "done", count: 2, label: "Done", className: "text-success-foreground" },
       { status: "waiting", count: 1, label: "Waiting", className: "text-muted-foreground" },
     ]);
   });
