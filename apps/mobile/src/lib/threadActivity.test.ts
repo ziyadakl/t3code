@@ -720,20 +720,22 @@ describe("buildThreadFeed", () => {
     const collapsed = deriveThreadFeedPresentation(feed, latestRun, new Set());
     expect(collapsed.map((entry) => entry.id)).toEqual([
       "message-user",
+      "message-opening",
       "run-fold:run-1",
       "message-assistant",
     ]);
-    expect(collapsed[1]).toMatchObject({
+    expect(collapsed[1]).toMatchObject({ message: { text: opening.text } });
+    expect(collapsed[2]).toMatchObject({
       type: "run-fold",
-      createdAt: "2026-06-20T00:00:01.500Z",
+      createdAt: "2026-06-20T00:00:02.000Z",
       label: "Worked for 2.0s",
     });
 
     const expanded = deriveThreadFeedPresentation(feed, latestRun, new Set([runId]));
     expect(expanded.map((entry) => entry.type)).toEqual([
       "message",
-      "run-fold",
       "message",
+      "run-fold",
       "activity-group",
       "message",
       "message",
@@ -1373,6 +1375,7 @@ describe("subagent continued by a later turn", () => {
       "answer-1",
       "prompt-2",
       `run-fold:${run2}`,
+      "answer-2",
       "closing-2",
     ]);
   });

@@ -472,7 +472,16 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
           protocol: SERVICE_LAUNCHER_PROTOCOL,
           activeVersion: "1.2.4",
         });
-        expect(yield* fs.readFileString(plan.unitPath)).toContain("versions/1.2.4/t3");
+        if (platform === "darwin") {
+          // The launch agent runs the fixed launcher copy, which holds the new version.
+          const launcherDir = path.join(baseDir, "runtime", "launcher");
+          expect(yield* fs.readFileString(plan.unitPath)).toContain(path.join(launcherDir, "t3"));
+          expect(yield* fs.readFileString(path.join(launcherDir, ".install-complete"))).toBe(
+            "1.2.4\n",
+          );
+        } else {
+          expect(yield* fs.readFileString(plan.unitPath)).toContain("versions/1.2.4/t3");
+        }
         expect(
           commands.filter(
             (command) =>
