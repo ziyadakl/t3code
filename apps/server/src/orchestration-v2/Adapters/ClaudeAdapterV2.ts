@@ -2188,7 +2188,7 @@ const estimateClaudePdfPages = (bytes: Buffer): number | null => {
 const CLAUDE_ATTACHMENT_MAX_BYTES = 28 * 1024 * 1024;
 const CLAUDE_ATTACHMENT_MAX_PAGES = 100;
 
-const makeClaudeAttachmentBudget = (used?: { pagesUsed: number; bytesUsed: number }) => ({
+export const makeClaudeAttachmentBudget = (used?: { pagesUsed: number; bytesUsed: number }) => ({
   committed: { pages: used?.pagesUsed ?? 0, bytes: used?.bytesUsed ?? 0 },
   pending: { pages: 0, bytes: 0 },
   compacting: null as { pages: number; bytes: number } | null,
@@ -2227,7 +2227,7 @@ const reserveClaudePdfBudget = (
       }).pipe(Effect.andThen(persist)),
   );
 
-const makeClaudeUserMessageWithAttachments = Effect.fnUntraced(function* (input: {
+export const makeClaudeUserMessageWithAttachments = Effect.fnUntraced(function* (input: {
   readonly text: string;
   readonly attachments: ReadonlyArray<ChatAttachment>;
   readonly priority?: SDKUserMessage["priority"];
@@ -2287,9 +2287,8 @@ const makeClaudeUserMessageWithAttachments = Effect.fnUntraced(function* (input:
     encodeClaudeJson(
       dispatch
         ? [
-            ...(dispatch.leadingText === undefined
-              ? []
-              : [{ type: "text", text: dispatch.leadingText }]),
+            // The block actually sent: skill text plus the attachment paths and context.
+            ...(leadingText.length === 0 ? [] : [{ type: "text", text: leadingText }]),
             { type: "text", text: dispatch.commandText },
           ]
         : [{ type: "text", text: textWithAttachmentPaths }],

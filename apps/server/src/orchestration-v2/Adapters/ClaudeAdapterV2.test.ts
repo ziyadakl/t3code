@@ -1403,6 +1403,35 @@ describe("ClaudeAdapterV2 resume compaction", () => {
 });
 
 describe("ClaudeAdapterV2 attachments", () => {
+  it.effect("budgets the leading block of a skill dispatch, attachment paths included", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const budget = ClaudeAdapterV2.makeClaudeAttachmentBudget();
+      const pdfReservation = { budget, pages: 0, bytes: 0, delivered: false, commit() {} };
+      const message = yield* ClaudeAdapterV2.makeClaudeUserMessageWithAttachments({
+        text: "$implement fixes",
+        attachments: [
+          ChatFileAttachment.make({
+            type: "file",
+            id: ChatAttachmentId.make("budget-dispatch-12345678-1234-1234-1234-123456789abc"),
+            name: "notes.txt",
+            mimeType: "text/plain",
+            sizeBytes: 4,
+          }),
+        ],
+        attachmentsDir: "/tmp/t3-claude-budget-attachments",
+        fileSystem,
+        pdfReservation: pdfReservation as never,
+        skills: new Map([["implement", { path: "/skills/implement/SKILL.md" }]]),
+      });
+      const content = message.message.content;
+      assert.isArray(content);
+      assert.include(JSON.stringify(content), "/tmp/t3-claude-budget-attachments");
+      // What is reserved covers every block sent, the attachment note in the leading one too.
+      assert.isAtLeast(pdfReservation.bytes, Buffer.byteLength(JSON.stringify(content)));
+      assert.equal(budget.pending.bytes, pdfReservation.bytes);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
   it.effect.each([
     ...[
       "retained-images",
