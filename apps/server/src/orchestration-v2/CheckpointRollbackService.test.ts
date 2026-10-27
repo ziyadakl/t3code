@@ -700,6 +700,49 @@ it.layer(ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMe
       }),
     );
 
+    it.effect.each([
+      {
+        name: "keeps the imported prompts numbered after the target",
+        target: 1,
+        rolledBack: [2, 3, 4],
+        untouched: [5, 6],
+      },
+      {
+        name: "rolls back the turns T3 Code ran after an imported target",
+        target: 5,
+        rolledBack: [1, 2, 3, 4, 6],
+        untouched: [],
+      },
+    ])("checkpoint rollback in an imported chat $name", ({ target, rolledBack, untouched }) =>
+      Effect.gen(function* () {
+        const history = yield* seedRollbackHistory;
+        const sql = yield* SqlClient.SqlClient;
+        const { threadId } = history;
+        // The desktop-app prompts come first in the conversation but carry the higher ordinals.
+        for (const ordinal of [5, 6]) {
+          yield* sql`UPDATE orchestration_v2_projection_runs
+            SET payload_json = json_set(payload_json, '$.userMessageId', ${`${threadId}:imported-${ordinal}`})
+            WHERE thread_id = ${threadId} AND ordinal = ${ordinal}`;
+        }
+        yield* history.rollback(target);
+        const runs = yield* sql<{ ordinal: number; status: string }>`
+          SELECT ordinal, status FROM orchestration_v2_projection_runs
+          WHERE thread_id = ${threadId} ORDER BY ordinal`;
+        const statusOf = (ordinal: number) => runs.find((run) => run.ordinal === ordinal)?.status;
+        for (const ordinal of rolledBack)
+          assert.equal(statusOf(ordinal), "rolled_back", `run ${ordinal}`);
+        const original = [
+          "completed",
+          "completed",
+          "completed",
+          "interrupted",
+          "failed",
+          "cancelled",
+        ];
+        for (const ordinal of untouched) assert.equal(statusOf(ordinal), original[ordinal - 1]);
+        assert.sameMembers(history.deletedRefs, rolledBack.map(history.checkpointId));
+      }),
+    );
     it.effect(
       "rewinds stopped runs repeatedly without counting discarded provider turns again",
       () =>
