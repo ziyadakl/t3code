@@ -735,133 +735,151 @@ it.layer(ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMe
     );
   },
 );
-it.effect("a Codex rollback marks stale only the ready later checkpoints of its own scope", () => {
-  const threadId = ThreadId.make("codex-two-scopes");
-  const providerThreadId = ProviderThreadId.make("codex-two-scopes-provider");
-  const providerSessionId = ProviderSessionId.make("codex-two-scopes-session");
-  const instanceId = ProviderInstanceId.make("codex");
-  const restoredScopeId = CheckpointScopeId.make("codex-two-scopes-restored");
-  const otherScopeId = CheckpointScopeId.make("codex-two-scopes-other");
-  const providerThread = {
-    id: providerThreadId,
-    providerSessionId,
-    providerInstanceId: instanceId,
-  };
-  const checkpoint = (
-    id: string,
-    scopeId: CheckpointScopeId,
-    ordinal: number | null,
-    status: string,
-  ) => ({
-    id: CheckpointId.make(id),
-    scopeId,
-    status,
-    appRunOrdinal: ordinal,
-    runId: null,
-    nodeId: null,
-  });
-  const projection = {
-    thread: {
-      worktreePath: process.cwd(),
-      activeProviderThreadId: providerThreadId,
-      modelSelection: { instanceId, model: "gpt-5.1-codex" },
-    },
-    providerThreads: [providerThread],
-    providerSessions: [],
-    providerTurns: [1, 2].map((ordinal) => ({
-      id: `turn-${ordinal}`,
-      providerThreadId,
-      runAttemptId: `attempt-${ordinal}`,
-      ordinal,
-      status: "completed",
-    })),
-    nodes: [],
-    attempts: [1, 2].map((ordinal) => ({ id: `attempt-${ordinal}`, runId: `run-${ordinal}` })),
-    checkpoints: [
-      checkpoint("restored-start", restoredScopeId, null, "ready"),
-      checkpoint("restored-1", restoredScopeId, 1, "ready"),
-      checkpoint("restored-2", restoredScopeId, 2, "ready"),
-      checkpoint("restored-2-missing", restoredScopeId, 2, "missing"),
-      checkpoint("other-2", otherScopeId, 2, "ready"),
-    ],
-    checkpointScopes: [
-      { id: restoredScopeId, cwd: process.cwd() },
-      { id: otherScopeId, cwd: process.cwd() },
-    ],
-    runs: [1, 2].map((ordinal) => ({
-      id: `run-${ordinal}`,
-      threadId,
-      userMessageId: `message-${ordinal}`,
-      ordinal,
-      status: "completed",
-      rootNodeId: null,
-      activeAttemptId: `attempt-${ordinal}`,
-    })),
-  } as unknown as OrchestrationV2ThreadProjection;
-  const deletedRefs: Array<string> = [];
-  const markedStale: Array<string> = [];
-  const layerTest = layerCheckpointRollbackService.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        Layer.mock(CheckpointService.CheckpointServiceV2)({
-          restore: () => Effect.void,
-          deleteStaleRefs: ({ scope, checkpoints }) =>
-            Effect.sync(() => {
-              deletedRefs.push(...checkpoints.map((candidate) => `${scope.id}:${candidate.id}`));
-            }),
-        }),
-        Layer.mock(EventSink.EventSinkV2)({
-          write: ({ events }) =>
-            Effect.sync(() => {
-              for (const event of events) {
-                if (event.type === "checkpoint.captured") markedStale.push(event.payload.id);
-              }
-              return [];
-            }),
-        }),
-        ThreadCommandExecutor.layer,
-        IdAllocator.layer,
-        Layer.mock(ProjectionStore.ProjectionStoreV2)({
-          getThreadRecords: () => Effect.succeed(projection),
-          getThreadProviderContext: () => Effect.succeed({ providerSessions: [] } as never),
-          getCheckpointContext: () =>
-            Effect.succeed({
-              checkpointScopes: [{ cwd: process.cwd() }],
-              runs: [],
-              checkpoints: [],
-            } as never),
-          getShellSnapshot: () =>
-            Effect.succeed({
-              schemaVersion: 1,
-              snapshotSequence: 0,
-              threads: [],
-              archivedThreads: [],
-            }),
-        }),
-        Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
-          open: () =>
-            Effect.succeed({
-              rollbackThread: () => Effect.succeed({ providerThread }),
-            } as never),
-        }),
-        Layer.mock(RuntimePolicy.RuntimePolicyV2)({ resolve: () => Effect.succeed({} as never) }),
-      ),
-    ),
-  );
-  return Effect.gen(function* () {
-    const service = yield* CheckpointRollbackService.CheckpointRollbackServiceV2;
-    yield* service.execute({
-      threadId,
-      providerThreadId,
-      checkpointId: CheckpointId.make("restored-1"),
-      scopeId: restoredScopeId,
+it.effect(
+  "a Codex rollback marks the context's later checkpoints stale and deletes their refs",
+  () => {
+    const threadId = ThreadId.make("codex-two-scopes");
+    const providerThreadId = ProviderThreadId.make("codex-two-scopes-provider");
+    const providerSessionId = ProviderSessionId.make("codex-two-scopes-session");
+    const instanceId = ProviderInstanceId.make("codex");
+    const restoredScopeId = CheckpointScopeId.make("codex-two-scopes-restored");
+    const otherScopeId = CheckpointScopeId.make("codex-two-scopes-other");
+    const providerThread = {
+      id: providerThreadId,
+      providerSessionId,
+      providerInstanceId: instanceId,
+    };
+    const checkpoint = (
+      id: string,
+      scopeId: CheckpointScopeId,
+      ordinal: number | null,
+      status: string,
+    ) => ({
+      id: CheckpointId.make(id),
+      scopeId,
+      status,
+      appRunOrdinal: ordinal,
+      runId: null,
+      nodeId: null,
     });
+    const projection = {
+      thread: {
+        worktreePath: process.cwd(),
+        activeProviderThreadId: providerThreadId,
+        modelSelection: { instanceId, model: "gpt-5.1-codex" },
+      },
+      providerThreads: [providerThread],
+      providerSessions: [],
+      providerTurns: [1, 2].map((ordinal) => ({
+        id: `turn-${ordinal}`,
+        providerThreadId,
+        runAttemptId: `attempt-${ordinal}`,
+        ordinal,
+        status: "completed",
+      })),
+      nodes: [],
+      attempts: [1, 2].map((ordinal) => ({ id: `attempt-${ordinal}`, runId: `run-${ordinal}` })),
+      checkpoints: [
+        checkpoint("restored-start", restoredScopeId, null, "ready"),
+        checkpoint("restored-1", restoredScopeId, 1, "ready"),
+        checkpoint("restored-2", restoredScopeId, 2, "ready"),
+        checkpoint("restored-2-missing", restoredScopeId, 2, "missing"),
+        checkpoint("other-2", otherScopeId, 2, "ready"),
+      ],
+      checkpointScopes: [
+        { id: restoredScopeId, cwd: process.cwd() },
+        { id: otherScopeId, cwd: process.cwd() },
+      ],
+      runs: [1, 2].map((ordinal) => ({
+        id: `run-${ordinal}`,
+        threadId,
+        userMessageId: `message-${ordinal}`,
+        ordinal,
+        status: "completed",
+        rootNodeId: null,
+        activeAttemptId: `attempt-${ordinal}`,
+      })),
+    } as unknown as OrchestrationV2ThreadProjection;
+    const deletedRefs: Array<string> = [];
+    const markedStale: Array<string> = [];
+    const layerTest = layerCheckpointRollbackService.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.mock(CheckpointService.CheckpointServiceV2)({
+            restore: () => Effect.void,
+            deleteStaleRefs: ({ scope, checkpoints }) =>
+              Effect.sync(() => {
+                deletedRefs.push(...checkpoints.map((candidate) => `${scope.id}:${candidate.id}`));
+              }),
+          }),
+          Layer.mock(EventSink.EventSinkV2)({
+            write: ({ events }) =>
+              Effect.sync(() => {
+                for (const event of events) {
+                  if (event.type === "checkpoint.captured") markedStale.push(event.payload.id);
+                }
+                return [];
+              }),
+          }),
+          ThreadCommandExecutor.layer,
+          IdAllocator.layer,
+          Layer.mock(ProjectionStore.ProjectionStoreV2)({
+            getThread: () => Effect.succeed(projection.thread),
+            getCheckpointRollbackContext: () =>
+              Effect.succeed({
+                thread: projection.thread,
+                providerThread,
+                providerSession: undefined,
+                checkpoint: projection.checkpoints[1],
+                scope: projection.checkpointScopes[0],
+                targetAttempt: projection.attempts[0],
+                providerTurns: projection.providerTurns,
+                rolledBackAttemptIds: [],
+                runsToRollback: [projection.runs[1]],
+                rootNodes: [],
+                // The store's query keeps one scope's ready checkpoints after the target.
+                staleCheckpoints: [projection.checkpoints[2]],
+              } as never),
+            getThreadProviderContext: () => Effect.succeed({ providerSessions: [] } as never),
+            getCheckpointContext: () =>
+              Effect.succeed({
+                checkpointScopes: [{ cwd: process.cwd() }],
+                runs: [],
+                checkpoints: [],
+              } as never),
+            getShellSnapshot: () =>
+              Effect.succeed({
+                schemaVersion: 1,
+                snapshotSequence: 0,
+                threads: [],
+                archivedThreads: [],
+              }),
+          }),
+          Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
+            open: () =>
+              Effect.succeed({
+                rollbackThread: () => Effect.succeed({ providerThread }),
+              } as never),
+          }),
+          Layer.mock(RuntimePolicy.RuntimePolicyV2)({ resolve: () => Effect.succeed({} as never) }),
+        ),
+      ),
+    );
+    return Effect.gen(function* () {
+      const service = yield* CheckpointRollbackService.CheckpointRollbackServiceV2;
+      yield* service.execute({
+        threadId,
+        providerThreadId,
+        checkpointId: CheckpointId.make("restored-1"),
+        scopeId: restoredScopeId,
+      });
 
-    // As before rewind existed: the other scope and non-ready checkpoints are left alone.
-    assert.deepEqual(markedStale, ["restored-2"]);
-    assert.deepEqual(deletedRefs, [`${restoredScopeId}:restored-2`]);
-  }).pipe(Effect.provide(layerTest));
-});
+      // The other scope and non-ready checkpoints are left alone.
+      assert.deepEqual(markedStale, ["restored-2"]);
+      assert.deepEqual(deletedRefs, [`${restoredScopeId}:restored-2`]);
+    }).pipe(Effect.provide(layerTest));
+  },
+);
 
 /** A Claude thread whose second message is rewound; `secondRun` is its run's status. */
 const rewindLayer = (input: {
@@ -932,6 +950,7 @@ const rewindLayer = (input: {
         ThreadCommandExecutor.layer,
         IdAllocator.layer,
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
+          getThread: () => Effect.succeed(projection.thread),
           getThreadRecords: () => Effect.succeed(projection),
         }),
         Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
