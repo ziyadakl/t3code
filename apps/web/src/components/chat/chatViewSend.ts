@@ -261,7 +261,7 @@ export async function rewindToMessage(input: {
               });
         if (result._tag === "Failure") throw squashAtomCommandFailure(result);
       },
-      { awaitsRecordedOutcome: action.type === "rewind" },
+      { awaitsRecordedOutcome: action.type === "rewind", turnCount: input.turnCount },
     );
     if (!restoresPrompt) return { error: null, prompt: null, notice };
     const currentPrompt = store.getComposerDraft(draftTarget)?.prompt ?? "";

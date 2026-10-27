@@ -1225,22 +1225,59 @@ export function decideMessageRewindStart(input: {
  * back or the thread records this rewind finished, with the server's notice if any; rejects
  * with the reason once it records a failure. With `awaitsRecordedOutcome` (a rewind) only
  * the recorded outcome ends the wait, unless a later rewind took over the thread.
+ *
+ * The message is found by id, so the wait does not depend on run numbers. A long thread pages
+ * old messages and runs out of the projection; with `turnCount` (the turns kept) the wait then
+ * falls back to the retained runs numbered after it: it needs one of them still settled to
+ * start, and ends once none is, so a shallower rewind by another client does not end it early.
+ * A target already rolled back (another client rewound it first) is rejected, not waited for.
  */
 export async function waitForRevertedMessage(
   threadRef: ScopedThreadRef,
   messageId: MessageId,
   requestId: CommandId,
   revert: () => Promise<void>,
-  options: { readonly awaitsRecordedOutcome?: boolean; readonly timeoutMs?: number } = {},
+  options: {
+    readonly awaitsRecordedOutcome?: boolean;
+    readonly timeoutMs?: number;
+    readonly turnCount?: number;
+  } = {},
 ): Promise<string | null> {
   const timeoutMs = options.timeoutMs ?? 120_000;
   const threadAtom = environmentThreadDetails.stateAtom(threadRef);
   const readProjection = () => Option.getOrNull(appAtomRegistry.get(threadAtom).data);
   const initial = readProjection();
-  if (!initial?.messages.some((message) => message.id === messageId)) {
-    throw new Error("The message to rewind is no longer available.");
+  const messageRunId = initial?.messages.find((message) => message.id === messageId)?.runId;
+  const targetRun = initial?.runs.find((run) => run.id === messageRunId);
+  const isSettledRun = (status: string) =>
+    status === "completed" ||
+    status === "interrupted" ||
+    status === "failed" ||
+    status === "cancelled";
+  const turnCount = options.turnCount;
+  // Paging can omit the message and its run. The rollback commits the whole settled suffix at once.
+  const pagedOutWitness =
+    targetRun === undefined && turnCount !== undefined
+      ? initial?.runs.reduce<(typeof initial.runs)[number] | undefined>(
+          (latest, run) =>
+            run.ordinal <= turnCount || !isSettledRun(run.status)
+              ? latest
+              : latest === undefined || run.ordinal > latest.ordinal
+                ? run
+                : latest,
+          undefined,
+        )
+      : undefined;
+  if (targetRun === undefined && pagedOutWitness === undefined) {
+    throw new Error(
+      turnCount === undefined
+        ? "The message to rewind is no longer available."
+        : "The thread has changed. Select a message to rewind again.",
+    );
   }
-  const messageRunId = initial.messages.find((message) => message.id === messageId)?.runId;
+  if (targetRun?.status === "rolled_back") {
+    throw new Error("The thread has changed. Select a message to rewind again.");
+  }
   return new Promise<string | null>((resolve, reject) => {
     let settled = false;
     let accepted = false;
@@ -1270,7 +1307,12 @@ export async function waitForRevertedMessage(
       if (
         accepted &&
         (options.awaitsRecordedOutcome !== true || thread.thread.rollbackRequestId !== requestId) &&
-        thread.runs.some((run) => run.id === messageRunId && run.status === "rolled_back")
+        (pagedOutWitness === undefined
+          ? thread.runs.some((run) => run.id === messageRunId && run.status === "rolled_back")
+          : thread.runs.some(
+              (run) => run.id === pagedOutWitness.id && run.status === "rolled_back",
+            ) &&
+            !thread.runs.some((run) => run.ordinal > (turnCount ?? 0) && isSettledRun(run.status)))
       )
         finish();
     };
