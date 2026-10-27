@@ -43,11 +43,6 @@ concurrency:
   group: custom-mac-build-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  # Keep in step with SEA_NODE_VERSION in apps/server/vite.config.ts; the
-  # single-executable build needs a Node 25.7+ host, unlike the repo's own Node.
-  VP_NODE_VERSION: "26.8.2"
-
 jobs:
   build:
     name: Build ${{ matrix.platform }} ${{ matrix.arch }} CLI archive
