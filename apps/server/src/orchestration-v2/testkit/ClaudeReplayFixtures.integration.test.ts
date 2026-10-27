@@ -63,11 +63,10 @@ type FilesRewound = {
 };
 
 /**
- * The thread_rollback recording, as a Claude session with file checkpoints on
- * answers it: each prompt is echoed with its SDK uuid. After the second turn,
- * Claude answers a dry run of the second prompt with `answers.dryRun`, then a
- * restore with `answers.restored` when there is one. Frame shapes are from a
- * live run (SDK 0.3.276, CLI 2.1.292); the recording predates checkpoints.
+ * The thread_rollback recording as a Claude session with file checkpoints: each prompt is
+ * echoed with its SDK uuid. After the second turn Claude answers a dry run of the second
+ * prompt with `answers.dryRun`, then a restore with `answers.restored` when there is one.
+ * Frame shapes are from a live run (SDK 0.3.276, CLI 2.1.292).
  */
 function withFileCheckpoints(
   raw: ProviderReplayTranscript,
@@ -124,82 +123,6 @@ function metadataString(transcript: ProviderReplayTranscript, key: string): stri
     throw new Error(`${transcript.scenario} metadata.${key} must be a string.`);
   }
   return value;
-}
-
-function metadataStringArray(
-  transcript: ProviderReplayTranscript,
-  key: string,
-): ReadonlyArray<string> {
-  const value = transcript.metadata?.[key];
-  if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) {
-    throw new Error(`${transcript.scenario} metadata.${key} must be a string array.`);
-  }
-  return value;
-}
-
-type FramedReplayEntry = Extract<
-  ProviderReplayTranscript["entries"][number],
-  { readonly frame: unknown }
->;
-
-function frameRecord(entry: FramedReplayEntry): Record<string, unknown> {
-  if (!isRecord(entry.frame)) {
-    throw new Error("Replay entry frame must be an object.");
-  }
-  return entry.frame;
-}
-
-function findEntryFrame(
-  transcript: ProviderReplayTranscript,
-  label: string,
-): Record<string, unknown> {
-  const entry = transcript.entries.find(
-    (candidate): candidate is FramedReplayEntry =>
-      "label" in candidate && candidate.label === label && "frame" in candidate,
-  );
-  assert.isDefined(entry, `${transcript.scenario} must include replay entry ${label}`);
-  return frameRecord(entry);
-}
-
-function successResultTexts(transcript: ProviderReplayTranscript): ReadonlyArray<string> {
-  return transcript.entries.flatMap((entry) => {
-    if (entry.type !== "emit_inbound" || !isRecord(entry.frame)) {
-      return [];
-    }
-    if (entry.frame.type !== "result" || entry.frame.subtype !== "success") {
-      return [];
-    }
-    return typeof entry.frame.result === "string" ? [entry.frame.result] : [];
-  });
-}
-
-function claudeToolUseNamesFromTranscript(
-  transcript: ProviderReplayTranscript,
-): ReadonlyArray<string> {
-  return transcript.entries.flatMap((entry) => {
-    if (
-      entry.type !== "emit_inbound" ||
-      !isRecord(entry.frame) ||
-      entry.frame.type !== "assistant"
-    ) {
-      return [];
-    }
-
-    const message = entry.frame.message;
-    const content = isRecord(message) ? message.content : undefined;
-    if (!Array.isArray(content)) {
-      return [];
-    }
-
-    return content.flatMap((part) =>
-      isRecord(part) &&
-      typeof part.id === "string" &&
-      typeof part.name === "string" &&
-      "input" in part
-        ? [part.name]
-        : [],
-    );
-  });
 }
 
 function runClaudeReplayFixture(input: ReplayFixtureCase) {
@@ -535,10 +458,9 @@ describe("Claude Agent SDK replay fixtures", () => {
         // The recording's last reply holds only a tool_use block.
         const toolCallReply = "ae2c90aa-4ded-4184-941b-ff32527cc9de";
         assert.equal(stopped.nativeTurnRef?.nativeId, toolCallReply);
-        // Rewinding a later message keeps this turn: the session resumes at
-        // that reply, with its tool call unanswered. Claude Code repairs it
-        // when the next prompt goes out: CLI 2.1.292 adds a tool_result
-        // "[Tool result missing due to internal error]" (ensureToolResultPairing),
+        // Rewinding a later message keeps this turn: the session resumes at that reply with
+        // its tool call unanswered. Claude Code repairs it on the next prompt (CLI 2.1.292 adds a
+        // tool_result "[Tool result missing due to internal error]", ensureToolResultPairing),
         // so the API never sees a tool call without a result.
         assert.equal(
           yield* ClaudeAdapterV2.resolveClaudeRollbackResumeSessionAt({

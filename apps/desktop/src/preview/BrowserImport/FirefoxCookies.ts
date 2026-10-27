@@ -73,33 +73,31 @@ const expiryToSeconds = (expiry: number, schemaVersion: number): number | undefi
  * version) from the default container's rows. Listing and import both read
  * through here, so they agree on the schema version and on which rows count.
  */
-const queryFirefoxCookies = <Row>(
+const queryFirefoxCookies = Effect.fn("FirefoxCookies.queryFirefoxCookies")(function* <Row>(
   cookieDatabasePath: string,
   columns: (schemaVersion: number) => string,
   decode: (raw: unknown) => Effect.Effect<ReadonlyArray<Row>, Schema.SchemaError>,
-) =>
-  Effect.gen(function* () {
-    const readFailed = (cause: unknown) =>
-      new FirefoxCookieReadError({ cookieDatabasePath, cause });
-    const snapshotPath = yield* snapshotCookieDatabase(cookieDatabasePath).pipe(
-      Effect.mapError(readFailed),
-    );
-    return yield* Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      const [versionRow] = yield* decodeUserVersion(yield* sql`pragma user_version`);
-      const schemaVersion = versionRow?.user_version ?? 0;
-      // Electron cannot represent Firefox containers/private windows; importing them would collapse distinct sessions.
-      const rows = yield* decode(
-        yield* sql`select ${sql.literal(columns(schemaVersion))}
+) {
+  const readFailed = (cause: unknown) => new FirefoxCookieReadError({ cookieDatabasePath, cause });
+  const snapshotPath = yield* snapshotCookieDatabase(cookieDatabasePath).pipe(
+    Effect.mapError(readFailed),
+  );
+  return yield* Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const [versionRow] = yield* decodeUserVersion(yield* sql`pragma user_version`);
+    const schemaVersion = versionRow?.user_version ?? 0;
+    // Electron cannot represent Firefox containers/private windows; importing them would collapse distinct sessions.
+    const rows = yield* decode(
+      yield* sql`select ${sql.literal(columns(schemaVersion))}
           from moz_cookies
          where originAttributes = ''`,
-      );
-      return { rows, schemaVersion };
-    }).pipe(
-      Effect.provide(NodeSqliteClient.layer({ filename: snapshotPath, readonly: true })),
-      Effect.mapError(readFailed),
     );
-  });
+    return { rows, schemaVersion };
+  }).pipe(
+    Effect.provide(NodeSqliteClient.layer({ filename: snapshotPath, readonly: true })),
+    Effect.mapError(readFailed),
+  );
+});
 
 const MetadataRow = Schema.Struct({
   host: Schema.String,

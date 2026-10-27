@@ -139,11 +139,10 @@ const decodeConsumeResponse = Schema.decodeUnknownEffect(
 );
 
 /**
- * Claude windows from the rate-limit headers the hub saved off the account's
- * last real request (`anthropic-ratelimit-unified-5h-utilization: "0.07"`,
- * `...-5h-reset: "<epoch seconds>"`). Used when the live usage read fails.
- * A window whose reset has passed has rolled over since, so it reads 0% with
- * no reset. Null when the hub holds no usable signal.
+ * Claude windows from the rate-limit headers the hub saved off the account's last real
+ * request (`anthropic-ratelimit-unified-5h-utilization`, `...-5h-reset` in epoch seconds),
+ * used when the live read fails. A window whose reset has passed reads 0% with no reset.
+ * Null when the hub holds no usable signal.
  */
 function claudePassiveWindows(
   quota: unknown,

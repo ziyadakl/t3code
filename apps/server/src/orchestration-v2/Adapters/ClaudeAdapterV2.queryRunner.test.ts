@@ -18,10 +18,9 @@ const assistantMessageId = "4a1d9e3c-7b2f-4c6a-8e10-2d5b9f3c7a02";
 const subagentId = "a1b2c3d4e5f6";
 const subagentToolUseId = "toolu_01SubagentLaunch";
 
-// The SDK's session helpers find transcripts under CLAUDE_CONFIG_DIR, read from
-// the process environment and cached on first use. A provider instance with its
-// own Claude home keeps its transcripts there, not wherever the server's own
-// environment points, so the runner must reach them through that instance's
+// The SDK's session helpers find transcripts under CLAUDE_CONFIG_DIR, read from the
+// process environment and cached on first use. A provider instance with its own Claude
+// home keeps transcripts there, so the runner must reach them through that instance's
 // environment. The server's home here is an empty directory.
 const writeHomes = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;

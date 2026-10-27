@@ -1109,11 +1109,9 @@ export interface MessageRewindMenuRow {
 }
 
 /**
- * The rewind menu for one sent message: every choice T3 Code can carry out,
- * in Claude Code's order, from the first paint. The code choices stay
- * disabled until Claude's dry run says restoring would change a file, so no
- * row moves under a tap when the dry run returns. `note` tells the user what
- * a code restore would do, or why there is none.
+ * The rewind menu for one sent message: every choice T3 Code can carry out, in Claude Code's
+ * order. The code choices stay disabled until Claude's dry run says a restore would change a
+ * file, so no row moves when it returns. `note` says what a code restore does, or why none.
  */
 export function deriveMessageRewindMenu(input: {
   /** Null while the dry run is in flight, or when it failed. */
@@ -1186,17 +1184,10 @@ export async function loadThreadRewindPreview(
   };
 }
 /**
- * The next step of a click on a message's rewind arrow. Call it once before
- * anything happens, and again with `afterStop` and the settled runs when it
- * answered `stop-first`:
- * - `refuse`: show `reason` and do nothing. A Claude queue is refused before
- *   any Stop, so a click never kills a turn only to refuse afterwards.
- * - `stop-first`: interrupt the running turn and wait for it to settle.
- * - `check-files`: ask Claude for a dry run, then `decideMessageRewindStart`.
- * - `ask`: open the rewind dialog. Other providers ask after a Stop because
- *   the stopped turn's checkpoint, and so whether it changed files, may not
- *   exist yet; asking is the safe choice.
- * - `revert`: rewind now; the revert itself decides whether files matter.
+ * The next step of a click on a message's rewind arrow; call again with `afterStop` and the
+ * settled runs after `stop-first` (interrupt, wait). `refuse`: show `reason` (a Claude queue
+ * is refused before any Stop); `check-files`: dry run, then `decideMessageRewindStart`;
+ * `ask`: open the dialog (other providers after a Stop); `revert`: rewind now.
  */
 export function planMessageRewind(input: {
   readonly canInterrupt: boolean;
@@ -1230,15 +1221,10 @@ export function decideMessageRewindStart(input: {
     : { kind: "ask" };
 }
 /**
- * Runs `revert` (the rollback command `requestId`) and resolves once the
- * message's run is rolled back, or the thread records that this rewind
- * finished (a code restore rolls back no run). Resolves with the server's
- * notice about the rewind, if any. Rejects with the server's reason as soon as
- * the thread records that this rollback failed.
- *
- * `awaitsRecordedOutcome`: a rewind, whose outcome the server always records.
- * Its run rolls back before the outcome, with any notice, arrives, so only the
- * outcome ends the wait, unless a later rewind took over the thread.
+ * Runs `revert` (rollback command `requestId`) and resolves once the message's run is rolled
+ * back or the thread records this rewind finished, with the server's notice if any; rejects
+ * with the reason once it records a failure. With `awaitsRecordedOutcome` (a rewind) only
+ * the recorded outcome ends the wait, unless a later rewind took over the thread.
  */
 export async function waitForRevertedMessage(
   threadRef: ScopedThreadRef,

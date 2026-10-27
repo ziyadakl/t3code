@@ -44,11 +44,9 @@ export interface BrowserImportChoice {
 class ProfileLimitReachedError extends Error {}
 
 /**
- * Copies the chosen sites' cookies into the target profile and settles what
- * the wizard shows. A new profile is registered only once something came
- * over, since its cookies land in its partition first; if it then cannot be
- * saved, that partition is cleared so no cookies sit behind a profile that is
- * gone on restart. Never rejects.
+ * Copies the chosen sites' cookies into the target profile and settles what the wizard shows.
+ * A new profile is registered only once something came over; if it cannot then be saved, its
+ * partition is cleared so no cookies sit behind a profile lost on restart. Never rejects.
  */
 export async function runBrowserImport(
   bridge: BrowserImportBridge,

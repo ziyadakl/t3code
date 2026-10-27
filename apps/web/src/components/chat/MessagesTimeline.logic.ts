@@ -1001,13 +1001,10 @@ function failedTimelineRunIds(
 }
 
 /**
- * Settled turns fold tool steps, thinking and short progress notes behind a
- * "Worked for ..." row. The terminal assistant message always stays visible,
- * and so does every other message with real content: only a one-line note
- * (see `isFoldableProgressNote`) folds. Ordinary trailing work joins the fold,
- * while failures and work still in progress stay visible. A prompt without a
- * run (a provider-native subagent, or a turn imported from V1) folds under
- * the same rule.
+ * Settled turns fold tool steps, thinking and short progress notes behind a "Worked for ..."
+ * row; the terminal assistant message and other real content stay visible (only a one-line
+ * note, see `isFoldableProgressNote`, folds). Trailing work joins the fold, failures and work
+ * in progress do not. A runless prompt (provider-native subagent, V1 import) folds the same.
  */
 function deriveTurnFolds(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;

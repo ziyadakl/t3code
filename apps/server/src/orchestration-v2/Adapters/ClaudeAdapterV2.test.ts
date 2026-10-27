@@ -3001,14 +3001,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           changes.until(() => continuationRequests.length >= count),
       };
     });
-  const awaitUntil = (predicate: () => boolean, label: string): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      for (let attempt = 0; attempt < 5000; attempt++) {
-        if (predicate()) return;
-        yield* Effect.yieldNow;
-      }
-      return yield* Effect.die(`Timed out waiting for ${label}.`);
-    });
   const makeWakeHarness = makeWakeHarnessWithOptions();
 
   it.effect("checkpoints files and records the prompt's SDK uuid on its provider turn", () =>
@@ -3084,7 +3076,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         harness.events.flatMap((event) =>
           event.type === "provider_turn.updated" ? [event.providerTurn] : [],
         );
-      yield* awaitUntil(() => providerTurns().length > 0, "running provider turn");
+      yield* harness.until(() => providerTurns().length > 0);
       // No replay echo arrives: the turn is stopped before Claude answers.
       const target = providerTurns().at(-1)!;
       const laterTurn = {
@@ -3129,7 +3121,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         harness.events.flatMap((event) =>
           event.type === "provider_turn.updated" ? [event.providerTurn] : [],
         );
-      yield* awaitUntil(() => providerTurns().length > 0, "running provider turn");
+      yield* harness.until(() => providerTurns().length > 0);
       // No replay echo arrives: the attempt is stopped before Claude answers,
       // so Claude kept no file snapshot for its prompt.
       const stopped = {
@@ -4377,9 +4369,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         });
         const attachmentNote = `\n\n[Attached file "requirements.pdf" is saved at: ${path.join(harness.attachmentsDir, attachmentRelativePath(attachment)!)}]`;
         assert.equal(harness.offeredMessages[1]?.priority, "now");
+        // The attachment context rides in the leading block, never the command
+        // block, so captured-window text cannot run a command.
         assert.deepEqual(harness.offeredMessages[1]?.message.content, [
           { type: "text", text: `${leadingText}${attachmentNote}` },
-          { type: "text", text: `/implement the fixes${attachmentNote}` },
+          { type: "text", text: "/implement the fixes" },
         ]);
       }).pipe(
         Effect.provide(

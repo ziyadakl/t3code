@@ -27,11 +27,10 @@ export interface CollectComposerInlineTokensOptions {
 export const SKILL_NAME_SOURCE = "[a-zA-Z0-9][a-zA-Z0-9:_-]*";
 
 /**
- * A skill name may start with a digit, but compact monetary amounts and
- * numeric expressions like "$20", "$20k", "$100M", and "$1e6" must stay prose:
- * the composer chips any matched `$name` token, known or not. Tokens beginning
- * with digits must not match numbers with currency/exponent suffixes, and must
- * contain at least one letter. Any currency symbol is accepted as the sigil.
+ * A skill name may start with a digit, but amounts and numeric expressions like "$20",
+ * "$20k", "$100M" and "$1e6" must stay prose, since the composer chips any matched `$name`
+ * token. So a token starting with digits must contain a letter and not be a number with a
+ * currency or exponent suffix. Any currency symbol is accepted as the sigil.
  */
 const SKILL_MENTION_SOURCE = `${
   /(^|\s)\p{Sc}(?![0-9][0-9_]*(?:[kKmMbBtT]|[eE][0-9]+)?(?:\s|$))(?=[a-zA-Z0-9:_-]*[a-zA-Z])/u

@@ -1,9 +1,7 @@
 /**
- * Matches an open dialog, sheet, mobile sidebar, menu or popover: a layer that
- * owns the keyboard while it is up, so page-wide shortcuts (type-to-focus,
- * Escape to stop) leave it alone. Popups match only while open or closing:
- * some stay mounted when closed, such as the chat header actions menu, so a
- * bare match would block those shortcuts everywhere.
+ * Matches an open dialog, sheet, mobile sidebar, menu or popover: a layer that owns the
+ * keyboard, so page-wide shortcuts leave it alone. Popups match only while open or closing:
+ * some stay mounted when closed, so a bare match would block shortcuts everywhere.
  */
 export const FLOATING_LAYER_SELECTOR = [
   '[role="dialog"][aria-modal="true"]',

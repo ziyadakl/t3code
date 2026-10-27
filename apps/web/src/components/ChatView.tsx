@@ -76,8 +76,6 @@ import {
   ProviderInteractionMode,
   resolveIdleCompaction,
   RuntimeMode,
-  threadRewindRestoresPrompt,
-  type ThreadRewindChoice,
 } from "@t3tools/contracts";
 import {
   deriveProviderSubagentStatus,
@@ -131,7 +129,6 @@ import { useDiffPanelStore } from "../diffPanelStore";
 import { useActiveThreadRef } from "../hooks/useActiveThreadRef";
 import { composerRequiresModifier } from "../composer-logic";
 import {
-  deriveMessageRewindTargets,
   derivePhase,
   deriveActivePlanState,
   selectComposerTasksPlan,
@@ -141,7 +138,6 @@ import {
   findRevertCheckpoint,
   hasActionableProposedPlan,
   isLatestRunSettled,
-  revertTouchesFiles,
 } from "../session-logic";
 import { type LegendListRef } from "@legendapp/list/react";
 import { useWorkspaceMutationRefresh } from "../hooks/useWorkspaceMutationRefresh";
@@ -227,7 +223,6 @@ import { collectInlineContextIds } from "../lib/composerContextReferences";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { useKnownTerminalSessions, useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { useEnvironmentQuery } from "../state/query";
-import { useThreadRewindPreview } from "../state/queries";
 import { useEnvironmentScope } from "~/state/session";
 import {
   primaryServerAvailableEditorsAtom,
@@ -345,10 +340,6 @@ import {
   startNewThreadForProject,
   codexArtifactTemplatePromptToAppend,
   shouldRefocusComposerOnWindowFocus,
-  decideMessageRewindStart,
-  planMessageRewind,
-  loadThreadRewindPreview,
-  waitForThreadToStop,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useComposerHandleContext } from "../composerHandleContext";

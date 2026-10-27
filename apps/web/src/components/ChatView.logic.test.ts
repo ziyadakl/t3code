@@ -54,7 +54,6 @@ import {
   hasServerAcknowledgedLocalDispatch,
   resolveDraftPromotionNavigationTarget,
   waitForRevertedMessage,
-  prepareRevertedMessageAttachments,
   deriveMessageRewindMenu,
   decideMessageRewindStart,
   planMessageRewind,

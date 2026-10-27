@@ -1388,12 +1388,10 @@ export const layer: Layer.Layer<
               .filter((turn) => turn.providerThreadId === providerThread.id)
               .map((turn) => turn.ordinal),
           ) + 1,
-        // Legacy accepted attempts have no native id. They count only before
-        // a replacement, while no accepted attempt records a native identity.
-        // An imported session's native thread holds its history before T3
-        // Code runs a turn on it, so the first turn resumes it. The importer
-        // derives the provider thread id from that native id; a resume
-        // fallback binds a new native id, which does not match.
+        // Legacy accepted attempts have no native id. They count only before a replacement,
+        // while no accepted attempt records a native identity. An imported session's native
+        // thread holds its history, so the first turn resumes it; the importer derives the
+        // provider thread id from that native id, which a resume fallback's new id would not match.
         nativeThreadHasTurns:
           nativeInputRunIds.size > 0 ||
           (legacyInputRunIds.size > 0 &&

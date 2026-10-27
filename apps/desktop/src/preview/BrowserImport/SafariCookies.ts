@@ -174,12 +174,9 @@ export function parseBinaryCookies(
 }
 
 /**
- * Whether a filesystem error is the OS refusing access.
- *
- * A TCC denial arrives as EPERM, which Effect tags `Unknown` rather than
- * `PermissionDenied` (reserved for EACCES), so the underlying errno is checked
- * too — otherwise a Full Disk Access refusal is reported as a generic read
- * failure and the user is never told what to grant.
+ * Whether a filesystem error is the OS refusing access. A TCC denial arrives as EPERM,
+ * which Effect tags `Unknown` rather than `PermissionDenied` (EACCES), so the errno is
+ * checked too; otherwise a Full Disk Access refusal reads as a generic failure.
  */
 export const isPermissionDenied = (error: PlatformError.PlatformError): boolean => {
   // TCC returns EPERM (Effect Unknown); EACCES is a POSIX denial that Full Disk Access cannot fix.
@@ -210,34 +207,34 @@ export const safariAccessGranted = Effect.fnUntraced(function* (cookiePath: stri
  * Reads the jar and parses it, turning a TCC refusal into the Full Disk Access
  * prompt and a malformed jar into a typed failure rather than a defect.
  */
-const readJar = <A>(cookiePath: string, parse: (contents: Buffer) => A) =>
-  Effect.gen(function* () {
-    const fileSystem = yield* FileSystem.FileSystem;
-    const contents = yield* fileSystem.readFile(cookiePath).pipe(
-      Effect.mapError((cause) => {
-        // TCC denies the read even though the file exists — a permission the
-        // user grants in System Settings rather than a missing browser. macOS
-        // never prompts for Full Disk Access, so there is no dialog to wait
-        // on; the read just fails, and it fails with EPERM, which Effect
-        // surfaces as an `Unknown` system error rather than `PermissionDenied`
-        // (that is EACCES).
-        return new SafariCookieReadError({
-          reason: isPermissionDenied(cause) ? "needsFullDiskAccess" : "readFailed",
-          cookieDatabasePath: cookiePath,
-          cause,
-        });
+const readJar = Effect.fn("SafariCookies.readJar")(function* <A>(
+  cookiePath: string,
+  parse: (contents: Buffer) => A,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const contents = yield* fileSystem.readFile(cookiePath).pipe(
+    Effect.mapError((cause) => {
+      // TCC denies the read though the file exists: a permission the user grants in System
+      // Settings, not a missing browser. macOS never prompts for Full Disk Access; the read
+      // fails with EPERM, which Effect surfaces as an `Unknown` system error rather than
+      // `PermissionDenied` (EACCES).
+      return new SafariCookieReadError({
+        reason: isPermissionDenied(cause) ? "needsFullDiskAccess" : "readFailed",
+        cookieDatabasePath: cookiePath,
+        cause,
+      });
+    }),
+  );
+  return yield* Effect.try({
+    try: () => parse(Buffer.from(contents)),
+    catch: (cause) =>
+      new SafariCookieReadError({
+        reason: isSafariCookieReadError(cause) ? cause.reason : "readFailed",
+        cookieDatabasePath: cookiePath,
+        cause,
       }),
-    );
-    return yield* Effect.try({
-      try: () => parse(Buffer.from(contents)),
-      catch: (cause) =>
-        new SafariCookieReadError({
-          reason: isSafariCookieReadError(cause) ? cause.reason : "readFailed",
-          cookieDatabasePath: cookiePath,
-          cause,
-        }),
-    });
   });
+});
 
 /** `includeHost` narrows the read to the sites the user chose. */
 export const readSafariCookies = Effect.fn("SafariCookies.readSafariCookies")(function* (

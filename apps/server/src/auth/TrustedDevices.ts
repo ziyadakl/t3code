@@ -1,64 +1,8 @@
 /**
- * Trusted devices: browsers on an allow-listed Tailscale device skip pairing.
- *
- * The allow-list is `trustedTailscaleDevices` in the server's settings.json
- * (MagicDNS short names). Empty, the default, means every caller pairs, exactly
- * as without this module. A trusted caller gets an ordinary browser session
- * with standard client scopes, the same as a paired device.
- *
- * What is trusted, and why
- * The caller's device is decided from the TCP peer address of the request
- * (the socket, never a header), in one of three ways:
- *
- * 1. Peer is a non-loopback address. The client connected straight to the
- *    server, so every header is client-controlled and is ignored. The peer
- *    address itself goes to `tailscale whois`; tailscaled answers from its
- *    WireGuard peer map, which a client cannot spoof.
- *
- * 2. Peer is loopback and carries `X-Forwarded-For`. This is the Tailscale
- *    Serve path (HTTPS on the tailnet -> http://127.0.0.1:<port>). Serve
- *    *replaces* X-Forwarded-For with the one real source IP of the tailnet
- *    connection (`addProxyForwardedHeaders` in tailscale's
- *    ipn/ipnlocal/serve.go uses Header.Set, and httputil's Rewrite mode drops
- *    inbound X-Forwarded-* first), so a header a tailnet client sends never
- *    survives. We therefore accept exactly one IP and refuse a list, and run
- *    `tailscale whois` on it. Serve also strips client-sent `Tailscale-User-*`
- *    headers and marks Funnel (public internet) traffic with
- *    `Tailscale-Funnel-Request`, which we refuse. The `Tailscale-User-Login`
- *    header names a user, not a device, and is not used.
- *
- *    These headers are only trustworthy because the server listens on
- *    127.0.0.1: the only things that can open a loopback connection are
- *    Tailscale Serve and processes on this machine. A local process can forge
- *    X-Forwarded-For, but anything that can run code here already controls
- *    the server and its secrets, so that grants it nothing new. If the server
- *    is bound to a public interface this branch never runs (the peer is not
- *    loopback, see 1).
- *
- * 3. Peer is loopback with no proxy headers and a loopback Host. This is a
- *    browser on this machine, and counts as this machine's own Tailscale name
- *    (`tailscale status`). Any proxy marker refuses it, because other local
- *    forwarders also connect from loopback: T3 Connect's Cloudflare tunnel
- *    (Cf-Connecting-Ip, X-Forwarded-*) carries internet traffic, and a
- *    non-loopback Host (Serve, tunnels, DNS rebinding) means the request was
- *    not addressed to localhost. A same-machine forwarder that rewrites Host
- *    to localhost and adds no forwarding headers (the Vite dev proxy does
- *    this) makes its callers look local; leave the list empty on dev setups
- *    that expose such a proxy.
- *
- * A device name matches only inside this machine's own tailnet: the peer's
- * full MagicDNS name must equal `<entry>.<our tailnet suffix>`, so a node
- * shared in from another tailnet with the same short name does not match.
- * Every failure (no tailscale CLI, timeout, unknown peer) refuses trust and
- * falls back to pairing.
- *
- * The session endpoint is a GET, so any page a trusted device loads can reach
- * it as a subresource and make the server mint a session. The cookie is
- * SameSite=Lax and HttpOnly, so such a page can neither read nor use it, but
- * the sessions would still pile up in the user's own session list. We
- * therefore refuse cross-site subresource requests using `Sec-Fetch-Site`:
- * browsers set it themselves and page scripts cannot override it, and a
- * top-level navigation the user can see is still allowed.
+ * Trusted devices: browsers on an allow-listed Tailscale device (`trustedTailscaleDevices` in
+ * settings.json, MagicDNS short names) skip pairing; empty, the default, means every caller
+ * pairs. The device is decided from the TCP peer address (the socket, never a header); the
+ * peer's full MagicDNS name must equal `<entry>.<our tailnet suffix>`, else it pairs as usual.
  */
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -120,9 +64,9 @@ function present(value: string | undefined): boolean {
 }
 
 /**
- * True unless the browser itself says this is a cross-site subresource load
- * (an image, iframe, script or fetch on some other site's page). A missing
- * header means a non-browser client, which this check has nothing to say about.
+ * True unless the browser says this is a cross-site subresource load (image, iframe, script
+ * or fetch on another site's page), which could make this GET mint sessions that pile up in
+ * the user's list. Page scripts cannot override `Sec-Fetch-Site`; no header means a non-browser client.
  */
 function isUserVisibleRequest(headers: TrustedDeviceRequest["headers"]): boolean {
   const site = headers["sec-fetch-site"]?.trim().toLowerCase();
@@ -141,6 +85,9 @@ export function identifyTrustedDeviceCaller(request: TrustedDeviceRequest): Trus
     return { kind: "untrusted", reason: "cross-site-subresource" };
   }
 
+  // Non-loopback peer: the client connected straight to the server, so every header is
+  // client-controlled and ignored. The peer address goes to `tailscale whois`, answered from
+  // tailscaled's WireGuard peer map, which a client cannot spoof.
   if (!isLoopbackAddress(peer)) {
     return IP_LITERAL.test(peer)
       ? { kind: "tailnet-peer", ip: peer }
@@ -148,6 +95,10 @@ export function identifyTrustedDeviceCaller(request: TrustedDeviceRequest): Trus
   }
 
   const headers = request.headers;
+  // Loopback peer: only Tailscale Serve and local processes can connect, which is why Serve's
+  // headers are trustworthy; a local process could forge them but already controls the server.
+  // Serve replaces X-Forwarded-For with the one real source IP and strips client-sent
+  // `Tailscale-User-*`; Funnel (public internet) traffic is marked and refused.
   if (present(headers["tailscale-funnel-request"])) {
     return { kind: "untrusted", reason: "tailscale-funnel" };
   }
@@ -165,6 +116,9 @@ export function identifyTrustedDeviceCaller(request: TrustedDeviceRequest): Trus
     return { kind: "tailnet-peer", ip };
   }
 
+  // No forwarding headers and a loopback Host: a browser on this machine. Any proxy marker or
+  // non-loopback Host refuses it; a forwarder that rewrites Host to localhost (the Vite dev
+  // proxy) makes its callers look local, so leave the list empty on dev setups exposing one.
   if (PROXY_MARKER_HEADERS.some((name) => present(headers[name]))) {
     return { kind: "untrusted", reason: "unknown-proxy" };
   }

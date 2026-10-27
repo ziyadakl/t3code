@@ -183,41 +183,40 @@ export function decryptChromiumValue(
 const PARTITIONED_COOKIES_SCHEMA = 15;
 
 /**
- * Snapshots a Chromium cookie database and selects `columns` from every row,
- * plus `partitioned`. Listing and import both read through here, so they agree
- * on the schema version and on which rows are partitioned (CHIPS): those
- * belong to one top-level site, which an Electron partition cannot express, so
- * the import skips them and the listing leaves them out.
+ * Snapshots a Chromium cookie database and selects `columns` from every row, plus
+ * `partitioned`. Listing and import both read through here. Partitioned (CHIPS) rows belong
+ * to one top-level site, which an Electron partition cannot express, so both skip them.
  */
-const queryChromiumCookies = <Row extends { readonly partitioned: number }>(
+const queryChromiumCookies = Effect.fn("ChromiumCookies.queryChromiumCookies")(function* <
+  Row extends { readonly partitioned: number },
+>(
   cookieDatabasePath: string,
   columns: string,
   decode: (raw: unknown) => Effect.Effect<ReadonlyArray<Row>, Schema.SchemaError>,
-) =>
-  Effect.gen(function* () {
-    const readFailed = (cause: unknown) =>
-      new ChromiumCookieReadError({ reason: "readFailed", cookieDatabasePath, cause });
-    const snapshotPath = yield* snapshotCookieDatabase(cookieDatabasePath).pipe(
-      Effect.mapError(readFailed),
+) {
+  const readFailed = (cause: unknown) =>
+    new ChromiumCookieReadError({ reason: "readFailed", cookieDatabasePath, cause });
+  const snapshotPath = yield* snapshotCookieDatabase(cookieDatabasePath).pipe(
+    Effect.mapError(readFailed),
+  );
+  return yield* Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const schemaVersion = yield* sql`select value from meta where key = 'version' limit 1`.pipe(
+      Effect.flatMap(decodeSchemaVersion),
+      Effect.map(([row]) => row.value),
     );
-    return yield* Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      const schemaVersion = yield* sql`select value from meta where key = 'version' limit 1`.pipe(
-        Effect.flatMap(decodeSchemaVersion),
-        Effect.map(([row]) => row.value),
-      );
-      const partitioned =
-        schemaVersion >= PARTITIONED_COOKIES_SCHEMA ? "top_frame_site_key <> ''" : "0";
-      const rows = yield* decode(
-        yield* sql`select ${sql.literal(columns)}, ${sql.literal(partitioned)} as partitioned
+    const partitioned =
+      schemaVersion >= PARTITIONED_COOKIES_SCHEMA ? "top_frame_site_key <> ''" : "0";
+    const rows = yield* decode(
+      yield* sql`select ${sql.literal(columns)}, ${sql.literal(partitioned)} as partitioned
           from cookies`,
-      );
-      return { rows, schemaVersion };
-    }).pipe(
-      Effect.provide(NodeSqliteClient.layer({ filename: snapshotPath, readonly: true })),
-      Effect.mapError(readFailed),
     );
-  });
+    return { rows, schemaVersion };
+  }).pipe(
+    Effect.provide(NodeSqliteClient.layer({ filename: snapshotPath, readonly: true })),
+    Effect.mapError(readFailed),
+  );
+});
 
 /**
  * Reads and decrypts one Chromium cookie database. `includeHost` narrows the

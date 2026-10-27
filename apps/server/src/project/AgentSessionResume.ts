@@ -1,11 +1,7 @@
 /**
- * The resume picker: list a project's Claude Code sessions from the desktop app
- * and the terminal CLI, and continue one as a T3 Code thread.
- *
- * Those sessions live in the default Claude home (`~/.claude`). T3 Code's Claude
- * provider may run with another home, so resuming hands the transcript off by
- * copying it into the provider's home before importing it with the same
- * importer the first-run wizard uses.
+ * The resume picker: lists a project's Claude Code sessions from the desktop app and the
+ * terminal CLI and continues one as a T3 Code thread. They live in the default Claude home
+ * (`~/.claude`), so resuming copies the transcript into the provider's home before importing.
  */
 import * as NodeOS from "node:os";
 
@@ -251,13 +247,9 @@ const make = Effect.gen(function* () {
   });
 
   /**
-   * Bring a thread imported from `session` up to date with the transcript:
-   * copy it into T3 Code's Claude home again and append the new messages.
-   * A thread that already ran a turn in T3 Code is left alone, because its
-   * copy in T3 Code's home now holds that turn. Returns the messages added.
-   * Runs under the thread's command lock, so a turn started meanwhile waits
-   * and takes the run ordinal after the appended ones instead of sharing a
-   * run id with one, and the copy never overwrites a turn's transcript.
+   * Brings a thread imported from `session` up to date: copies the transcript into T3 Code's
+   * Claude home again and appends the new messages. A thread that already ran a turn in T3
+   * Code is left alone. Runs under the thread's command lock. Returns the messages added.
    */
   const refreshSession = Effect.fn("AgentSessionResume.refreshSession")(function* (input: {
     readonly project: { readonly id: ProjectId; readonly workspaceRoot: string };

@@ -401,10 +401,6 @@ it.effect(
     }).pipe(Effect.scoped, Effect.provide(persistence)),
 );
 
-const providerInstanceId = ProviderInstanceId.make("codex");
-const providerSessionId = "native-codex-thread";
-const threadId = ThreadId.make(`import:${providerInstanceId}:${providerSessionId}`);
-
 it.effect(
   "imports into the active list and later appends only the messages it has not seen",
   () => {
@@ -769,9 +765,10 @@ const storeBackedImporter = (input?: {
             Layer.mock(AgentSessionScanner.AgentSessionScanner)(input?.scanner ?? {}),
             Layer.mock(ProjectService.ProjectService)({
               getById: () =>
-                Effect.succeed(
-                  Option.some({ id: projectId, workspaceRoot: "/workspace/project" } as never),
-                ),
+                Effect.succeedSome({
+                  id: projectId,
+                  workspaceRoot: "/workspace/project",
+                } as never),
             }),
             Layer.mock(Orchestrator.OrchestratorV2)({
               getThreadRecords: (threadId, fields, filter) =>

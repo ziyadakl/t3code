@@ -1130,13 +1130,10 @@ export function messageFoldRunId(
 }
 
 /**
- * A settled run folds tool steps, thinking and short progress notes. The
- * terminal assistant message always stays visible, and so does every other
- * message with real content: only a one-line note (see
- * `isFoldableProgressNote`) folds. A prompt without a run (a provider-native
- * subagent, or a turn imported from V1) folds its response like a run.
- * `runlessWorkActive` keeps the latest runless response open; V2 work must
- * not reopen imported turns.
+ * A settled run folds tool steps, thinking and one-line progress notes (see
+ * `isFoldableProgressNote`); the terminal assistant message and other real content stay.
+ * A runless prompt (provider-native subagent, V1 import) folds like a run;
+ * `runlessWorkActive` keeps the latest runless response open.
  */
 function deriveThreadFeedRunFolds(
   feed: ReadonlyArray<ThreadFeedEntry>,

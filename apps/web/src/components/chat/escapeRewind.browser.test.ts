@@ -1,7 +1,7 @@
-import { act, createElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { createElement } from "react";
+import { describe, expect, it, vi } from "vite-plus/test";
 
+import { render } from "../../../test/render";
 import {
   INITIAL_ESCAPE_STATE,
   isEscapeOwnedElsewhere,
@@ -90,18 +90,14 @@ function escapeOn(target: EventTarget, init: KeyboardEventInit = {}) {
   return event;
 }
 
-function mount(html: string) {
+function mount(html: string): HTMLElement & Disposable {
   const host = document.createElement("div");
   host.innerHTML = html;
   document.body.append(host);
-  return host;
+  return Object.assign(host, { [Symbol.dispose]: () => host.remove() });
 }
 
 describe("isEscapeOwnedElsewhere", () => {
-  afterEach(() => {
-    document.body.replaceChildren();
-  });
-
   it("leaves a plain Escape on the page to the rewind shortcut", () => {
     expect(isEscapeOwnedElsewhere(escapeOn(document.body))).toBe(false);
   });
@@ -128,12 +124,12 @@ describe("isEscapeOwnedElsewhere", () => {
     ["mobile sidebar", `<div data-slot="sidebar" data-mobile="true" data-open></div>`],
     ["bare modal", `<div role="dialog" aria-modal="true"></div>`],
   ])("yields while the %s is open", (_name, html) => {
-    mount(html);
+    using _host = mount(html);
     expect(isEscapeOwnedElsewhere(escapeOn(document.body))).toBe(true);
   });
 
   it("ignores layers that stay mounted while closed, such as the sidebar's search results", () => {
-    mount(`
+    using _host = mount(`
       <div data-slot="menu-popup" data-closed></div>
       <ul role="listbox" aria-label="Thread search results"><li role="option">x</li></ul>
     `);
@@ -141,7 +137,7 @@ describe("isEscapeOwnedElsewhere", () => {
   });
 
   it("yields to a focused terminal, where Escape belongs to the shell", () => {
-    const host = mount(`<div data-terminal-owner="drawer"><textarea></textarea></div>`);
+    using host = mount(`<div data-terminal-owner="drawer"><textarea></textarea></div>`);
     const input = host.querySelector("textarea")!;
     input.focus();
     expect(isEscapeOwnedElsewhere(escapeOn(input))).toBe(true);
@@ -149,8 +145,6 @@ describe("isEscapeOwnedElsewhere", () => {
 });
 
 describe("useEscapeToStopAndRewind", () => {
-  let root: Root;
-  let container: HTMLDivElement;
   const onStop = vi.fn();
   const onOpenPicker = vi.fn();
 
@@ -159,92 +153,90 @@ describe("useEscapeToStopAndRewind", () => {
     return null;
   }
 
-  function render(overrides: Partial<UseEscapeToStopAndRewindOptions> = {}) {
-    act(() => {
-      root.render(
-        createElement(Harness, {
-          enabled: true,
-          running: false,
-          canRewind: true,
-          onStop,
-          onOpenPicker,
-          ...overrides,
-        }),
-      );
-    });
-  }
-
-  function escapeAt(
-    now: number,
-    target: EventTarget = document.body,
-    init: KeyboardEventInit = {},
-  ) {
-    vi.setSystemTime(now);
-    return escapeOn(target, init);
-  }
-
-  beforeEach(() => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-    container = document.createElement("div");
-    document.body.append(container);
-    root = createRoot(container);
-  });
-
-  afterEach(() => {
-    act(() => root.unmount());
-    document.body.replaceChildren();
+  // Fresh mocks and a controllable Date.now for one test; both are undone when it ends.
+  function setup() {
     onStop.mockReset();
     onOpenPicker.mockReset();
-    vi.unstubAllGlobals();
-    vi.useRealTimers();
-  });
+    let now = 0;
+    const dateNow = vi.spyOn(Date, "now").mockImplementation(() => now);
+    return {
+      set: (value: number) => {
+        now = value;
+      },
+      [Symbol.dispose]: () => dateNow.mockRestore(),
+    };
+  }
 
-  it("stops a running turn on Escape and opens the picker on a quick second Escape", () => {
-    render({ running: true });
-    const first = escapeAt(10_000);
+  const harness = (overrides: Partial<UseEscapeToStopAndRewindOptions> = {}) =>
+    createElement(Harness, {
+      enabled: true,
+      running: false,
+      canRewind: true,
+      onStop,
+      onOpenPicker,
+      ...overrides,
+    });
+
+  it("stops a running turn on Escape and opens the picker on a quick second Escape", async () => {
+    using clock = setup();
+    await using _screen = await render(harness({ running: true }), { router: false });
+    clock.set(10_000);
+    const first = escapeOn(document.body);
     expect(onStop).toHaveBeenCalledTimes(1);
     expect(onOpenPicker).not.toHaveBeenCalled();
     expect(first.defaultPrevented).toBe(true);
 
-    escapeAt(10_250);
+    clock.set(10_250);
+    escapeOn(document.body);
     expect(onOpenPicker).toHaveBeenCalledTimes(1);
     expect(onStop).toHaveBeenCalledTimes(1);
   });
 
-  it("leaves a lone idle Escape untouched, so nothing else loses it", () => {
-    render();
-    const event = escapeAt(10_000);
+  it("leaves a lone idle Escape untouched, so nothing else loses it", async () => {
+    using clock = setup();
+    await using _screen = await render(harness(), { router: false });
+    clock.set(10_000);
+    const event = escapeOn(document.body);
     expect(event.defaultPrevented).toBe(false);
     expect(onStop).not.toHaveBeenCalled();
     expect(onOpenPicker).not.toHaveBeenCalled();
   });
 
-  it("ignores a held-down Escape's auto-repeat", () => {
-    render();
-    escapeAt(10_000);
-    escapeAt(10_030, document.body, { repeat: true });
+  it("ignores a held-down Escape's auto-repeat", async () => {
+    using clock = setup();
+    await using _screen = await render(harness(), { router: false });
+    clock.set(10_000);
+    escapeOn(document.body);
+    clock.set(10_030);
+    escapeOn(document.body, { repeat: true });
     expect(onOpenPicker).not.toHaveBeenCalled();
   });
 
-  it("lets the composer close its own menu first: an Escape it stops never counts", () => {
-    render({ running: true });
-    const editor = document.createElement("div");
-    document.body.append(editor);
+  it("lets the composer close its own menu first: an Escape it stops never counts", async () => {
+    using clock = setup();
+    await using _screen = await render(harness({ running: true }), { router: false });
+    using editor = mount("");
     editor.addEventListener("keydown", (event) => {
       event.preventDefault();
       event.stopPropagation();
     });
-    escapeAt(10_000, editor);
-    escapeAt(10_200, editor);
+    clock.set(10_000);
+    escapeOn(editor);
+    clock.set(10_200);
+    escapeOn(editor);
     expect(onStop).not.toHaveBeenCalled();
     expect(onOpenPicker).not.toHaveBeenCalled();
   });
 
-  it("does nothing while disabled", () => {
-    render({ enabled: false, running: true });
-    escapeAt(10_000);
-    escapeAt(10_100);
+  it("does nothing while disabled", async () => {
+    using clock = setup();
+    await using _screen = await render(harness({ enabled: false, running: true }), {
+      router: false,
+    });
+    clock.set(10_000);
+    escapeOn(document.body);
+    clock.set(10_100);
+    escapeOn(document.body);
     expect(onStop).not.toHaveBeenCalled();
     expect(onOpenPicker).not.toHaveBeenCalled();
   });

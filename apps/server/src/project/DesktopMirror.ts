@@ -1,16 +1,8 @@
 /**
- * The desktop mirror: every open session in the Claude desktop app's Code tab
- * gets a T3 Code thread, in a project for the folder it ran in, without anyone
- * opening the resume picker. It is the picker's import, run for every card.
- *
- * Each pass stats the desktop session cards (re-reading only changed ones),
- * compares them with the sessions it already mirrored, and acts only on the
- * difference: a new open card is imported, a renamed card renames its thread,
- * an archived card archives it (never deletes), and new desktop activity brings
- * the thread's history up to date while T3 Code has not continued it yet.
- * Transcripts are read only for those changed sessions. Threads T3 Code made
- * itself are never touched; the mirror only acts on threads in its own table.
- * The desktop app's files are only ever read.
+ * The desktop mirror: every open session in the Claude desktop app's Code tab gets a T3 Code
+ * thread in a project for its folder, without the resume picker. Each pass stats the cards,
+ * imports new ones, renames or archives (never deletes) changed ones, and refreshes history
+ * while T3 Code has not continued the thread. Only mirrored threads are touched.
  */
 import * as NodeOS from "node:os";
 

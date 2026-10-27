@@ -103,6 +103,7 @@ function RewindPickerList(props: {
 
   // Once, on open: the newest message is last, so a long thread would open scrolled away from it.
   const scrollToNewest = useEffectEvent(() => scrollToOption(initialRewindIndex(items.length)));
+  // oxlint-disable-next-line t3code/react-effect-budget -- scrolls the newest option into view once on open, an imperative DOM scroll with no render-time form
   useEffect(() => {
     scrollToNewest();
   }, []);

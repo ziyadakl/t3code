@@ -160,8 +160,10 @@ const make = Effect.gen(function* () {
     <A, E>(effect: Effect.Effect<A, E>) =>
       effect.pipe(Effect.mapError((cause) => new ThreadCodeRewindError({ threadId, cause })));
 
-  const preview: ThreadCodeRewindServiceV2["Service"]["preview"] = (input) =>
-    Effect.gen(function* () {
+  const preview: ThreadCodeRewindServiceV2["Service"]["preview"] = Effect.fn(
+    "ThreadCodeRewindService.preview",
+  )(
+    function* (input: Parameters<ThreadCodeRewindServiceV2["Service"]["preview"]>[0]) {
       let projection = yield* readProjection(input.threadId);
       const run = projection.runs.find((candidate) => candidate.userMessageId === input.messageId);
       const nothing = { filesChanged: [], insertions: 0, deletions: 0 };
@@ -190,10 +192,14 @@ const make = Effect.gen(function* () {
         insertions: result.insertions,
         deletions: result.deletions,
       };
-    }).pipe(withRewindError(input.threadId));
+    },
+    (effect, input) => effect.pipe(withRewindError(input.threadId)),
+  );
 
-  const restore: ThreadCodeRewindServiceV2["Service"]["restore"] = (input) =>
-    Effect.gen(function* () {
+  const restore: ThreadCodeRewindServiceV2["Service"]["restore"] = Effect.fn(
+    "ThreadCodeRewindService.restore",
+  )(
+    function* (input: Parameters<ThreadCodeRewindServiceV2["Service"]["restore"]>[0]) {
       const projection = yield* readProjection(input.threadId);
       const refused = (reason: string) => ({
         restored: false as const,
@@ -211,7 +217,9 @@ const make = Effect.gen(function* () {
         return refused(result?.error ?? NO_FILE_SNAPSHOTS_MESSAGE);
       }
       return { restored: true as const, skippedLinks: result.skippedLinks };
-    }).pipe(withRewindError(input.threadId));
+    },
+    (effect, input) => effect.pipe(withRewindError(input.threadId)),
+  );
 
   return ThreadCodeRewindServiceV2.of({ preview, restore });
 });

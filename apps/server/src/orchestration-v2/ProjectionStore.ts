@@ -6330,8 +6330,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       )
     `;
 
-    const getAutoArchiveCandidates: ProjectionStoreV2Shape["getAutoArchiveCandidates"] = () =>
-      Effect.gen(function* () {
+    const getAutoArchiveCandidates: ProjectionStoreV2Shape["getAutoArchiveCandidates"] = Effect.fn(
+      "ProjectionStore.getAutoArchiveCandidates",
+    )(
+      function* () {
         const rows = yield* sql<{
           readonly payload_json: string;
           readonly orphaned: number;
@@ -6382,10 +6384,14 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             })),
           ),
         );
-      }).pipe(Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })));
+      },
+      Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
+    );
 
-    const getSubagentChildren: ProjectionStoreV2Shape["getSubagentChildren"] = (threadId) =>
-      Effect.gen(function* () {
+    const getSubagentChildren: ProjectionStoreV2Shape["getSubagentChildren"] = Effect.fn(
+      "ProjectionStore.getSubagentChildren",
+    )(
+      function* (threadId: Parameters<ProjectionStoreV2Shape["getSubagentChildren"]>[0]) {
         const rows = yield* sql<{ readonly payload_json: string; readonly busy: number }>`
           SELECT child.payload_json, ${isBusyThread(sql`child.thread_id`)} AS busy
           FROM orchestration_v2_projection_threads child
@@ -6403,7 +6409,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             })),
           ),
         );
-      }).pipe(Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })));
+      },
+      Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
+    );
 
     const getThreadsWithPullRequests: ProjectionStoreV2Shape["getThreadsWithPullRequests"] =
       Effect.fn("ProjectionStore.getThreadsWithPullRequests")(

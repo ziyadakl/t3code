@@ -1,8 +1,6 @@
 /**
- * The one place that runs a browser cookie import: it lists this machine's
- * browsers, hosts the import wizard, and does the work the wizard asks for.
- * Settings and the preview pane both open it, so the two entry points cannot
- * drift apart.
+ * The one place that runs a browser cookie import: lists this machine's browsers, hosts the
+ * wizard and does its work. Settings and the preview pane both open it.
  *
  * @module BrowserImportLauncher
  */
@@ -101,11 +99,9 @@ const browserProfileStore: BrowserProfileStore = {
 };
 
 /**
- * Sources are listed lazily, by `loadSources`, when a menu opens: detection
- * touches the other browser's files, and the answer changes while the app is
- * running (quitting the browser clears `browserRunning`), so a value cached at
- * mount would go stale. A refresh keeps the last result on screen so a menu
- * does not reflow as it opens.
+ * Sources are listed lazily by `loadSources` when a menu opens: detection touches the other
+ * browser's files and its answer changes while the app runs (quitting clears `browserRunning`).
+ * A refresh keeps the last result on screen so a menu does not reflow as it opens.
  */
 export function useBrowserImportLauncher() {
   const userProfiles = useClientSettings((settings) => settings.browserProfiles);

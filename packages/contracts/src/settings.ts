@@ -1327,11 +1327,10 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
   /**
-   * Tailscale device names (MagicDNS short names such as `my-laptop`) whose
-   * browsers get a session without pairing. Empty means every device pairs.
-   * Deliberately absent from `ServerSettingsPatch`: only someone who can edit
-   * the server's settings.json can widen who skips pairing, never a client.
-   * See apps/server/src/auth/TrustedDevices.ts for how callers are identified.
+   * Tailscale device names (MagicDNS short names such as `my-laptop`) whose browsers get a
+   * session without pairing; empty means every device pairs. Absent from `ServerSettingsPatch`
+   * on purpose: a client must never widen who skips pairing.
+   * See apps/server/src/auth/TrustedDevices.ts.
    */
   trustedTailscaleDevices: Schema.Array(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),

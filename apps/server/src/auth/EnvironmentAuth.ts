@@ -987,39 +987,38 @@ export const make = Effect.gen(function* () {
    * Issues a Bearer or DPoP access token for `subject`, granting the requested
    * scopes that are allowed (default: all of `allowedScopes`); fails when none are.
    */
-  const issueAccessToken = (input: {
+  const issueAccessToken = Effect.fn("EnvironmentAuth.issueAccessToken")(function* (input: {
     readonly subject: string;
     readonly allowedScopes: ReadonlyArray<AuthEnvironmentScope>;
     readonly requestedScopes: ReadonlyArray<AuthEnvironmentScope> | undefined;
     readonly client: AuthClientMetadata;
     readonly binding: AccessTokenBinding | undefined;
     readonly replaceActiveForSubjectAndMethod: boolean;
-  }) =>
-    Effect.gen(function* () {
-      const grantedScopes =
-        input.requestedScopes === undefined
-          ? input.allowedScopes
-          : [...new Set(input.requestedScopes)].filter((scope) =>
-              input.allowedScopes.includes(scope),
-            );
-      if (grantedScopes.length === 0) {
-        return yield* new ServerAuthScopeNotGrantedError({});
-      }
-      const proofKeyThumbprint = input.binding?.proofKeyThumbprint;
-      const session = yield* sessions
-        .issue({
-          method: proofKeyThumbprint ? "dpop-access-token" : "bearer-access-token",
-          subject: input.subject,
-          scopes: grantedScopes,
-          ...(proofKeyThumbprint ? { proofKeyThumbprint, ttl: Duration.hours(1) } : {}),
-          replaceActiveForSubjectAndMethod: input.replaceActiveForSubjectAndMethod,
-          client: input.client,
-        })
-        .pipe(
-          Effect.mapError((cause) => new ServerAuthAuthenticatedAccessTokenIssueError({ cause })),
-        );
-      return yield* toAccessTokenResult(session, input.binding);
-    });
+  }) {
+    const grantedScopes =
+      input.requestedScopes === undefined
+        ? input.allowedScopes
+        : [...new Set(input.requestedScopes)].filter((scope) =>
+            input.allowedScopes.includes(scope),
+          );
+    if (grantedScopes.length === 0) {
+      return yield* new ServerAuthScopeNotGrantedError({});
+    }
+    const proofKeyThumbprint = input.binding?.proofKeyThumbprint;
+    const session = yield* sessions
+      .issue({
+        method: proofKeyThumbprint ? "dpop-access-token" : "bearer-access-token",
+        subject: input.subject,
+        scopes: grantedScopes,
+        ...(proofKeyThumbprint ? { proofKeyThumbprint, ttl: Duration.hours(1) } : {}),
+        replaceActiveForSubjectAndMethod: input.replaceActiveForSubjectAndMethod,
+        client: input.client,
+      })
+      .pipe(
+        Effect.mapError((cause) => new ServerAuthAuthenticatedAccessTokenIssueError({ cause })),
+      );
+    return yield* toAccessTokenResult(session, input.binding);
+  });
 
   const issueTrustedDeviceAccessToken: EnvironmentAuth["Service"]["issueTrustedDeviceAccessToken"] =
     (deviceName, requestedScopes, requestMetadata, input) =>

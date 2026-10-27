@@ -572,12 +572,10 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
   const statePath = path.join(input.baseDir, "runtime", SERVICE_STATE_FILE);
   const restartPendingPath = path.join(input.baseDir, "runtime", SERVICE_RESTART_PENDING_FILE);
   const runtimePaths = pinnedRuntimePaths(path, input.baseDir, input.cliVersion, platform);
-  // macOS keys Full Disk Access and Files & Folders grants for a non-bundled
-  // executable to its absolute path, and the launch agent's process is the
-  // responsible process for everything it spawns. Running the launcher from
-  // a versioned directory made every update lose those grants, so on macOS
-  // the launch agent runs a copy of the runtime at a path no update changes.
-  // The copy still spawns `versions/<activeVersion>/t3 serve` as before.
+  // macOS keys Full Disk Access and Files & Folders grants for a non-bundled executable to
+  // its absolute path, and a versioned launcher directory lost them on every update. On macOS
+  // the launch agent therefore runs a copy of the runtime at a path no update changes; the
+  // copy still spawns `versions/<activeVersion>/t3 serve`.
   const launcherDir = path.join(input.baseDir, "runtime", SERVICE_LAUNCHER_DIR);
   const launcher =
     platform === "darwin"
@@ -736,11 +734,9 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
           .remove(launcher.stagingDir, { recursive: true, force: true })
           .pipe(Effect.andThen(fs.copy(runtimePaths.versionDir, launcher.stagingDir))),
   ).pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
-  // Renames, never overwrites: a launcher that is still running keeps its
-  // open executable. The fixed path holds a complete copy except for the
-  // moment between the two renames; a failed swap puts the previous copy
-  // back. Once the new copy is in place, a retired copy that cannot be
-  // removed is left for the next install to clear.
+  // Renames, never overwrites: a running launcher keeps its open executable. The fixed path
+  // holds a complete copy except between the two renames; a failed swap restores the previous
+  // copy. A retired copy that cannot be removed is left for the next install to clear.
   const publishLauncher = Effect.suspend(() =>
     launcher === undefined
       ? Effect.void

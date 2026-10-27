@@ -60,13 +60,9 @@ export interface UseEscapeToStopAndRewindOptions {
 }
 
 /**
- * Escape stops a running turn; Escape twice within 500 ms opens the rewind
- * picker, as in Claude Code.
- *
- * Listens on window in the bubble phase, so it runs last: the composer's
- * editor closes its own slash and mention menus on Escape and stops the
- * event there, and base-ui dialogs and menus close on it first. A capture
- * listener would run before both and steal their Escape.
+ * Escape stops a running turn; Escape twice within 500 ms opens the rewind picker.
+ * Listens in the bubble phase so the composer's menus and base-ui dialogs, which close on
+ * Escape first, keep it; a capture listener would steal theirs.
  */
 export function useEscapeToStopAndRewind(options: UseEscapeToStopAndRewindOptions): void {
   const stateRef = useRef(INITIAL_ESCAPE_STATE);
@@ -85,6 +81,7 @@ export function useEscapeToStopAndRewind(options: UseEscapeToStopAndRewindOption
     else options.onOpenPicker();
   });
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- subscribes a window keydown listener (an external system) while enabled
   useEffect(() => {
     if (!options.enabled) return;
     window.addEventListener("keydown", onKeyDown);

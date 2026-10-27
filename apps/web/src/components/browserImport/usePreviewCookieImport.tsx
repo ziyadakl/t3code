@@ -20,11 +20,9 @@ import { useCookieImportBannerDismissal } from "./cookieImportBannerDismissal";
 import { PreviewCookieImportBanner } from "./PreviewCookieImportBanner";
 
 /**
- * Once the banner has something to offer, that barely changes while the app
- * runs, so one listing serves every preview pane this session. A listing with
- * nothing to offer is not kept: a browser installed later shows the banner on
- * the next pane. Menus, and the banner's own button, still list fresh, since
- * the state of each browser does change.
+ * A listing with something to offer barely changes while the app runs, so one serves every
+ * preview pane this session; one with nothing to offer is not kept, so a browser installed
+ * later shows the banner on the next pane. Menus and the banner button still list fresh.
  */
 const listSourcesForBanner = oncePerSession(
   async () => {
@@ -42,16 +40,10 @@ export interface PreviewCookieImportMenu {
 }
 
 /**
- * Cookie import from inside the preview pane: the ⋮ menu entry, the one-time
- * banner, and the wizard both open. Imports land in the tab's own profile and
- * environment, with no other choice, and the tab reloads once they do so the
- * user sees themselves signed in. The banner goes away for good when the user
- * closes it or an import lands; backing out of the wizard keeps it.
- *
- * `available` is false where this machine's browsers are not the tab's: web
- * and remote clients have no bridge to read them, and a streamed server tab
- * keeps its cookies in the environment's browser, not here. Incognito keeps nothing,
- * so it gets neither entry.
+ * Cookie import from the preview pane: the ⋮ menu entry, the one-time banner (gone for good
+ * once closed or an import lands) and the wizard both open; the tab reloads after an import.
+ * `available` is false where this machine's browsers are not the tab's (web, remote, streamed
+ * server tabs); incognito keeps nothing, so it gets neither entry.
  */
 export function usePreviewCookieImport(input: {
   readonly available: boolean;
@@ -74,6 +66,7 @@ export function usePreviewCookieImport(input: {
   // The import outlives the render that opened it; the reload must target the
   // tab and profile the pane shows when it finishes.
   const latest = useRef(input);
+  // oxlint-disable-next-line t3code/react-effect-budget -- keeps the latest input for an async import that outlives the render that started it
   useEffect(() => {
     latest.current = input;
   });
@@ -83,6 +76,7 @@ export function usePreviewCookieImport(input: {
   const [bannerSources, setBannerSources] = useState<ReadonlyArray<BrowserImportSource> | null>(
     null,
   );
+  // oxlint-disable-next-line t3code/react-effect-budget -- lists browsers asynchronously for the banner; a cancel flag drops stale results
   useEffect(() => {
     if (!bannerCandidate) return;
     let current = true;

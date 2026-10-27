@@ -362,7 +362,7 @@ const signDpopProof = (url: string) => {
     jti: NodeCrypto.randomUUID(),
     // The server checks iat against its real clock.
     // @effect-diagnostics-next-line globalDate:off
-    iat: Math.floor(Date.now() / 1000),
+    iat: Math.floor(Date.now() / 1000), // oxlint-disable-line t3code/no-wall-clock-in-tests -- the server compares iat with its real clock
   });
   const signature = NodeCrypto.sign("sha256", Buffer.from(`${header}.${payload}`), {
     key: privateKey,

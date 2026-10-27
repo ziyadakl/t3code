@@ -245,15 +245,10 @@ function placeStoredMessages(
 }
 
 /**
- * The turns of an import whose messages are placed in their whole Claude
- * transcript: one per placed prompt. A turn holds every message up to the
- * next placed prompt, so messages the thread never showed or could not place
- * stay with the turn Claude's session has them in, and it ends at the
- * transcript's last reply before that prompt, or before line `endBefore` for
- * the last turn. Placed messages before the first placed prompt get no turn.
- * When that prompt is not the transcript's first, its turn keeps where the
- * transcript before it ends, so a rewind to it resumes there instead of
- * starting the session over.
+ * The turns of an import whose messages are placed in their whole Claude transcript: one
+ * per placed prompt, holding every message up to the next one and ending at the transcript's
+ * last reply before it (before `endBefore` for the last). If the first placed prompt is not
+ * the transcript's first, its turn keeps where the transcript before it ends.
  */
 function placedTurns(
   placed: ReadonlyArray<PlacedMessage>,
@@ -384,11 +379,9 @@ const make = Effect.gen(function* () {
   const runtimes = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
 
   /**
-   * Events that bring an imported thread's conversation up to `thread`: the
-   * messages it does not hold yet and, for a Claude transcript, one completed
-   * run per prompt whose provider turn holds the prompt's uuid and the uuid
-   * its turn ended at. Records that already match are left alone, so the
-   * result is empty once the thread is current.
+   * Events that bring an imported thread up to `thread`: the messages it does not hold yet
+   * and, for a Claude transcript, one completed run per prompt whose provider turn holds the
+   * prompt's uuid and the uuid its turn ended at. Empty once the thread is current.
    */
   const conversationEvents = (input: {
     readonly threadId: ThreadId;
@@ -773,13 +766,9 @@ const make = Effect.gen(function* () {
   });
 
   /**
-   * Brings an import up to `thread`, a read of its whole transcript: places
-   * the messages the thread holds in the transcript, appends the ones after
-   * them when `append`, and records a run per placed prompt. Runs T3 Code ran
-   * are left as they are; the imported ones go before them in the
-   * conversation, so the last imported turn ends where T3 Code's first turn
-   * starts in the transcript. Returns the messages appended and whether runs
-   * were recorded.
+   * Brings an import up to `thread`, a read of its whole transcript: places its messages,
+   * appends later ones when `append`, and records a run per placed prompt before any run T3
+   * Code ran. Returns the messages appended and whether runs were recorded.
    */
   const syncImport = Effect.fn("syncAgentImportV2")(function* (input: {
     readonly threadId: ThreadId;
@@ -932,11 +921,9 @@ const make = Effect.gen(function* () {
   });
 
   /**
-   * Append the messages a transcript gained since `threadId` was imported from
-   * it. `thread` is a read of the whole transcript (`allMessages`). Only a
-   * thread that never ran a turn in T3 Code is refreshed: once it has, T3
-   * Code's copy of the session is the one being continued. Returns the number
-   * of messages appended.
+   * Appends the messages a transcript gained since `threadId` was imported from it. `thread`
+   * is a read of the whole transcript. Only a thread that never ran a turn in T3 Code is
+   * refreshed. Returns the number of messages appended.
    */
   const appendImportedMessages = Effect.fn("appendImportedAgentMessagesV2")(function* (input: {
     readonly threadId: ThreadId;
@@ -957,13 +944,10 @@ const make = Effect.gen(function* () {
   });
 
   /**
-   * Gives a Claude chat imported before imports kept transcript uuids a run
-   * per prompt, read from the whole transcript it was imported from. Only the
-   * messages it already shows are touched, each placed by its content, so
-   * repeating it is a no-op. A chat that ran turns in T3 Code since keeps
-   * them as they are. Callers hold the thread's command lock: the new runs
-   * take the next ordinals, as a turn being started would. Returns whether
-   * the chat was healed.
+   * Gives a Claude chat imported before imports kept transcript uuids a run per prompt, read
+   * from its whole transcript. Only messages it already shows are touched, so repeating is a
+   * no-op, and a chat that ran turns in T3 Code keeps them. Callers hold the thread's command
+   * lock. Returns whether the chat was healed.
    */
   const healImportedThread = Effect.fn("healImportedAgentThreadV2")(function* (input: {
     readonly threadId: ThreadId;

@@ -277,11 +277,13 @@ export function useTimelineRewind(input: TimelineRewindInput) {
   // so the menu shows it without asking Claude again, and is released when
   // the menu closes.
   const heldRewindPreviewRef = useRef<(() => void) | null>(null);
+  // oxlint-disable-next-line t3code/react-effect-budget -- releases the held dry-run preview when the rewind menu closes, a cleanup of an external subscription
   useEffect(() => {
     if (pendingRewind !== null) return;
     heldRewindPreviewRef.current?.();
     heldRewindPreviewRef.current = null;
   }, [pendingRewind]);
+  // oxlint-disable-next-line t3code/react-effect-budget -- releases the held dry-run preview on unmount, a cleanup of an external subscription
   useEffect(() => {
     const held = heldRewindPreviewRef;
     return () => held.current?.();

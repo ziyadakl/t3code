@@ -12,11 +12,9 @@ const make = Effect.gen(function* () {
   const threadCommands = yield* ThreadCommandExecutor.ThreadCommandExecutor;
 
   /**
-   * Gives every Claude chat imported before imports kept transcript uuids its
-   * rewind points. Safe to repeat: a healed chat is left as it is. Each chat is
-   * healed under its command lock, so a turn started meanwhile waits and takes
-   * the run ordinal after the healed ones instead of sharing a run id with
-   * one. Returns the number of chats healed.
+   * Gives every Claude chat imported before imports kept transcript uuids its rewind points.
+   * Safe to repeat. Each chat is healed under its command lock, so a turn started meanwhile
+   * takes the run ordinal after the healed ones. Returns the number of chats healed.
    */
   const run = Effect.fn("ImportedRewindHeal.run")(function* () {
     const rows = yield* runtimes.list();
