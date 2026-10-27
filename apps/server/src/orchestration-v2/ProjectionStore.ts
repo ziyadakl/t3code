@@ -5246,7 +5246,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             // an obsolete payload cannot fail the read; the payloads of the runs to roll
             // back are decoded below.
             const [targetRunRows] = yield* Effect.all([
-              sql<{ readonly userMessageId: string | null }>`
+              sql<{ readonly userMessageId: MessageId | null }>`
             SELECT json_extract(payload_json, '$.userMessageId') AS "userMessageId"
             FROM orchestration_v2_projection_runs
             WHERE thread_id = ${threadId} AND ordinal = ${targetOrdinal}`,
@@ -5263,7 +5263,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             const candidateRows = yield* sql<{
               readonly ordinal: number;
               readonly status: string;
-              readonly userMessageId: string | null;
+              readonly userMessageId: MessageId | null;
             }>`SELECT ordinal, status, json_extract(payload_json, '$.userMessageId') AS "userMessageId"
             FROM orchestration_v2_projection_runs
             WHERE thread_id = ${threadId}
@@ -5275,7 +5275,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 : compareConversationOrder(
                     {
                       threadId,
-                      userMessageId: candidate.userMessageId ?? "",
+                      userMessageId: candidate.userMessageId ?? ("" as MessageId),
                       ordinal: candidate.ordinal,
                     },
                     targetRun,
