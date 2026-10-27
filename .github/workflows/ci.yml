@@ -343,8 +343,12 @@ jobs:
             node apps/web/node_modules/playwright/cli.js install-deps chromium
           fi
 
+      # Upstream runs this on an 8 vCPU Blacksmith runner. The fork's GitHub-hosted
+      # runner has 4, and the heavy Word, PDF and spreadsheet previews in
+      # AttachmentFilePreview.browser.test.tsx time out at 15s when other test
+      # files share the CPU. One file at a time passes with upstream's timeouts.
       - name: Test
-        run: vp run --filter @t3tools/web test
+        run: vp run --filter @t3tools/web test --no-file-parallelism
 
   # apps/server sets `fileParallelism: false`, so its test files run strictly
   # one at a time. Sharding spreads them over separate runners instead of
