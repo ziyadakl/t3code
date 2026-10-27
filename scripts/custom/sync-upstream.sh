@@ -265,7 +265,7 @@ check() {
   fi
 
   # The same commands as the Lint and Typecheck jobs in .github/workflows/ci.yml.
-  # Mobile native lint skips tools this machine lacks (swiftlint, ktlint, detekt).
+  # Mobile native lint is skipped when this machine lacks ktlint or detekt, and skips SwiftLint when missing.
   local ci=.github/workflows/ci.yml cmd
   local cmds=(
     "vp run --filter @t3tools/desktop ensure:electron"
@@ -284,6 +284,11 @@ check() {
 
   pnpm install --frozen-lockfile
   for cmd in "${cmds[@]}"; do
+    # Upstream's mobile lint now fails when ktlint or detekt is missing; CI has them, this machine may not.
+    if [ "$cmd" = "vp run lint:mobile" ] && ! { command -v ktlint >/dev/null && command -v detekt >/dev/null; }; then
+      echo "> $cmd skipped: ktlint or detekt is not installed here. CI runs it on the pull request."
+      continue
+    fi
     echo "> $cmd"
     # shellcheck disable=SC2086 # each entry is a command line to split
     pnpm exec $cmd
