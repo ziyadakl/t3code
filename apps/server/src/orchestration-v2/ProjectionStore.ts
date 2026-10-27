@@ -5240,11 +5240,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               return context;
 
             const targetOrdinal = checkpoint.appRunOrdinal ?? 0;
-            // "After the target" follows conversation order, not ordinals: a chat imported
-            // from the desktop app numbers its imported prompts after the turns T3 Code ran,
-            // yet they come first. Only run ids, ordinals and message ids are read here, so
-            // an obsolete payload cannot fail the read; the payloads of the runs to roll
-            // back are decoded below.
+            // "After the target" follows conversation order, not ordinals: imported
+            // prompts come first but are numbered after the turns T3 Code ran. Only
+            // ids are read here, so an obsolete payload cannot fail this read.
             const [targetRunRows] = yield* Effect.all([
               sql<{ readonly userMessageId: MessageId | null }>`
             SELECT json_extract(payload_json, '$.userMessageId') AS "userMessageId"

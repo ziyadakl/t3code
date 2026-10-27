@@ -1221,16 +1221,9 @@ export function decideMessageRewindStart(input: {
     : { kind: "ask" };
 }
 /**
- * Runs `revert` (rollback command `requestId`) and resolves once the message's run is rolled
- * back or the thread records this rewind finished, with the server's notice if any; rejects
- * with the reason once it records a failure. With `awaitsRecordedOutcome` (a rewind) only
- * the recorded outcome ends the wait, unless a later rewind took over the thread.
- *
- * The message is found by id, so the wait does not depend on run numbers. A long thread pages
- * old messages and runs out of the projection; with `turnCount` (the turns kept) the wait then
- * falls back to the retained runs numbered after it: it needs one of them still settled to
- * start, and ends once none is, so a shallower rewind by another client does not end it early.
- * A target already rolled back (another client rewound it first) is rejected, not waited for.
+ * Runs `revert` (command `requestId`); resolves with the server's notice once the message's run is
+ * rolled back or the thread records the rewind done, rejects on a recorded failure. `awaitsRecordedOutcome`
+ * waits for the record; `turnCount` bounds the wait to the retained runs when the message is paged out.
  */
 export async function waitForRevertedMessage(
   threadRef: ScopedThreadRef,
