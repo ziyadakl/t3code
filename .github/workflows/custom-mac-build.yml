@@ -42,7 +42,6 @@ permissions:
 concurrency:
   group: custom-mac-build-${{ github.ref }}
   cancel-in-progress: true
-  VP_NODE_VERSION: "26.8.2"
 
 jobs:
   build:
