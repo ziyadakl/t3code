@@ -3,6 +3,7 @@ import {
   ProjectId,
   resolvePullRequestAuthorFilter,
   type EnvironmentId,
+  type PullRequestDiffStat,
   type PullRequestListEntry,
   type PullRequestListInput,
   type PullRequestListResult,
@@ -44,6 +45,38 @@ export type EnvironmentPullRequestListEntry = PullRequestListEntry & {
 
 export const scopedPullRequestListKey = (entry: EnvironmentPullRequestListEntry) =>
   `${entry.environmentId}:${pullRequestListKey(entry)}`;
+
+export const pullRequestStatKey = (
+  row: Pick<PullRequestDiffStat, "projectId" | "repository" | "number">,
+) => `${row.projectId}:${row.repository}:${row.number}`;
+
+/**
+ * Fills rows that have no diff stat yet from the stats answers on screen. Returns `entries`
+ * itself when no row changes, so the list keeps its identity across renders.
+ */
+export function withShownPullRequestStats(
+  entries: readonly EnvironmentPullRequestListEntry[],
+  answers: readonly {
+    readonly environmentId: EnvironmentId;
+    readonly stats: readonly PullRequestDiffStat[];
+  }[],
+): readonly EnvironmentPullRequestListEntry[] {
+  const shown = new Map(
+    answers.flatMap(({ environmentId, stats }) =>
+      stats.map((row) => [`${environmentId}:${pullRequestStatKey(row)}`, row] as const),
+    ),
+  );
+  if (!shown.size) return entries;
+  let changed = false;
+  const next = entries.map((entry) => {
+    const stat = shown.get(`${entry.environmentId}:${pullRequestStatKey(entry)}`);
+    if (!stat || entry.additions + entry.deletions !== 0) return entry;
+    if (stat.additions + stat.deletions === 0) return entry;
+    changed = true;
+    return { ...entry, additions: stat.additions, deletions: stat.deletions };
+  });
+  return changed ? next : entries;
+}
 
 export function pullRequestListRowsAreEqual(
   previous: EnvironmentPullRequestListEntry,
@@ -143,6 +176,34 @@ export function pullRequestListHead(
       };
 }
 
+/** The recorded pages with the current list head on top; before any answer is recorded, the head alone. */
+export function shownPullRequestListPages(
+  recorded: PullRequestListPages | null,
+  head: PullRequestListResult | null,
+): PullRequestListPages | null {
+  return head ? pullRequestListHead(recorded, head) : recorded;
+}
+
+export function patchPullRequestListEntry(
+  recorded: PullRequestListPages | null,
+  head: PullRequestListResult | null,
+  entry: PullRequestListEntry,
+  patch: Partial<PullRequestListEntry>,
+  observedAt: number,
+): PullRequestListPages | null {
+  const pages = shownPullRequestListPages(recorded, head);
+  return (
+    pages && {
+      ...pages,
+      entries: pages.entries.map((row) =>
+        pullRequestListKey(row) === pullRequestListKey(entry)
+          ? { ...row, ...patch, observedAt }
+          : row,
+      ),
+    }
+  );
+}
+
 export function pullRequestListInput(
   controls: PullRequestListControls,
   query: string,
@@ -184,6 +245,37 @@ export function appendPullRequestListPage(
   };
 }
 
+/**
+ * A filter picker's rows: what is picked stays in view, then the loaded rows' values that match,
+ * then the host's answers, each once. The host matched its own way (an author's display name, say),
+ * so its answers are not narrowed again here.
+ */
+const FILTER_CHOICE_LIMIT = 100;
+
+export function pullRequestFilterChoices(input: {
+  readonly selected: readonly string[];
+  readonly suggestions: readonly string[];
+  readonly hosted: readonly string[];
+  readonly query: string;
+}): readonly string[] {
+  const needle = input.query.trim().toLowerCase();
+  const seen = new Set<string>();
+  const rows: string[] = [];
+  const add = (value: string) => {
+    const key = value.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    rows.push(value);
+  };
+  const loaded = input.suggestions.filter((value) => value.toLowerCase().includes(needle));
+  for (const value of input.selected) add(value);
+  // Loaded matches alone could fill the list, so the host's answers get room after the first half.
+  for (const value of loaded.slice(0, FILTER_CHOICE_LIMIT / 2)) add(value);
+  for (const value of input.hosted) add(value);
+  for (const value of loaded.slice(FILTER_CHOICE_LIMIT / 2)) add(value);
+  return rows.slice(0, FILTER_CHOICE_LIMIT);
+}
+
 export function pullRequestListFacets(entries: readonly PullRequestListEntry[]) {
   return {
     authors: [
@@ -192,7 +284,21 @@ export function pullRequestListFacets(entries: readonly PullRequestListEntry[]) 
     labels: [...new Set(entries.flatMap((entry) => entry.labels.map((label) => label.name)))].sort(
       (a, b) => a.localeCompare(b),
     ),
+    labelColors: pullRequestLabelColors(entries.flatMap((entry) => entry.labels)),
   };
+}
+
+/** Each label's dot color by lowercased name; the first usable color a name carries wins. */
+export function pullRequestLabelColors(
+  labels: readonly { readonly name: string; readonly color: string | null }[],
+): Readonly<Record<string, string>> {
+  const colors: Record<string, string> = {};
+  for (const label of labels) {
+    const key = label.name.toLowerCase();
+    const color = pullRequestLabelColor(label.color);
+    if (color && !(key in colors)) colors[key] = color;
+  }
+  return colors;
 }
 
 export function filterPullRequestList<

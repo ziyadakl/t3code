@@ -1,11 +1,7 @@
 /**
- * Sites whose session is worth more than the site itself, so the import picker
- * never pre-selects them. Keyed by registrable domain, as `siteDomain` returns,
- * plus brand names that cover every country domain (`google.co.uk`,
- * `yahoo.co.jp`).
- *
- * A curated list rather than a heuristic: a false "sensitive" only costs the
- * user one tick, but a missed one silently hands a preview tab their bank.
+ * Sites whose session is worth more than the site, so the import picker never pre-selects
+ * them; keyed by registrable domain (as `siteDomain` returns) plus brand names covering
+ * every country domain. Curated, not heuristic: a miss hands a preview tab the user's bank.
  *
  * @module SensitiveSites
  */

@@ -9,7 +9,6 @@ import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Etag from "effect/http/Etag";
 import * as HttpPlatform from "effect/http/HttpPlatform";
 import * as HttpRouter from "effect/http/HttpRouter";
@@ -50,7 +49,7 @@ const makeLayerRoutes = (capture: (auth: EnvironmentAuth.EnvironmentAuth["Servic
       // covered in http.test.ts.
       Layer.provide(
         Layer.succeed(TrustedDevices.TrustedDevices, {
-          resolve: () => Effect.succeed(Option.none()),
+          resolve: () => Effect.succeedNone,
         }),
       ),
       Layer.provide(McpOAuthHttp.layer.pipe(Layer.provide(McpOAuth.layer))),

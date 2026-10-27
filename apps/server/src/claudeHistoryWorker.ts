@@ -5,8 +5,7 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import * as Schema from "effect/Schema";
 
-// Nothing here may run on import: inside the executable `import.meta.main` is
-// true for the whole bundle.
+// Bundled import.meta.main is always true; imports must have no side effects.
 const decodeHistoryOptions = Schema.decodeSync(
   Schema.fromJsonString(
     Schema.Struct({
@@ -26,12 +25,17 @@ export async function runClaudeHistoryWorker(
 ): Promise<void> {
   const { agentId, ...options } = decodeHistoryOptions(rawOptions ?? "{}");
   if (!sessionId) throw new Error("Claude history session id is required.");
-  const run = () => {
+  const run = async () => {
     switch (method) {
       case "getSessionMessages":
         return getSessionMessages(sessionId, options);
-      case "forkSession":
-        return forkSession(sessionId, options);
+      case "forkSession": {
+        const forked = await forkSession(sessionId, options);
+        const headMessageId = await getSessionMessages(forked.sessionId, options)
+          .then((messages) => messages.at(-1)?.uuid)
+          .catch(() => undefined);
+        return headMessageId === undefined ? forked : { ...forked, headMessageId };
+      }
       case "getSubagentMessages":
         if (!agentId) throw new Error("Claude subagent id is required.");
         return getSubagentMessages(sessionId, agentId, options);

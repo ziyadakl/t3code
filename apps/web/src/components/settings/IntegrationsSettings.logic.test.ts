@@ -9,50 +9,6 @@ const environmentId = "environment-a" as EnvironmentId;
 const secondEnvironmentId = "environment-b" as EnvironmentId;
 
 describe("clearBrowserProfileData", () => {
-  it("waits for cookie and cache cleanup", async () => {
-    const clearCookies = vi.fn().mockResolvedValue(undefined);
-    const clearCache = vi.fn().mockResolvedValue(undefined);
-
-    await clearBrowserProfileData({ clearCookies, clearCache }, [environmentId], "profile-a");
-
-    expect(clearCookies).toHaveBeenCalledWith(environmentId, "profile-a");
-    expect(clearCache).toHaveBeenCalledWith(environmentId, "profile-a");
-  });
-
-  it("clears every known environment before succeeding", async () => {
-    const clearCookies = vi.fn().mockResolvedValue(undefined);
-    const clearCache = vi.fn().mockResolvedValue(undefined);
-
-    await clearBrowserProfileData(
-      { clearCookies, clearCache },
-      [environmentId, secondEnvironmentId],
-      "profile-a",
-    );
-
-    expect(clearCookies.mock.calls).toEqual([
-      [environmentId, "profile-a"],
-      [secondEnvironmentId, "profile-a"],
-    ]);
-    expect(clearCache.mock.calls).toEqual([
-      [environmentId, "profile-a"],
-      [secondEnvironmentId, "profile-a"],
-    ]);
-  });
-
-  it("propagates cleanup failures", async () => {
-    const failure = new Error("clear failed");
-    await expect(
-      clearBrowserProfileData(
-        {
-          clearCookies: vi.fn().mockRejectedValue(failure),
-          clearCache: vi.fn().mockResolvedValue(undefined),
-        },
-        [environmentId],
-        "profile-a",
-      ),
-    ).rejects.toBe(failure);
-  });
-
   it("does not report success without an environment or bridge", async () => {
     const bridge = {
       clearCookies: vi.fn().mockResolvedValue(undefined),

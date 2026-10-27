@@ -1,12 +1,8 @@
 /**
- * Claude Code sessions that ran outside T3 Code: in the Claude desktop app's
- * Code tab or in the terminal CLI. Both write transcripts to
- * `<claude home>/projects/<encoded cwd>/<session id>.jsonl`; the desktop app
- * also keeps one session card per session under its application support
- * folder, one folder per account and organization.
- *
- * Everything here only reads those folders, except `handOffTranscript`, which
- * copies a transcript into another Claude home and never touches the source.
+ * Claude Code sessions that ran outside T3 Code (desktop app Code tab or terminal CLI).
+ * Transcripts are `<claude home>/projects/<encoded cwd>/<session id>.jsonl`; the desktop app
+ * also keeps one session card per session under its application support folder. Everything
+ * here only reads, except `handOffTranscript`, which copies a transcript to another home.
  */
 import { ProviderInstanceId } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -154,12 +150,10 @@ export function mergeDesktopCards(files: ReadonlyArray<DesktopCardFile>): Deskto
 }
 
 /**
- * macOS file systems are case-insensitive by default, so the same directory
- * reaches us in more than one spelling: a project added as
- * `~/Dev/Affinity/Affinity-OS` holds sessions whose recorded cwd (and whose
- * transcript folder name) says `affinity-os`. Comparing those exactly shows an
- * empty picker. The shared comparison helper already case folds Windows paths,
- * so only macOS needs folding here; other platforms keep exact matching.
+ * macOS file systems are case-insensitive, so one directory arrives in several spellings
+ * (a project added as `~/Dev/Affinity/Affinity-OS` holds sessions recorded as `affinity-os`),
+ * and exact comparison shows an empty picker. The shared helper already folds Windows paths,
+ * so only macOS needs folding here.
  */
 export function foldPathCase(value: string, caseInsensitive: boolean): string {
   const normalized = normalizeProjectPathForComparison(value);
@@ -205,45 +199,43 @@ export const readDesktopCards = Effect.fn("ClaudeSessionSources.readDesktopCards
   const cards: DesktopCardFile[] = [];
   const seen = new Set<string>();
 
-  const visit = (directory: string, depth: number): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      const entries = yield* fileSystem
-        .readDirectory(directory)
-        .pipe(Effect.orElseSucceed((): string[] => []));
-      for (const entry of entries.toSorted()) {
-        const entryPath = path.join(directory, entry);
-        const stats = yield* Effect.option(fileSystem.stat(entryPath));
-        if (Option.isNone(stats)) continue;
-        if (stats.value.type === "Directory") {
-          if (depth < MAX_CARD_FOLDER_DEPTH) yield* visit(entryPath, depth + 1);
-          continue;
-        }
-        if (
-          stats.value.type !== "File" ||
-          !entry.startsWith("local_") ||
-          !entry.endsWith(".json")
-        ) {
-          continue;
-        }
-        const mtimeMs = Option.match(stats.value.mtime, {
-          onNone: () => 0,
-          onSome: (date) => date.getTime(),
-        });
-        seen.add(entryPath);
-        const cached = cache?.get(entryPath);
-        if (cached !== undefined && cached.mtimeMs === mtimeMs) {
-          cards.push(cached);
-          continue;
-        }
-        const contents = yield* Effect.option(fileSystem.readFileString(entryPath));
-        if (Option.isNone(contents)) continue;
-        const card = decodeDesktopSessionCard(contents.value);
-        if (Option.isNone(card)) continue;
-        const file = { card: card.value, mtimeMs };
-        cache?.set(entryPath, file);
-        cards.push(file);
+  const visit = Effect.fn("ClaudeSessionSources.visit")(function* (
+    directory: string,
+    depth: number,
+  ): Effect.fn.Return<void> {
+    const entries = yield* fileSystem
+      .readDirectory(directory)
+      .pipe(Effect.orElseSucceed((): string[] => []));
+    for (const entry of entries.toSorted()) {
+      const entryPath = path.join(directory, entry);
+      const stats = yield* Effect.option(fileSystem.stat(entryPath));
+      if (Option.isNone(stats)) continue;
+      if (stats.value.type === "Directory") {
+        if (depth < MAX_CARD_FOLDER_DEPTH) yield* visit(entryPath, depth + 1);
+        continue;
       }
-    });
+      if (stats.value.type !== "File" || !entry.startsWith("local_") || !entry.endsWith(".json")) {
+        continue;
+      }
+      const mtimeMs = Option.match(stats.value.mtime, {
+        onNone: () => 0,
+        onSome: (date) => date.getTime(),
+      });
+      seen.add(entryPath);
+      const cached = cache?.get(entryPath);
+      if (cached !== undefined && cached.mtimeMs === mtimeMs) {
+        cards.push(cached);
+        continue;
+      }
+      const contents = yield* Effect.option(fileSystem.readFileString(entryPath));
+      if (Option.isNone(contents)) continue;
+      const card = decodeDesktopSessionCard(contents.value);
+      if (Option.isNone(card)) continue;
+      const file = { card: card.value, mtimeMs };
+      cache?.set(entryPath, file);
+      cards.push(file);
+    }
+  });
 
   yield* visit(storeDir, 1);
   if (cache !== undefined) {

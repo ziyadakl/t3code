@@ -11,7 +11,6 @@ import {
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 
 import * as ProviderSessionRuntime from "../../persistence/ProviderSessionRuntime.ts";
 import * as AgentSessionImporter from "../../project/AgentSessionImporter.ts";
@@ -138,11 +137,9 @@ function codeRestoreEntries(sessionId: string, promptUuid: string) {
 }
 
 /**
- * Imports a desktop chat holding `imported` of the recording's prompts, adds
- * `ranInT3Code` as a turn T3 Code ran on it before rewind points existed,
- * heals it, then rewinds the message `rewound` picks and sends a prompt.
- * Only the query after the rewind runs, and the replay fails unless it
- * resumes the recorded session at the first turn's last assistant message.
+ * Imports a desktop chat holding `imported` of the recording's prompts, adds `ranInT3Code`
+ * as a turn run before rewind points existed, heals it, rewinds the message `rewound` picks
+ * and sends a prompt. The replay fails unless the query resumes the first turn's last reply.
  */
 const runImportedRewind = (input: {
   readonly name: string;
@@ -324,7 +321,7 @@ const runImportedRewind = (input: {
           Layer.provide(
             Layer.mergeAll(
               Layer.mock(AgentSessionScanner.AgentSessionScanner)({
-                readThread: () => Effect.succeed(Option.some({ thread: whole, source })),
+                readThread: () => Effect.succeedSome({ thread: whole, source }),
               }),
               Layer.mock(ProjectService.ProjectService)({}),
               runtimes,

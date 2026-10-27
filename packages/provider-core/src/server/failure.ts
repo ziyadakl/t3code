@@ -27,7 +27,7 @@ export class ContextHandoffBudgetError extends Schema.TaggedError<ContextHandoff
 }
 
 export const MAX_PROVIDER_FAILURE_MESSAGE_LENGTH = 4_096;
-export const MAX_PROVIDER_FAILURE_CODE_LENGTH = 128;
+const MAX_PROVIDER_FAILURE_CODE_LENGTH = 128;
 
 const DEFAULT_PROVIDER_FAILURE_MESSAGE = "Provider turn failed.";
 
@@ -57,10 +57,24 @@ const PROVIDER_FAILURE_REASONS: Record<ProviderAdapterFailureReason, string> = {
   attachment_unreadable: "an attachment could not be read",
 };
 
-function causeMessage(cause: unknown): string | undefined {
+/**
+ * Walks a cause chain for curated text without reading arbitrary provider
+ * defect text. `known` is the message of a domain error T3 raised itself;
+ * `category` is the generic message of the innermost provider wrapper seen.
+ */
+function curatedCauseMessages(cause: unknown): {
+  readonly known: string | undefined;
+  readonly category: string | undefined;
+} {
   const seen = new Set<unknown>();
   let category: (typeof PROVIDER_FAILURE_CATEGORIES)[string];
   let reason: string | undefined;
+  const categoryMessage = () => {
+    if (category === undefined) return undefined;
+    return reason
+      ? `${category.summary}: ${reason}. ${category.guidance}`
+      : `${category.summary}. ${category.guidance}`;
+  };
   for (let depth = 0; depth < 16 && cause != null && !seen.has(cause); depth++) {
     seen.add(cause);
     try {
@@ -72,19 +86,29 @@ function causeMessage(cause: unknown): string | undefined {
       const tag = (cause as Record<string, unknown>)._tag;
       switch (tag) {
         case "ContextHandoffBudgetError":
-          return new ContextHandoffBudgetError().message;
+          return { known: new ContextHandoffBudgetError().message, category: categoryMessage() };
+        case "AcpModelSelectionError":
         case "ClaudeBackgroundWorkBlocksQueryReplacementError":
+        case "ClaudeAppendSystemPromptFileError":
+        case "ClaudeAppendSystemPromptMissingValueError":
+        case "ClaudeMcpRegistrationTimeoutError":
         case "CursorModelUnavailableError":
-          return stringField(cause, "message");
+          return { known: stringField(cause, "message"), category: categoryMessage() };
         case "ClaudeAgentSdkQueryRunnerError": {
           // Claude's own error (exit code and stderr) says what went wrong;
           // boundedText redacts credentials before it leaves the server.
           const detail = stringField((cause as Record<string, unknown>).cause, "message");
-          if (detail !== undefined && detail.trim() !== "") return detail;
+          if (detail !== undefined && detail.trim() !== "") {
+            return { known: detail, category: categoryMessage() };
+          }
           break;
         }
         case "ContextHandoffDeliveryUncertainError":
-          return "T3 could not confirm whether conversation history reached the provider. Retry the turn to recover the session.";
+          return {
+            known:
+              "T3 could not confirm whether conversation history reached the provider. Retry the turn to recover the session.",
+            category: categoryMessage(),
+          };
         case "ProviderAdapterProtocolError": {
           const typedReason = (cause as Record<string, unknown>).reason;
           if (
@@ -106,10 +130,16 @@ function causeMessage(cause: unknown): string | undefined {
       break;
     }
   }
-  if (category === undefined) return undefined;
-  return reason
-    ? `${category.summary}: ${reason}. ${category.guidance}`
-    : `${category.summary}. ${category.guidance}`;
+  return { known: undefined, category: categoryMessage() };
+}
+
+/**
+ * The curated message of a domain error in a failure's cause chain, if any.
+ * Callers that pass their own `message` to `makeProviderFailure` check it
+ * first, so a known reason is not hidden behind a wrapper's text.
+ */
+export function knownProviderFailureMessage(cause: unknown): string | undefined {
+  return curatedCauseMessages(cause).known;
 }
 
 function stringField(value: unknown, key: "message" | "code"): string | undefined {
@@ -188,7 +218,9 @@ export function makeProviderFailure(input: {
   readonly retryable?: boolean | null;
   readonly resetAt?: string | null;
 }): OrchestrationV2ProviderFailure {
-  const rawMessage = input.message ?? causeMessage(input.cause) ?? DEFAULT_PROVIDER_FAILURE_MESSAGE;
+  const curated = curatedCauseMessages(input.cause);
+  const rawMessage =
+    input.message ?? curated.known ?? curated.category ?? DEFAULT_PROVIDER_FAILURE_MESSAGE;
   const message = boundedText(rawMessage, MAX_PROVIDER_FAILURE_MESSAGE_LENGTH);
   const rawCode = input.code ?? stringField(input.cause, "code") ?? null;
   const code =

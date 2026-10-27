@@ -3,14 +3,10 @@
 // @effect-diagnostics nodeBuiltinImport:off
 
 /**
- * Count what the resume picker would list for one project, without starting a
- * server or touching any T3 Code state. Reads only the Claude desktop app's
- * session cards and `~/.claude/projects`, and prints four numbers.
- *
+ * Counts what the resume picker would list for one project, reading only the Claude
+ * desktop app's session cards and `~/.claude/projects`; touches no T3 Code state.
  *   node apps/server/scripts/resume-picker-count.ts --project /path/to/project
- *
- * Override the sources for a fixture run with `--claude-home` and
- * `--desktop-store`.
+ * `--claude-home` and `--desktop-store` override the sources for a fixture run.
  */
 import * as NodeOS from "node:os";
 import * as NodeUtil from "node:util";

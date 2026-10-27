@@ -22,14 +22,10 @@ const DAY_MS = 24 * 60 * 60 * 1_000;
 const ORPHAN_GRACE_MS = DAY_MS;
 
 /**
- * Why the sweep archives a thread, or null to keep it. A settled thread is
- * archived once it has been settled, and untouched, for `archiveSettledAfterDays`
- * (null turns that off). A subagent child whose parent is archived, deleted or
- * missing is archived once it has been untouched for a day, whatever the
- * setting: it is the backlog of the parent cascade, and the day lets a user
- * unarchive one to read it. Pinned, snoozed, running and blocked threads are
- * never archived by the sweep, nor (filtered out by the candidate query) a
- * thread an enabled scheduled task posts into.
+ * Why the sweep archives a thread, or null to keep it. A settled thread is archived after
+ * `archiveSettledAfterDays` untouched (null turns that off); a subagent child of an
+ * archived, deleted or missing parent after a day, whatever the setting. Pinned, snoozed,
+ * running and blocked threads, and threads an enabled scheduled task posts into, are kept.
  */
 export function resolveAutoArchiveReason(
   thread: ProjectionStore.ProjectionAutoArchiveCandidate,
@@ -85,14 +81,14 @@ export const make = Effect.gen(function* () {
     },
     (effect, type, threadId) =>
       effect.pipe(
-        Effect.catchCause((cause) =>
-          Cause.hasInterruptsOnly(cause)
-            ? Effect.failCause(cause)
-            : Effect.logWarning("automatic thread archive skipped", {
-                type,
-                threadId,
-                cause: Cause.pretty(cause),
-              }),
+        Effect.catchCauseIf(
+          (cause) => !Cause.hasInterruptsOnly(cause),
+          (cause) =>
+            Effect.logWarning("automatic thread archive skipped", {
+              type,
+              threadId,
+              cause: Cause.pretty(cause),
+            }),
         ),
       ),
   );
@@ -117,11 +113,10 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  // Each child's own archived or unarchived event cascades to its children,
-  // so one level per pass reaches every descendant. A running child is never
-  // archived here; the orphan sweep archives it once it is idle. Unarchiving
-  // restores only the children archived at or after the parent's last archive,
-  // so a child archived earlier for its own reasons stays archived.
+  // Each child's own archived or unarchived event cascades to its children, so one level per
+  // pass reaches every descendant. A running child is never archived here; the orphan sweep
+  // gets it once idle. Unarchiving restores only children archived at or after the parent's
+  // last archive.
   const cascade = Effect.fn("ThreadArchiveServiceV2.cascade")(function* (
     threadId: ThreadId,
     archive: boolean,
@@ -158,13 +153,13 @@ export const make = Effect.gen(function* () {
       if (job.type === "sweep") return yield* sweep();
       return yield* cascade(job.threadId, job.archive);
     }).pipe(
-      Effect.catchCause((cause) =>
-        Cause.hasInterruptsOnly(cause)
-          ? Effect.failCause(cause)
-          : Effect.logWarning("automatic thread archive failed", {
-              job,
-              cause: Cause.pretty(cause),
-            }),
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterruptsOnly(cause),
+        (cause) =>
+          Effect.logWarning("automatic thread archive failed", {
+            job,
+            cause: Cause.pretty(cause),
+          }),
       ),
     ),
   );
