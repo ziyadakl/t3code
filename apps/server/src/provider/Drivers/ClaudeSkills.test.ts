@@ -940,6 +940,53 @@ it.layer(NodeServices.layer)("discoverClaudeSkills", (it) => {
     }),
   );
 
+  it.effect("lists an unlisted plugin only when its manifest enables it by default", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-claude-skills-" });
+      const configDir = path.join(tempDir, "claude-home");
+      const roots = {
+        bundled: path.join(tempDir, "cache", "bundled"),
+        optional: path.join(tempDir, "cache", "optional"),
+        silent: path.join(tempDir, "cache", "silent"),
+        listedOff: path.join(tempDir, "cache", "listed-off"),
+        extended: path.join(tempDir, "cache", "extended"),
+      };
+      const manifests = {
+        bundled: { name: "bundled", defaultEnabled: true },
+        optional: { name: "optional", defaultEnabled: false },
+        silent: { name: "silent" },
+        listedOff: { name: "listed-off", defaultEnabled: true },
+        extended: { name: "extended", defaultEnabled: true },
+      } as const;
+      for (const [id, root] of Object.entries(roots)) {
+        yield* writeSkill(path.join(root, "skills"), "run", "# Run");
+        yield* writeFile(
+          path.join(root, ".claude-plugin", "plugin.json"),
+          toJson(manifests[id as keyof typeof manifests]),
+        );
+      }
+      yield* writeInstalledPlugins(configDir, {
+        "bundled@shop": [{ scope: "user", installPath: roots.bundled }],
+        "optional@shop": [{ scope: "user", installPath: roots.optional }],
+        "silent@shop": [{ scope: "user", installPath: roots.silent }],
+        "listed-off@shop": [{ scope: "user", installPath: roots.listedOff }],
+        "extended@shop": [{ scope: "user", installPath: roots.extended }],
+      });
+      yield* writeFile(
+        path.join(configDir, "settings.json"),
+        '{"enabledPlugins":{"listed-off@shop":false,"extended@shop":["^1.0.0"]}}',
+      );
+
+      const skills = yield* discoverClaudeSkills({ homePath: configDir }, undefined);
+      assert.deepEqual(
+        skills.map((skill) => skill.name),
+        ["bundled:run"],
+      );
+    }),
+  );
+
   it.effect("reads plugin commands from the manifest instead of the default folder", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

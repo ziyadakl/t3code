@@ -278,8 +278,9 @@ const readSkillSettings = Effect.fn("readSkillSettings")(function* (
       if (typeof enabled === "boolean") {
         enabledPlugins.set(key, enabled);
       } else {
-        // Extended formats replace lower-precedence values without enabling the plugin here.
-        enabledPlugins.delete(key);
+        // Extended formats replace lower-precedence values without enabling the plugin here,
+        // and a manifest's `defaultEnabled` does not apply to a plugin settings name.
+        enabledPlugins.set(key, false);
       }
     }
   }
@@ -300,6 +301,7 @@ const decodeInstalledPlugin = Schema.decodeUnknownOption(
 const PluginManifest = Schema.fromJsonString(
   Schema.Struct({
     name: Schema.optional(Schema.NonEmptyString),
+    defaultEnabled: Schema.optional(Schema.Boolean),
     skills: Schema.optional(Schema.Union([Schema.String, Schema.Array(Schema.String)])),
     commands: Schema.optional(Schema.Unknown),
   }),
@@ -377,7 +379,8 @@ const discoverPluginSkillRoots = Effect.fn("discoverPluginSkillRoots")(function*
     workspace === undefined ? undefined : yield* findPluginRepositoryRoot(workspace);
 
   for (const [key, entries] of Object.entries(installed.plugins).sort()) {
-    if (enabledPlugins.get(key) !== true) continue;
+    const listed = enabledPlugins.get(key);
+    if (listed === false) continue;
     const applicable = yield* Effect.filter(
       entries.flatMap((entry) => Option.toArray(decodeInstalledPlugin(entry))),
       (record) =>
@@ -407,6 +410,8 @@ const discoverPluginSkillRoots = Effect.fn("discoverPluginSkillRoots")(function*
         Effect.flatMap(Schema.decodeUnknownEffect(PluginManifest)),
         Effect.orElseSucceed(() => undefined),
       );
+    // A plugin settings do not name is on only when its manifest says `defaultEnabled: true`.
+    if (listed === undefined && manifest?.defaultEnabled !== true) continue;
     const prefix = manifest?.name ?? key.split("@")[0];
     if (!prefix) continue;
 
