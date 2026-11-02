@@ -97,13 +97,13 @@ export function useProjects(): ReadonlyArray<EnvironmentProject> {
   return useAtomValue(environmentProjects.projectsAtom);
 }
 
-/** Projects and threads without archived projects or the threads under them. */
+/** Projects and visible threads without archived projects or the threads under them. */
 export function useUnarchivedProjectsAndThreads(): {
   readonly projects: ReadonlyArray<EnvironmentProject>;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
 } {
   const projects = useProjects();
-  const threads = useThreadShells();
+  const threads = useVisibleThreadShells();
   return withoutArchivedProjects(projects, threads);
 }
 
