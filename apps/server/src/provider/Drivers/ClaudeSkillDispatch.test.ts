@@ -66,7 +66,6 @@ describe("planClaudeSkillDispatch", () => {
     expect(planClaudeSkillDispatch("hey there. audit the checks\n\n/review", SKILLS)).toEqual({
       leadingText: "hey there. audit the checks\n\n/review",
       commandText: "/review",
-      skillName: "review",
     });
   });
 
@@ -76,7 +75,6 @@ describe("planClaudeSkillDispatch", () => {
     ).toEqual({
       leadingText: "see what checks we have\n\n/mattpocock-skills:ask-matt",
       commandText: "/mattpocock-skills:ask-matt",
-      skillName: "mattpocock-skills:ask-matt",
     });
   });
 
@@ -84,12 +82,10 @@ describe("planClaudeSkillDispatch", () => {
     expect(planClaudeSkillDispatch("try /mattpocock-skills:ask-matt? thanks", SKILLS)).toEqual({
       leadingText: "try /mattpocock-skills:ask-matt thanks",
       commandText: "/mattpocock-skills:ask-matt thanks",
-      skillName: "mattpocock-skills:ask-matt",
     });
     expect(planClaudeSkillDispatch("then run /review.", SKILLS)).toEqual({
       leadingText: "then run /review",
       commandText: "/review",
-      skillName: "review",
     });
   });
 
@@ -97,12 +93,10 @@ describe("planClaudeSkillDispatch", () => {
     expect(planClaudeSkillDispatch("/review first, then $implement it", SKILLS)).toEqual({
       leadingText: "/review first, then /implement it",
       commandText: "/implement it",
-      skillName: "implement",
     });
     expect(planClaudeSkillDispatch("$review first, then /implement it", SKILLS)).toEqual({
       leadingText: "/review first, then /implement it",
       commandText: "/implement it",
-      skillName: "implement",
     });
   });
 
