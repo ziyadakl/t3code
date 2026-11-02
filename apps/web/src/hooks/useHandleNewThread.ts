@@ -26,7 +26,7 @@ import {
   readProjects,
   readThreadShell,
   readThreadShells,
-  useProjects,
+  useUnarchivedProjectsAndThreads,
   useQuietThreadShell,
 } from "../state/entities";
 import {
@@ -453,7 +453,7 @@ export function useHandleNewThread() {
         : useComposerDraftStore.getState().getDraftSession(routeTarget.draftId)
       : null,
   );
-  const projects = useProjects();
+  const { projects } = useUnarchivedProjectsAndThreads();
   const handleNewThread = useNewThreadHandler();
   const defaultProjectRef = resolveDefaultProjectRef(projects, projectOrder);
 

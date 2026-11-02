@@ -1,3 +1,4 @@
+import { withoutArchivedProjects } from "@t3tools/client-runtime/state/projects";
 import type * as DateTime from "effect/DateTime";
 import { useAtomValue } from "@effect/atom-react";
 import type {
@@ -94,6 +95,16 @@ export function useEnvironmentThreadRefs(
 
 export function useProjects(): ReadonlyArray<EnvironmentProject> {
   return useAtomValue(environmentProjects.projectsAtom);
+}
+
+/** Projects and threads without archived projects or the threads under them. */
+export function useUnarchivedProjectsAndThreads(): {
+  readonly projects: ReadonlyArray<EnvironmentProject>;
+  readonly threads: ReadonlyArray<EnvironmentThreadShell>;
+} {
+  const projects = useProjects();
+  const threads = useThreadShells();
+  return withoutArchivedProjects(projects, threads);
 }
 
 /** Providers are left out; read them with `useEnvironmentProviders()`. */

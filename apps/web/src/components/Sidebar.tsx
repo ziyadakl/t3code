@@ -174,7 +174,7 @@ import {
   resolveThreadRouteTarget,
 } from "../threadRoutes";
 import type { SidebarThreadSummary } from "../types";
-import { isScratchProject } from "@t3tools/client-runtime/state/projects";
+import { isScratchProject, withoutArchivedProjects } from "@t3tools/client-runtime/state/projects";
 import { cn } from "~/lib/utils";
 import { ProjectEnvironmentBadge } from "./ProjectEnvironmentBadge";
 import {
@@ -874,9 +874,12 @@ function isOptimisticDropReleased(input: {
 
 // Build maps in a hook so the compiler can prove they are frozen and cache them.
 function useSidebarLookups(selectedEnvironmentFilterId: EnvironmentId | null) {
-  const allProjects = useProjects();
+  // Fork: archived projects and their threads stay off the sidebar.
   // Quiet threads: see useSidebarProjectGroups.
-  const allThreads = useQuietThreadShells();
+  const { projects: allProjects, threads: allThreads } = withoutArchivedProjects(
+    useProjects(),
+    useQuietThreadShells(),
+  );
   const delegatedUnderParent = useDelegatedUnderParent();
   // Every machine's project groups. New thread is not filter-aware (the palette
   // picker and the default project span every machine), so its
