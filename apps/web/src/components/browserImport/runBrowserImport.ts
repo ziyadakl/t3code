@@ -10,7 +10,7 @@ import {
 import { clearBrowserProfileData } from "~/browser/browserProfileData";
 import type { previewBridge } from "~/components/preview/previewBridge";
 
-import { importFailureReason } from "./browserImportLauncher.logic";
+import { importFailureReason, importPolicyRefusal } from "./browserImportLauncher.logic";
 import type { ImportOutcome, WizardTarget } from "./browserImportWizard.logic";
 
 export type BrowserImportBridge = Pick<
@@ -72,7 +72,10 @@ export async function runBrowserImport(
       domains: choice.domains,
     });
   } catch (cause) {
-    return { kind: "blocked", reason: importFailureReason(cause) };
+    const policyRefusal = importPolicyRefusal(cause);
+    return policyRefusal !== undefined
+      ? { kind: "blocked", reason: "readFailed", message: policyRefusal }
+      : { kind: "blocked", reason: importFailureReason(cause) };
   }
 
   let targetName = target.kind === "existing" ? target.name : source.name;

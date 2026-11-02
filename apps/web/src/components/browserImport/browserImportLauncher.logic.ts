@@ -20,6 +20,18 @@ export const importFailureReason = (cause: unknown): BrowserImportFailureReason 
   );
 };
 
+/**
+ * The desktop refusal when the managed policy forbids cookie import. IPC wraps the message in its
+ * own prefixes, so the sentence is matched on the contract wording.
+ */
+export const importPolicyRefusal = (cause: unknown): string | undefined => {
+  const message = String((cause as { message?: unknown } | undefined)?.message ?? "");
+  return (
+    /The managed policy at .* importing browser cookies is not allowed\./u.exec(message)?.[0] ??
+    /(?:^|: )([^:]*'s policy does not allow importing browser cookies\.)/u.exec(message)?.[1]
+  );
+};
+
 /** A site listing for the wizard, failing the same way an import does. */
 export const listSitesOutcome = (
   listing: Promise<ReadonlyArray<BrowserImportSite>>,

@@ -17,7 +17,6 @@ import { RelativeTime } from "../RelativeTime";
 import { Button } from "../ui/button";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
-import { ArchivedProjectsSection } from "./ArchivedProjectsSection";
 import { searchableSetting } from "./settingsSearch";
 import { ProjectFavicon } from "../ProjectFavicon";
 
@@ -173,7 +172,6 @@ export function ArchivedThreadsPanel() {
 
   return (
     <SettingsPageContainer>
-      <ArchivedProjectsSection environmentIds={scope.environmentIds} />
       {archivedGroups.length === 0 ? (
         <SettingsSection
           id={isLoadingArchive ? undefined : searchableSetting("archive").id}

@@ -67,7 +67,12 @@ export type ImportOutcome =
       readonly skippedDomains: ReadonlyArray<string>;
       readonly targetName: string;
     }
-  | { readonly kind: "blocked"; readonly reason: BrowserImportFailureReason };
+  | {
+      readonly kind: "blocked";
+      readonly reason: BrowserImportFailureReason;
+      /** Shown instead of the reason copy, such as a managed policy refusal. */
+      readonly message?: string;
+    };
 
 /** A run the blocked screen's "Try again" can repeat. */
 export type BlockedRetry = "import" | "listSites";
@@ -102,6 +107,7 @@ export type WizardStep =
   | {
       readonly step: "blocked";
       readonly reason: BrowserImportFailureReason;
+      readonly message?: string;
       /** What "Try again" re-runs; absent when nothing was attempted yet. */
       readonly retry?: BlockedRetry;
     };
@@ -151,7 +157,9 @@ export function outcomeToStep(outcome: ImportOutcome): WizardStep {
     // denied instead of returning to an indistinguishable permission screen.
     return { step: "fullDiskAccess", resume: "import", checked: true };
   }
-  return { step: "blocked", reason: outcome.reason, retry: "import" };
+  return outcome.message === undefined
+    ? { step: "blocked", reason: outcome.reason, retry: "import" }
+    : { step: "blocked", reason: outcome.reason, message: outcome.message, retry: "import" };
 }
 
 /** Where a fresh availability check lands the wizard after the user quits. */
@@ -311,7 +319,7 @@ export function sitesOutcomeToStep(outcome: SitesOutcome): WizardStep {
 export function blockedRetryAction(
   step: Extract<WizardStep, { step: "blocked" }>,
 ): BlockedRetryAction | undefined {
-  if (!isRetryableReason(step.reason)) return undefined;
+  if (step.message !== undefined || !isRetryableReason(step.reason)) return undefined;
   return step.retry ?? "configure";
 }
 
