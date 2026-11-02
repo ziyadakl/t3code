@@ -222,7 +222,7 @@ describe("MessagesTimeline work rows", () => {
     const props = baseProps();
     const runId = RunId.make("completed-run");
     const container = document.createElement("div");
-    container.style.cssText = "height: 600px; width: 900px; display: flex; flex-direction: column;";
+    container.style.cssText = "height: 600px; width: 300px; display: flex; flex-direction: column;";
     await using screen = await render(
       <MessagesTimeline
         {...props}
@@ -230,9 +230,14 @@ describe("MessagesTimeline work rows", () => {
           ...Array.from({ length: 12 }, (_, index) =>
             message(`Earlier context ${index}`, {}, `context-${index}`),
           ),
-          // One-line notes fold under the heading; a long multi-line message would stay visible here.
-          ...Array.from({ length: 30 }, (_, index) =>
-            message(`Progress detail ${index}`, { role: "assistant", runId }, `progress-${index}`),
+          // One-line notes fold under the heading (a long multi-line message would stay visible);
+          // the narrow container wraps each one so a few notes are tall enough.
+          ...Array.from({ length: 8 }, (_, index) =>
+            message(
+              `Progress note ${index}: checked the files, compared the results and noted what is left to do.`,
+              { role: "assistant", runId },
+              `progress-${index}`,
+            ),
           ),
           message("Done", { role: "assistant", runId }, "final"),
         ]}
