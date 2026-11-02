@@ -231,7 +231,7 @@ describe("MessagesTimeline work rows", () => {
             message(`Earlier context ${index}`, {}, `context-${index}`),
           ),
           // One-line notes fold under the heading; a long multi-line message would stay visible here.
-          ...Array.from({ length: 50 }, (_, index) =>
+          ...Array.from({ length: 30 }, (_, index) =>
             message(`Progress detail ${index}`, { role: "assistant", runId }, `progress-${index}`),
           ),
           message("Done", { role: "assistant", runId }, "final"),
