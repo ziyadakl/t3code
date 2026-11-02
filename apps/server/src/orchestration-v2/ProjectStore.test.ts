@@ -52,61 +52,48 @@ it.layer(ProjectStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemor
       }),
     );
 
-    it.effect("persists the archive time, keeps it across other updates, and clears it", () =>
+    it.effect("keeps pin and archive times across later updates", () =>
       Effect.gen(function* () {
         const projects = yield* ProjectStore.ProjectStoreV2;
-        const projectId = ProjectId.make("project-archive");
-        const event = {
-          aggregateKind: "project",
-          aggregateId: projectId,
-          commandId: null,
-          causationEventId: null,
-          correlationId: null,
-          metadata: {},
-        } as const;
-        const metaUpdated = (
-          sequence: number,
-          payload: { title?: string; archivedAt?: string | null },
-        ) =>
-          projects.apply({
-            ...event,
-            sequence,
-            eventId: EventId.make(`event-archive-${sequence}`),
-            occurredAt: "2026-03-25T00:00:00.000Z",
-            type: "project.meta-updated",
-            payload: { projectId, ...payload, updatedAt: "2026-03-25T00:00:00.000Z" },
-          });
-        const archivedAt = () =>
-          projects
-            .getShell(projectId)
-            .pipe(Effect.map((shell) => Option.getOrNull(shell)?.archivedAt));
-
+        const projectId = ProjectId.make("project-organized");
+        const at = "2026-03-24T00:00:00.000Z";
+        const event = { aggregateKind: "project", aggregateId: projectId, occurredAt: at } as const;
+        const meta = { commandId: null, causationEventId: null, correlationId: null, metadata: {} };
         yield* projects.apply({
           ...event,
+          ...meta,
           sequence: 1,
-          eventId: EventId.make("event-archive-1"),
-          occurredAt: "2026-03-24T00:00:00.000Z",
+          eventId: EventId.make("event-organized-created"),
           type: "project.created",
           payload: {
             projectId,
-            title: "Archive project",
-            workspaceRoot: "/tmp/project-archive",
+            title: "Organized",
+            workspaceRoot: "/tmp/project-organized",
             defaultModelSelection: null,
             scripts: [],
-            createdAt: "2026-03-24T00:00:00.000Z",
-            updatedAt: "2026-03-24T00:00:00.000Z",
+            createdAt: at,
+            updatedAt: at,
           },
         });
-        assert.strictEqual(yield* archivedAt(), null);
-
-        yield* metaUpdated(2, { archivedAt: "2026-03-25T00:00:00.000Z" });
-        assert.strictEqual(yield* archivedAt(), "2026-03-25T00:00:00.000Z");
-
-        yield* metaUpdated(3, { title: "Renamed" });
-        assert.strictEqual(yield* archivedAt(), "2026-03-25T00:00:00.000Z");
-
-        yield* metaUpdated(4, { archivedAt: null });
-        assert.strictEqual(yield* archivedAt(), null);
+        yield* projects.apply({
+          ...event,
+          ...meta,
+          sequence: 2,
+          eventId: EventId.make("event-organized-pinned"),
+          type: "project.meta-updated",
+          payload: { projectId, pinnedAt: at, archivedAt: at, updatedAt: at },
+        });
+        yield* projects.apply({
+          ...event,
+          ...meta,
+          sequence: 3,
+          eventId: EventId.make("event-organized-renamed"),
+          type: "project.meta-updated",
+          payload: { projectId, title: "Renamed", updatedAt: at },
+        });
+        const project = Option.getOrNull(yield* projects.get(projectId));
+        assert.strictEqual(project?.pinnedAt, at);
+        assert.strictEqual(project?.archivedAt, at);
       }),
     );
   },

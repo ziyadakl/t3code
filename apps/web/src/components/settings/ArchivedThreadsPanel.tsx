@@ -17,9 +17,9 @@ import { RelativeTime } from "../RelativeTime";
 import { Button } from "../ui/button";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
-import { ArchivedProjectsSection } from "./ArchivedProjectsSection";
 import { searchableSetting } from "./settingsSearch";
 import { ProjectFavicon } from "../ProjectFavicon";
+import { ArchivedProjectsSection } from "./ArchivedProjectsSection";
 
 export function ArchivedThreadsPanel() {
   const { scope, groups: projectGroups, environments } = useSettingsScope();

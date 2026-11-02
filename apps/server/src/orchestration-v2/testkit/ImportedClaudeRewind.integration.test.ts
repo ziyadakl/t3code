@@ -29,6 +29,7 @@ import {
   THREAD_ROLLBACK_FIRST_PROMPT,
   THREAD_ROLLBACK_SECOND_PROMPT,
 } from "./fixtures/shared.ts";
+import * as ServerSettings from "../../serverSettings.ts";
 import { runOrchestratorV2Scenario } from "./OrchestratorScenario.ts";
 import * as ProviderReplayHarness from "./ProviderReplayHarness.ts";
 import { readProviderReplayTranscript } from "@t3tools/provider-testing/replayTranscript";
@@ -320,6 +321,7 @@ const runImportedRewind = (input: {
           Layer.provideMerge(AgentSessionImporter.layer),
           Layer.provide(
             Layer.mergeAll(
+              ServerSettings.layerTest(),
               Layer.mock(AgentSessionScanner.AgentSessionScanner)({
                 readThread: () => Effect.succeedSome({ thread: whole, source }),
               }),

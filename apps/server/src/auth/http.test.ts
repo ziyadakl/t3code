@@ -6,6 +6,7 @@ import {
   AuthTokenExchangeGrantType,
   AuthEnvironmentBootstrapTokenType,
   AuthAccessTokenType,
+  AuthSessionId,
   AuthStandardClientScopes,
   EnvironmentHttpApi,
 } from "@t3tools/contracts";
@@ -22,6 +23,7 @@ import * as HttpPlatform from "effect/http/HttpPlatform";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpRouter from "effect/http/HttpRouter";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -30,6 +32,7 @@ import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as AuthHttp from "./http.ts";
 import * as TrustedDevices from "./TrustedDevices.ts";
+import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 
 const DEV_TOKEN = "reusable-dev-auth-token-that-is-long-enough";
 class AuthTestApi extends HttpApi.make("environment").add(EnvironmentHttpApi.groups.auth) {}
@@ -48,6 +51,7 @@ const layerConfig = Layer.effect(
 ).pipe(Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-auth-http-test-" })));
 
 const layerEnvironmentAuth = EnvironmentAuth.layer.pipe(
+  Layer.provide(ManagedPolicy.layerTest()),
   Layer.provide(SqlitePersistence.layerMemory),
   Layer.provide(ServerSecretStore.layer),
   Layer.provide(ServerEnvironment.layerIdentity),
@@ -59,10 +63,23 @@ const layerTrustedDevicesStub = Layer.succeed(TrustedDevices.TrustedDevices, {
   resolve: (request) =>
     Effect.succeed(Option.fromNullishOr(request.headers["x-test-trusted-device"])),
 });
-const layerRoutes = HttpApiBuilder.layer(AuthTestApi).pipe(
+// Upstream removed GET /api/auth/clients (the access screen streams the list over RPC). The
+// trusted-device tests still read the session list, so this test-only route serves it.
+const layerClientsRoute = HttpRouter.add(
+  "GET",
+  "/api/auth/clients",
+  Effect.gen(function* () {
+    const auth = yield* EnvironmentAuth.EnvironmentAuth;
+    const sessions = yield* auth.listClientSessions(AuthSessionId.make("test-observer"));
+    return HttpServerResponse.jsonUnsafe(sessions);
+  }),
+);
+const layerApiRoutes = HttpApiBuilder.layer(AuthTestApi).pipe(
   Layer.provide(AuthHttp.layer),
   Layer.provide(layerTrustedDevicesStub),
   Layer.provide(AuthHttp.layerAuthenticatedAuth),
+);
+const layerRoutes = Layer.merge(layerApiRoutes, layerClientsRoute).pipe(
   Layer.provideMerge(layerEnvironmentAuth),
   Layer.provide(layerConfig),
   Layer.provideMerge(

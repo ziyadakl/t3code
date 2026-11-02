@@ -2,8 +2,7 @@ import { DeviceHostUpdates } from "../device/DeviceHostUpdates";
 import { DeviceToolVersions } from "../device/DeviceToolVersions";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 import { ScopedSwitch } from "./ScopedSwitch";
-import { DeviceHostsSettings } from "./DeviceHostsSettings";
-import { EasDeviceHostsSettings } from "./EasDeviceHostsSettings";
+import { DeviceSourcesSettings } from "./DeviceSourcesSettings";
 import {
   AuthSettingsWriteScope,
   BROWSER_PROFILE_MAX_COUNT,
@@ -33,14 +32,15 @@ import {
   resolveBrowserProfiles,
   type PreviewAppearancePreference,
   type PreviewViewportSetting,
+  managedCapabilityDenial,
 } from "@t3tools/contracts";
+import { usePrimaryManagedPolicy } from "~/state/managedPolicy";
 import { isValidSearchUrlTemplate } from "@t3tools/shared/preview";
 import { PREVIEW_VIEWPORT_PRESETS } from "@t3tools/shared/previewViewport";
 import { MoreVertical, Plus as PlusIcon } from "lucide-react";
 import { useState } from "react";
 
 import { ScreenRotationIcon } from "~/browser/ScreenRotationIcon";
-import { AnimatedHeight } from "~/components/AnimatedHeight";
 import { previewBridge } from "~/components/preview/previewBridge";
 import { cn, randomUUID } from "~/lib/utils";
 import { useEnvironments, usePrimaryEnvironment } from "~/state/environments";
@@ -55,11 +55,6 @@ import {
   AgentDeviceSetupStatus,
   DeviceHubSetupStatus,
   deviceHubReadiness,
-  PlatformStatus,
-  platformSetupStatus,
-  deviceHubDescription,
-  agentDeviceDescription,
-  DeviceHostDiagnostics,
 } from "~/components/device/DeviceSetup";
 import { isElectron } from "../../env";
 
@@ -671,15 +666,23 @@ function DeviceIntegrationSettings() {
   const connected = selected?.connection.phase === "connected" && selected.serverConfig !== null;
   const environmentId = connected ? selected.environmentId : null;
 
+  const { state } = useDeviceState(environmentId);
+
   return (
-    <SettingsSection id="devices" title="Devices">
-      <DeviceIntegrationControls
-        key={`${environmentId}:${JSON.stringify(search)}`}
-        environmentId={environmentId}
-        enabled={settings.enableDeviceSupport}
-        agentAccessEnabled={settings.enableAgentDeviceAccess}
+    <>
+      <SettingsSection id="devices" title="Devices">
+        <DeviceIntegrationControls
+          key={`${environmentId}:${JSON.stringify(search)}`}
+          environmentId={environmentId}
+          enabled={settings.enableDeviceSupport}
+          agentAccessEnabled={settings.enableAgentDeviceAccess}
+        />
+      </SettingsSection>
+      <DeviceSourcesSettings
+        supportsEas={state.supportsEasHosts === true}
+        supportsSimlock={state.supportsSimlockHosts === true}
       />
-    </SettingsSection>
+    </>
   );
 }
 
@@ -705,20 +708,7 @@ function DeviceIntegrationControls({
   const [pending, setPending] = useState<
     "hub" | "check" | "agent" | "update-hub" | "update-agent" | null
   >(null);
-  const { ready: hubReady, busy } = deviceHubReadiness(state);
-  const localPlatformsUnavailable = state.hosts.some(
-    (host) => host.kind === "local" && !host.platforms.some((platform) => platform.available),
-  );
-  const [platformsRevealed, setPlatformsRevealed] = useState(false);
-  if (platformsRevealed && !enabled) setPlatformsRevealed(false);
-  if (
-    enabled &&
-    !platformsRevealed &&
-    (hubReady || localPlatformsUnavailable) &&
-    pending !== "hub"
-  ) {
-    setPlatformsRevealed(true);
-  }
+  const { busy } = deviceHubReadiness(state);
 
   const update = async (
     kind: NonNullable<typeof pending>,
@@ -815,14 +805,18 @@ function DeviceIntegrationControls({
         {...searchableSetting("device-hub")}
         serverScoped
         settingKeys={["enableDeviceSupport"]}
-        description={deviceHubDescription}
-        control={
+        description={
           <>
+            Open simulators and emulators in the Device panel. Hub:{" "}
             <DeviceToolVersions
               action={versionActions("hub")}
               kind="hub"
               tools={state.hosts.find((host) => host.kind === "local")?.tools}
             />
+          </>
+        }
+        control={
+          <>
             {pending === "hub" ? <DeviceHubSetupStatus state={state} pending compact /> : null}
             <ScopedSwitch
               settingKeys={["enableDeviceSupport"]}
@@ -846,65 +840,22 @@ function DeviceIntegrationControls({
           </>
         }
       />
-      <AnimatedHeight>
-        {platformsRevealed ? (
-          <SettingsRow
-            {...searchableSetting("device-platform-support")}
-            description={
-              connectedEnvironments.length > 1
-                ? `Status for ${connectedEnvironments.find((environment) => environment.environmentId === environmentId)?.label}. Select an environment to inspect its simulator support.`
-                : undefined
-            }
-            status={
-              <div className="space-y-2">
-                <div className="flex flex-wrap gap-x-5 gap-y-2">
-                  <PlatformStatus
-                    compact
-                    platform="iOS"
-                    status={platformSetupStatus(state, "ios")}
-                  />
-                  <PlatformStatus
-                    compact
-                    platform="Android"
-                    status={platformSetupStatus(state, "android")}
-                  />
-                </div>
-                {/* Remote hosts report their own warnings in the device host list below. */}
-                <DeviceHostDiagnostics
-                  hosts={state.hosts.filter((host) => host.kind === "local")}
-                  hostStatuses={state.hostStatuses}
-                />
-              </div>
-            }
-            control={
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={!environmentId || !enabled || busy || pending !== null}
-                onClick={() => {
-                  if (!environmentId) return;
-                  setPending("check");
-                  void list({ environmentId, input: {} }).finally(() => setPending(null));
-                }}
-              >
-                {pending === "check" ? "Checking…" : "Refresh"}
-              </Button>
-            }
-          />
-        ) : null}
-      </AnimatedHeight>
       <SettingsRow
         {...searchableSetting("agent-device-access")}
         serverScoped
         settingKeys={["enableAgentDeviceAccess"]}
-        description={agentDeviceDescription}
-        control={
+        description={
           <>
+            New agent sessions can open and drive these devices. agent-device:{" "}
             <DeviceToolVersions
               action={versionActions("agent")}
               kind="agent"
               tools={state.hosts.find((host) => host.kind === "local")?.tools}
             />
+          </>
+        }
+        control={
+          <>
             {pending === "agent" ? <AgentDeviceSetupStatus state={state} pending compact /> : null}
             <ScopedSwitch
               settingKeys={["enableAgentDeviceAccess"]}
@@ -931,8 +882,6 @@ function DeviceIntegrationControls({
           environmentId={environmentId}
         />
       ) : null}
-      <DeviceHostsSettings environmentId={environmentId} />
-      {state.supportsEasHosts ? <EasDeviceHostsSettings environmentId={environmentId} /> : null}
     </>
   );
 }
@@ -1018,6 +967,11 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
   const updateSettings = useUpdatePrimarySettings();
   const { environments, isReady: environmentsReady } = useEnvironments();
   const primaryEnvironment = usePrimaryEnvironment();
+  // Cookie import runs on this desktop, whose policy the primary environment reports.
+  const cookieImportDenial = managedCapabilityDenial(
+    usePrimaryManagedPolicy(),
+    "browserCookieImport",
+  );
   const importDestination = browserImportDestination(primaryEnvironment, true);
   const importLauncher = useBrowserImportLauncher();
   const [profilePendingRemoval, setProfilePendingRemoval] = useState<BrowserProfile | null>(null);
@@ -1170,13 +1124,19 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
               <MenuGroupLabel>Import from</MenuGroupLabel>
               <BrowserImportSourceItems
                 sources={importLauncher.sources}
-                disabled={!settingsHydrated || importDestination === null}
+                disabled={
+                  cookieImportDenial !== undefined ||
+                  !settingsHydrated ||
+                  importDestination === null
+                }
                 onChoose={(source) => {
                   if (!settingsHydrated || importDestination === null) return;
                   importLauncher.open({ source, destination: importDestination });
                 }}
               />
-              {importDestination === null ? (
+              {cookieImportDenial !== undefined ? (
+                <MenuItem disabled>{cookieImportDenial}</MenuItem>
+              ) : importDestination === null ? (
                 <MenuItem disabled>Connect to an environment to import cookies</MenuItem>
               ) : null}
             </MenuGroup>

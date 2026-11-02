@@ -17,10 +17,10 @@ export const OrchestrationProjectShell = Schema.Struct({
   faviconPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   projectIcon: Schema.optional(Schema.NullOr(ReceivedProjectIcon)),
   scripts: Schema.Array(ProjectScript),
+  // Pinned projects lead project pickers; archived ones leave them. Optional so older servers decode.
+  pinnedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  archivedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
-  // Archived projects stay in the shell so clients can list and restore them;
-  // clients hide them and their threads. Absent from servers without archiving.
-  archivedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
 });
 export type OrchestrationProjectShell = typeof OrchestrationProjectShell.Type;

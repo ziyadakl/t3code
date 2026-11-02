@@ -1,7 +1,6 @@
 import * as Migrator from "effect/sql/Migrator";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
-import { ensureProjectArchiveColumn } from "./projectArchiveColumn.ts";
 import { reconcileV2PreviewMigration } from "./reconcileV2PreviewMigration.ts";
 
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
@@ -73,6 +72,14 @@ import Migration0066 from "./Migrations/066_RepairClientSettlementTimestamps.ts"
 import Migration0067 from "./Migrations/067_WebhookDedupe.ts";
 import Migration0068 from "./Migrations/068_ShellStopRequestIndex.ts";
 import Migration0069 from "./Migrations/069_ThreadMessageSearch.ts";
+import Migration0070 from "./Migrations/070_PeerLinks.ts";
+import Migration0071 from "./Migrations/071_PeerLinkFence.ts";
+import Migration0072 from "./Migrations/072_WaitingLinkRequestIndex.ts";
+import Migration0073 from "./Migrations/073_ActiveTurnItemIndexes.ts";
+import Migration0074 from "./Migrations/074_ExcludeAttachmentPlaceholdersFromSearch.ts";
+import Migration0075 from "./Migrations/075_SubagentDeliveryState.ts";
+import Migration0076 from "./Migrations/076_ProjectionProjectsPinArchive.ts";
+import Migration0077 from "./Migrations/077_RepairBooleanSettledOverride.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -145,6 +152,14 @@ const migrationEntries = [
   [67, "WebhookDedupe", Migration0067],
   [68, "ShellStopRequestIndex", Migration0068],
   [69, "ThreadMessageSearch", Migration0069],
+  [70, "PeerLinks", Migration0070],
+  [71, "PeerLinkFence", Migration0071],
+  [72, "WaitingLinkRequestIndex", Migration0072],
+  [73, "ActiveTurnItemIndexes", Migration0073],
+  [74, "ExcludeAttachmentPlaceholdersFromSearch", Migration0074],
+  [75, "SubagentDeliveryState", Migration0075],
+  [76, "ProjectionProjectsPinArchive", Migration0076],
+  [77, "RepairBooleanSettledOverride", Migration0077],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -212,7 +227,6 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     ...previewMigrations,
     ...(yield* run({ loader: makeMigrationLoader(toMigrationInclusive) })),
   ];
-  if (toMigrationInclusive === undefined) yield* ensureProjectArchiveColumn();
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
   yield* migrations.length === 0
     ? Effect.logDebug("Database schema is current")

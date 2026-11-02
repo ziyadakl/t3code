@@ -868,6 +868,7 @@ it.effect(
           IdAllocator.layer,
           Layer.mock(ProjectionStore.ProjectionStoreV2)({
             getThread: () => Effect.succeed(projection.thread),
+            getProviderControlContext: () => Effect.succeed({ attempt: undefined } as never),
             getCheckpointRollbackContext: () =>
               Effect.succeed({
                 thread: projection.thread,
@@ -994,6 +995,7 @@ const rewindLayer = (input: {
         IdAllocator.layer,
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
           getThread: () => Effect.succeed(projection.thread),
+          getProviderControlContext: () => Effect.succeed({ attempt: undefined } as never),
           getThreadRecords: () => Effect.succeed(projection),
         }),
         Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({

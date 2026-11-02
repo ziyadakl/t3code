@@ -39,9 +39,10 @@ export const ProjectRow = Schema.Struct({
   faviconPath: Schema.NullOr(Schema.String),
   projectIcon: Schema.NullOr(StoredProjectIcon),
   scripts: Schema.Array(ProjectScript),
+  pinnedAt: Schema.NullOr(IsoDateTime),
+  archivedAt: Schema.NullOr(IsoDateTime),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
-  archivedAt: Schema.NullOr(IsoDateTime),
   deletedAt: Schema.NullOr(IsoDateTime),
 });
 export type ProjectRow = typeof ProjectRow.Type;
@@ -66,9 +67,10 @@ function toShell(row: ProjectRow): OrchestrationProjectShell {
     faviconPath: row.faviconPath,
     projectIcon: row.projectIcon,
     scripts: row.scripts,
+    pinnedAt: row.pinnedAt,
+    archivedAt: row.archivedAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
-    archivedAt: row.archivedAt,
   };
 }
 
@@ -122,9 +124,10 @@ export const make = Effect.gen(function* () {
         favicon_path AS "faviconPath",
         project_icon_json AS "projectIcon",
         scripts_json AS "scripts",
+        pinned_at AS "pinnedAt",
+        archived_at AS "archivedAt",
         created_at AS "createdAt",
         updated_at AS "updatedAt",
-        archived_at AS "archivedAt",
         deleted_at AS "deletedAt"
       FROM projection_projects
       WHERE ${sql.and([
@@ -153,9 +156,10 @@ export const make = Effect.gen(function* () {
             favicon_path,
             project_icon_json,
             scripts_json,
+            pinned_at,
+            archived_at,
             created_at,
             updated_at,
-            archived_at,
             deleted_at
           )
           VALUES (
@@ -168,9 +172,10 @@ export const make = Effect.gen(function* () {
             ${encoded.faviconPath},
             ${encoded.projectIcon},
             ${encoded.scripts},
+            ${encoded.pinnedAt},
+            ${encoded.archivedAt},
             ${encoded.createdAt},
             ${encoded.updatedAt},
-            ${encoded.archivedAt},
             ${encoded.deletedAt}
           )
           ON CONFLICT (project_id)
@@ -183,9 +188,10 @@ export const make = Effect.gen(function* () {
             favicon_path = excluded.favicon_path,
             project_icon_json = excluded.project_icon_json,
             scripts_json = excluded.scripts_json,
+            pinned_at = excluded.pinned_at,
+            archived_at = excluded.archived_at,
             created_at = excluded.created_at,
             updated_at = excluded.updated_at,
-            archived_at = excluded.archived_at,
             deleted_at = excluded.deleted_at
         `,
       ),
@@ -232,9 +238,10 @@ export const make = Effect.gen(function* () {
           faviconPath: payload.faviconPath ?? null,
           projectIcon: payload.projectIcon ?? null,
           scripts: payload.scripts,
+          pinnedAt: null,
+          archivedAt: null,
           createdAt: payload.createdAt,
           updatedAt: payload.updatedAt,
-          archivedAt: null,
           deletedAt: null,
         }).pipe(mapError("apply"));
       }
@@ -263,6 +270,7 @@ export const make = Effect.gen(function* () {
         ...(payload.faviconPath === undefined ? {} : { faviconPath: payload.faviconPath }),
         ...(payload.projectIcon === undefined ? {} : { projectIcon: payload.projectIcon }),
         ...(payload.scripts === undefined ? {} : { scripts: payload.scripts }),
+        ...(payload.pinnedAt === undefined ? {} : { pinnedAt: payload.pinnedAt }),
         ...(payload.archivedAt === undefined ? {} : { archivedAt: payload.archivedAt }),
         updatedAt: payload.updatedAt,
       }).pipe(mapError("apply"));

@@ -149,6 +149,13 @@ jobs:
           mkdir -p "$target_dir"
           cp "native/resource-monitor/target/$RUST_TARGET/release/t3-resource-monitor" "$target_dir/t3-resource-monitor"
 
+      # The Linux archive carries libatomic.so.1 and points t3 at it with patchelf (upstream
+      # release-desktop.yml installs it the same way).
+      - name: Install patchelf
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: command -v patchelf || { sudo apt-get update && sudo apt-get install -y patchelf; }
+
       - name: Build CLI archive
         shell: bash
         run: |
