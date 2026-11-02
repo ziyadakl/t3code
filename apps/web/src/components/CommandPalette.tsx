@@ -134,7 +134,8 @@ import {
   useAnyEnvironmentHiding,
   useHiddenThreadKeys,
   useEnvironmentThreadRefs,
-  useUnarchivedProjectsAndThreads,
+  useProjects,
+  useVisibleThreadShells,
   useServerConfigs,
   waitForProject,
 } from "../state/entities";
@@ -151,6 +152,7 @@ import {
   isScratchProject,
   isUnsupportedWindowsProjectPath,
   resolveProjectPathForDispatch,
+  withoutArchivedProjects,
 } from "@t3tools/client-runtime/state/projects";
 import { resolvePastedPath } from "@t3tools/shared/path";
 import {
@@ -468,7 +470,11 @@ function OpenCommandPaletteDialog(props: {
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
   const paletteRouteTarget = useThreadRouteTarget();
-  const { projects, threads } = useUnarchivedProjectsAndThreads();
+  // Archived projects and their threads stay out of every list here; only
+  // re-adding an archived project's folder reaches them, to restore it.
+  const allProjects = useProjects();
+  const allThreads = useVisibleThreadShells();
+  const { projects, threads } = withoutArchivedProjects(allProjects, allThreads);
   const referenceThreadRef =
     pathname === "/pull-requests"
       ? environments.some((environment) => environment.serverConfig !== null)
@@ -1880,7 +1886,7 @@ function OpenCommandPaletteDialog(props: {
     if (cwd.length === 0) return;
 
     const existing = findProjectByPath(
-      projects.filter((project) => project.environmentId === input.environmentId),
+      allProjects.filter((project) => project.environmentId === input.environmentId),
       cwd,
     );
     if (existing) {
@@ -1892,7 +1898,7 @@ function OpenCommandPaletteDialog(props: {
         }).then((result) => reportProjectFailure("Failed to unarchive project", result));
       }
       const latestThread = getLatestThreadForProject(
-        threads.filter((thread) => thread.environmentId === existing.environmentId),
+        allThreads.filter((thread) => thread.environmentId === existing.environmentId),
         existing.id,
         clientSettings.sidebarThreadSortOrder,
       );
