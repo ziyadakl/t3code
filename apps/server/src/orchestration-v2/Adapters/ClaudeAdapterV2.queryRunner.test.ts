@@ -8,6 +8,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
+import * as PortScanner from "../../preview/PortScanner.ts";
 import { ClaudeAgentSdkQueryRunner, layerQueryRunner } from "./ClaudeAdapterV2.ts";
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -73,6 +74,7 @@ const writeHomes = Effect.gen(function* () {
 });
 
 const runnerLayer = layerQueryRunner.pipe(
+  Layer.provide(PortScanner.layerTest),
   Layer.provide(
     Layer.succeed(
       ProviderEventLoggers.ProviderEventLoggers,

@@ -406,10 +406,7 @@ it.effect("sql: an unsettled-only shell read skips settled threads", () =>
   }).pipe(Effect.provide(layerSql)),
 );
 
-it.effect.each([
-  ["sql", layerSql],
-  ["memory", ProjectionStore.layerMemory],
-] as const)(
+it.effect.each([["sql", layerSql]] as const)(
   "%s: auto-archive candidates are settled threads and orphaned subagent children",
   ([, testLayer]) =>
     Effect.gen(function* () {

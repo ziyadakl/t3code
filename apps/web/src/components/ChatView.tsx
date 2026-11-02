@@ -2811,7 +2811,6 @@ export default function ChatView(props: ChatViewProps) {
     onConfirmRevertStable,
     onForkFromRunStable,
     onRevertTimelineTurnStable,
-    onTimelineRollbackCheckpointStable,
   } = useTimelineRewind({
     environmentId,
     routeThreadRef,
@@ -3933,7 +3932,8 @@ export default function ChatView(props: ChatViewProps) {
                       ? {
                           script: activeDevServerScript,
                           running: runningTerminalIds.includes(DEV_SERVER_TERMINAL_ID),
-                          hasOutput: activeServerOrderedTerminalIds.includes(DEV_SERVER_TERMINAL_ID),
+                          hasOutput:
+                            activeServerOrderedTerminalIds.includes(DEV_SERVER_TERMINAL_ID),
                           onStart: startDevServer,
                           onStop: () => void stopDevServer(),
                           onShowOutput: showDevServerOutput,

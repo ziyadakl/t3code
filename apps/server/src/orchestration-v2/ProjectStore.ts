@@ -43,7 +43,6 @@ export const ProjectRow = Schema.Struct({
   archivedAt: Schema.NullOr(IsoDateTime),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
-  archivedAt: Schema.NullOr(IsoDateTime),
   deletedAt: Schema.NullOr(IsoDateTime),
 });
 export type ProjectRow = typeof ProjectRow.Type;
@@ -72,7 +71,6 @@ function toShell(row: ProjectRow): OrchestrationProjectShell {
     archivedAt: row.archivedAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
-    archivedAt: row.archivedAt,
   };
 }
 
@@ -130,7 +128,6 @@ export const make = Effect.gen(function* () {
         archived_at AS "archivedAt",
         created_at AS "createdAt",
         updated_at AS "updatedAt",
-        archived_at AS "archivedAt",
         deleted_at AS "deletedAt"
       FROM projection_projects
       WHERE ${sql.and([
@@ -163,7 +160,6 @@ export const make = Effect.gen(function* () {
             archived_at,
             created_at,
             updated_at,
-            archived_at,
             deleted_at
           )
           VALUES (
@@ -180,7 +176,6 @@ export const make = Effect.gen(function* () {
             ${encoded.archivedAt},
             ${encoded.createdAt},
             ${encoded.updatedAt},
-            ${encoded.archivedAt},
             ${encoded.deletedAt}
           )
           ON CONFLICT (project_id)
@@ -197,7 +192,6 @@ export const make = Effect.gen(function* () {
             archived_at = excluded.archived_at,
             created_at = excluded.created_at,
             updated_at = excluded.updated_at,
-            archived_at = excluded.archived_at,
             deleted_at = excluded.deleted_at
         `,
       ),
@@ -248,7 +242,6 @@ export const make = Effect.gen(function* () {
           archivedAt: null,
           createdAt: payload.createdAt,
           updatedAt: payload.updatedAt,
-          archivedAt: null,
           deletedAt: null,
         }).pipe(mapError("apply"));
       }

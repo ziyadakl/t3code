@@ -81,7 +81,7 @@ export function useEscapeToStopAndRewind(options: UseEscapeToStopAndRewindOption
     else options.onOpenPicker();
   });
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- subscribes a window keydown listener (an external system) while enabled
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes a window keydown listener (an external system) while enabled
   useEffect(() => {
     if (!options.enabled) return;
     window.addEventListener("keydown", onKeyDown);

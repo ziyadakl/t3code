@@ -465,6 +465,7 @@ it.effect(
       model: null,
       createdAt: "2026-09-01T10:00:00.000Z",
       updatedAt: "2026-09-01T10:01:00.000Z",
+      omittedMessageCount: 0,
       messages: texts.map((text, index) => ({
         role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
         text,

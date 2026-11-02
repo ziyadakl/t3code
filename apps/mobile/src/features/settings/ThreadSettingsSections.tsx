@@ -96,7 +96,7 @@ export function AutoSettleSettingsRows(props: {
   // An environment-wide setting, so it is hidden while a project is selected.
   const supportsAutoArchive =
     !projectSelected &&
-    syncTargets.every(
+    displayTargets.every(
       (target) =>
         target.environment.serverConfig.environment.capabilities.threadAutoArchive === true,
     );

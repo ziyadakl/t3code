@@ -66,7 +66,7 @@ export function usePreviewCookieImport(input: {
   // The import outlives the render that opened it; the reload must target the
   // tab and profile the pane shows when it finishes.
   const latest = useRef(input);
-  // oxlint-disable-next-line t3code/react-effect-budget -- keeps the latest input for an async import that outlives the render that started it
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- keeps the latest input for an async import that outlives the render that started it
   useEffect(() => {
     latest.current = input;
   });
@@ -76,7 +76,7 @@ export function usePreviewCookieImport(input: {
   const [bannerSources, setBannerSources] = useState<ReadonlyArray<BrowserImportSource> | null>(
     null,
   );
-  // oxlint-disable-next-line t3code/react-effect-budget -- lists browsers asynchronously for the banner; a cancel flag drops stale results
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- lists browsers asynchronously for the banner; a cancel flag drops stale results
   useEffect(() => {
     if (!bannerCandidate) return;
     let current = true;

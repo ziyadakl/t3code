@@ -1694,16 +1694,6 @@ function isActivityRunForShell(
   return isInterruptibleRunForShell(run) || run.status === "waiting";
 }
 
-/** A thread the archive sweep and cascade leave alone: it has a live run or a pending request. */
-function isBusyProjection(
-  projection: Pick<OrchestrationV2ThreadProjection, "runs" | "runtimeRequests">,
-): boolean {
-  return (
-    projection.runs.some(isActivityRunForShell) ||
-    projection.runtimeRequests.some((request) => request.status === "pending")
-  );
-}
-
 type ShellThreadState = {
   readonly thread: OrchestrationV2ThreadProjection["thread"];
   readonly latestRunId: RunId | null;
@@ -6522,7 +6512,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         )
         .pipe(Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })));
 
-    // Mirrors isBusyProjection: a live run or a pending runtime request.
+    // A thread the archive sweep leaves alone: a live run or a pending runtime request.
     const isBusyThread = (threadId: Statement.Fragment) => sql`
       (
         EXISTS (

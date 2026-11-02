@@ -27,7 +27,6 @@ const row = (overrides: Partial<ProjectRow> = {}): ProjectRow => ({
   archivedAt: null,
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
-  archivedAt: null,
   deletedAt: null,
   ...overrides,
 });
@@ -173,40 +172,5 @@ describe("planProjectCommand", () => {
         );
       }
     }
-  });
-
-  it("archives at the command time, keeps the first archive time, and unarchives to null", () => {
-    const archive = (project: ProjectRow, archived: boolean) =>
-      payloadOf(
-        plan(
-          {
-            type: "project.meta.update",
-            commandId: CommandId.make("cmd-archive"),
-            projectId,
-            archived,
-          },
-          { project },
-        ),
-      ).archivedAt;
-    assert.equal(archive(row(), true), "2026-01-01T00:00:00.000Z");
-    assert.equal(
-      archive(row({ archivedAt: "2025-06-01T00:00:00.000Z" }), true),
-      "2025-06-01T00:00:00.000Z",
-    );
-    assert.isNull(archive(row({ archivedAt: "2025-06-01T00:00:00.000Z" }), false));
-    assert.notProperty(
-      payloadOf(
-        plan(
-          {
-            type: "project.meta.update",
-            commandId: CommandId.make("cmd-rename"),
-            projectId,
-            title: "Renamed",
-          },
-          { project: row() },
-        ),
-      ),
-      "archivedAt",
-    );
   });
 });

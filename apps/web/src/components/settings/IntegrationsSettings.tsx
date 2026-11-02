@@ -1124,7 +1124,11 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
               <MenuGroupLabel>Import from</MenuGroupLabel>
               <BrowserImportSourceItems
                 sources={importLauncher.sources}
-                disabled={cookieImportDenial !== undefined || !settingsHydrated || importDestination === null}
+                disabled={
+                  cookieImportDenial !== undefined ||
+                  !settingsHydrated ||
+                  importDestination === null
+                }
                 onChoose={(source) => {
                   if (!settingsHydrated || importDestination === null) return;
                   importLauncher.open({ source, destination: importDestination });

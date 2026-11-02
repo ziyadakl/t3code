@@ -183,7 +183,6 @@ export const make = Effect.gen(function* () {
     archivedAt: row.archivedAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
-    archivedAt: row.archivedAt,
     deletedAt: row.deletedAt,
   });
 
