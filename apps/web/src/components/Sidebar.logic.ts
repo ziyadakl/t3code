@@ -1,16 +1,12 @@
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
-import {
-  resolveThreadWorkingStartedAt,
-  threadRuntimeCanArchive,
-} from "@t3tools/client-runtime/state/models";
+import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
 import { isShownUnderParent } from "@t3tools/client-runtime/state/threads";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import * as React from "react";
 import {
   isAtomCommandInterrupted,
-  squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
 import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit/sortable";
@@ -637,79 +633,6 @@ export async function deleteSelectedThreadEntries<
   return { deletedThreadKeys, firstFailure };
 }
 
-/**
- * Archives sequentially, like the single-row action run once per thread: a
- * failed archive stops the batch, and threads already archived leave the
- * selection while the rest stay selected for a retry.
- */
-export async function archiveSelectedThreadEntries<
-  TEntry extends { readonly threadKey: string },
-  TResult extends { readonly _tag: "Success" | "Failure" },
->(input: {
-  entries: readonly TEntry[];
-  archive: (entry: TEntry, onArchived: () => void) => Promise<TResult>;
-}): Promise<{
-  archivedThreadKeys: readonly string[];
-  mutationFailure: Extract<TResult, { readonly _tag: "Failure" }> | null;
-  followupFailures: readonly Extract<TResult, { readonly _tag: "Failure" }>[];
-}> {
-  const archivedThreadKeys: string[] = [];
-  const followupFailures: Extract<TResult, { readonly _tag: "Failure" }>[] = [];
-
-  for (const entry of input.entries) {
-    let didArchive = false;
-    const result = await input.archive(entry, () => {
-      didArchive = true;
-    });
-    if (didArchive || result._tag === "Success") archivedThreadKeys.push(entry.threadKey);
-    if (result._tag === "Success") continue;
-    const failure = result as Extract<TResult, { readonly _tag: "Failure" }>;
-    if (didArchive) {
-      followupFailures.push(failure);
-      continue;
-    }
-    return { archivedThreadKeys, mutationFailure: failure, followupFailures };
-  }
-
-  return { archivedThreadKeys, mutationFailure: null, followupFailures };
-}
-
-function failureMessage(failure: AsyncResult.Failure<unknown, unknown>): string {
-  const error = squashAtomCommandFailure(failure);
-  return error instanceof Error ? error.message : "An error occurred.";
-}
-
-/**
- * Runs a bulk archive (see archiveSelectedThreadEntries) and turns its outcome
- * into error reports and selection updates.
- */
-export async function archiveThreadsAndReport<
-  TEntry extends { readonly threadKey: string },
->(input: {
-  entries: readonly TEntry[];
-  archive: (entry: TEntry, onArchived: () => void) => Promise<AtomCommandResult<unknown, unknown>>;
-  reportError: (title: string, description: string) => void;
-  removeFromSelection: (threadKeys: readonly string[]) => void;
-  onAllArchived: (archivedThreadKeys: readonly string[]) => void;
-}): Promise<void> {
-  const outcome = await archiveSelectedThreadEntries({
-    entries: input.entries,
-    archive: input.archive,
-  });
-  for (const failure of outcome.followupFailures) {
-    if (isAtomCommandInterrupted(failure)) continue;
-    input.reportError("Thread archived, but navigation failed", failureMessage(failure));
-  }
-  if (outcome.mutationFailure) {
-    input.removeFromSelection(outcome.archivedThreadKeys);
-    if (!isAtomCommandInterrupted(outcome.mutationFailure)) {
-      input.reportError("Failed to archive threads", failureMessage(outcome.mutationFailure));
-    }
-    return;
-  }
-  input.onAllArchived(outcome.archivedThreadKeys);
-}
-
 export function isSidebarHiddenThread(thread: Pick<SidebarThreadSummary, "lineage">): boolean {
   return !isListedThreadLineage(thread.lineage);
 }
@@ -783,79 +706,6 @@ export function buildBulkUnpinContextMenuItem(input: {
 }): ContextMenuItem<"unpin"> | null {
   if (input.pinnedCount === 0) return null;
   return { id: "unpin", label: `Unpin (${input.pinnedCount})` };
-}
-
-/**
- * Bulk archive touches only the threads the single-row "Archive thread"
- * action could take: not already archived and not running. The label counts
- * those targets, and the item stays visible but disabled when there are none,
- * like the single-row item on a running thread.
- */
-function isBulkArchivable(thread: Pick<SidebarThreadSummary, "archivedAt" | "runtime">): boolean {
-  return thread.archivedAt === null && threadRuntimeCanArchive(thread.runtime);
-}
-
-export function buildBulkArchiveContextMenuItem<
-  T extends Pick<SidebarThreadSummary, "archivedAt" | "runtime">,
->(input: { threads: readonly T[] }): { item: ContextMenuItem<"archive">; targets: T[] } {
-  const targets = input.threads.filter(isBulkArchivable);
-  return {
-    item: {
-      id: "archive",
-      label: `Archive (${targets.length})`,
-      disabled: targets.length === 0,
-    },
-    targets,
-  };
-}
-
-/**
- * Decides how a bulk archive that ran to the end updates the selection. When
- * refreshBulkArchiveTargets skipped threads, only the archived ones leave the
- * selection and a notice says what was skipped.
- */
-export function resolveBulkArchiveCompletion(input: {
-  archivedThreadKeys: readonly string[];
-  skippedCount: number;
-}):
-  | { selection: "clear" }
-  | { selection: "keep-skipped"; notice: { title: string; description: string } } {
-  const { archivedThreadKeys, skippedCount } = input;
-  if (skippedCount === 0) return { selection: "clear" };
-  if (archivedThreadKeys.length === 0) {
-    return {
-      selection: "keep-skipped",
-      notice: {
-        title: "Nothing archived",
-        description: "The selected threads started running or were already archived.",
-      },
-    };
-  }
-  const archivedCount = archivedThreadKeys.length;
-  return {
-    selection: "keep-skipped",
-    notice: {
-      title: `Archived ${archivedCount} thread${archivedCount === 1 ? "" : "s"}`,
-      description:
-        skippedCount === 1
-          ? "1 was skipped because it started running or was already archived."
-          : `${skippedCount} were skipped because they started running or were already archived.`,
-    },
-  };
-}
-
-/**
- * Re-reads the archive targets picked when the menu opened, so a thread that
- * started running (or was archived, or vanished) while the confirm dialog was
- * open is skipped instead of stopping the batch.
- */
-export function refreshBulkArchiveTargets<
-  T extends Pick<SidebarThreadSummary, "archivedAt" | "runtime">,
->(targets: readonly T[], current: (target: T) => T | undefined): T[] {
-  return targets.flatMap((target) => {
-    const latest = current(target);
-    return latest && isBulkArchivable(latest) ? [latest] : [];
-  });
 }
 
 export interface ThreadStatusPill {
@@ -965,91 +815,6 @@ export function shouldCreateNewThreadInCurrentProject(
   projectGroupCount: number,
 ): boolean {
   return shiftKey || openProjectGroupCount === 1 || projectGroupCount === 0;
-}
-
-// The machine the sidebar is actually filtered to. A filter on a machine that
-// is no longer in the saved machine list, or when only one machine is known,
-// means "all machines". The persisted choice is left alone, so it applies again
-// if that machine comes back.
-export function resolveSidebarEnvironmentFilter(
-  selectedEnvironmentId: EnvironmentId | null,
-  knownEnvironmentIds: ReadonlyArray<EnvironmentId>,
-): EnvironmentId | null {
-  if (
-    selectedEnvironmentId === null ||
-    knownEnvironmentIds.length < 2 ||
-    !knownEnvironmentIds.includes(selectedEnvironmentId)
-  ) {
-    return null;
-  }
-  return selectedEnvironmentId;
-}
-
-// Returns `items` itself when unfiltered so memoized consumers stay stable.
-// `keep` lets an item on another machine through, e.g. the thread that is open.
-export function filterToEnvironment<T extends { readonly environmentId: EnvironmentId }>(
-  items: ReadonlyArray<T>,
-  environmentId: EnvironmentId | null,
-  keep?: (item: T) => boolean,
-): ReadonlyArray<T> {
-  if (environmentId === null) {
-    return items;
-  }
-  return items.filter((item) => item.environmentId === environmentId || keep?.(item) === true);
-}
-
-// Search asks only connected servers: a query to one still connecting never
-// settles, so a filtered machine that is offline searches nothing.
-export function sidebarSearchEnvironmentIds(
-  connectedEnvironmentIds: ReadonlyArray<EnvironmentId>,
-  environmentFilterId: EnvironmentId | null,
-): ReadonlyArray<EnvironmentId> {
-  if (environmentFilterId === null) {
-    return connectedEnvironmentIds;
-  }
-  return connectedEnvironmentIds.filter((id) => id === environmentFilterId);
-}
-
-// Whether a draft session gets a sidebar row under the project scope and
-// machine filter. The open draft stays visible on any machine, like the open
-// thread, so the filter never hides what the user is looking at.
-export function isDraftSessionInSidebarScope(
-  session: { readonly environmentId: EnvironmentId; readonly projectId: string },
-  scope: {
-    readonly scopedProjectKeys: ReadonlySet<string> | null;
-    readonly environmentFilterId: EnvironmentId | null;
-    readonly isRouteDraft: boolean;
-  },
-): boolean {
-  if (
-    scope.scopedProjectKeys !== null &&
-    !scope.scopedProjectKeys.has(`${session.environmentId}:${session.projectId}`)
-  ) {
-    return false;
-  }
-  return (
-    scope.environmentFilterId === null ||
-    scope.isRouteDraft ||
-    session.environmentId === scope.environmentFilterId
-  );
-}
-
-// Label of the project scope trigger. A saved project scope that the machine
-// filter hides is kept, not cleared, so the label says it is paused rather
-// than reading like "All projects".
-export function sidebarProjectScopeTriggerLabel(input: {
-  readonly projectScopeKey: string | null;
-  readonly scopedProjectName: string | null;
-  readonly savedProjectName: string | null;
-  readonly environmentFilterLabel: string | null;
-}): string {
-  if (input.scopedProjectName !== null) {
-    return `Filter threads by project: ${input.scopedProjectName}`;
-  }
-  if (input.projectScopeKey !== null && input.environmentFilterLabel !== null) {
-    return `Project filter paused: ${input.savedProjectName ?? "the saved project"} is not on ${input.environmentFilterLabel}`;
-  }
-  return "Filter threads by project";
 }
 
 export function orderItemsByPreferredIds<TItem, TId>(input: {
