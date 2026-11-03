@@ -699,7 +699,6 @@ function hasLiveRun(projection: Pick<OrchestrationV2ThreadProjection, "runs">): 
   return projection.runs.some(isLiveRun);
 }
 
-/** The link with its watch replaced, or removed when `watch` is undefined. */
 function withPullRequestWatch(
   link: ThreadPullRequestLink,
   watch: ThreadPullRequestWatch | undefined,
@@ -12084,11 +12083,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   });
 
-  /**
-   * Records a provider rollback that failed after every retry, so clients
-   * waiting on it stop and show the reason. A newer rollback clears it, and a
-   * late failure from a rollback it superseded is rejected.
-   */
   const dispatchCheckpointRollbackFail = Effect.fn("Orchestrator.dispatchCheckpointRollbackFail")(
     function* (
       command: Extract<

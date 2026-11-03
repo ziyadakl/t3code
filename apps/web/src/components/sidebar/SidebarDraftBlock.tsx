@@ -145,7 +145,7 @@ export const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
   projectByKey: ReadonlyMap<string, EnvironmentProject>;
   projectDisplayNameByKey: ReadonlyMap<string, string>;
   scopedProjectKeys: ReadonlySet<string> | null;
-  /** Fork (machine filter): drafts on other machines, except the open one, stay out while filtered. */
+  /** Drafts on other machines, except the open one, stay out while filtered. */
   environmentFilterId?: EnvironmentId | null;
   routeDraftId: string | null;
   onNavigateToDraft: (draftId: DraftId) => void;

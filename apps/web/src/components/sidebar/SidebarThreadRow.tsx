@@ -542,7 +542,6 @@ type SidebarThreadRowProps = {
   // "folder-multiline" adds the card's branch and PR line under it.
   variant: "card" | "slim" | "folder" | "folder-multiline";
   navigationParent?: string | undefined;
-  // Fork (grouped layout): a one-line slim row inside a project group.
   compact?: boolean;
   variantAction: SidebarSweepAction;
   settlementSupported: boolean;
