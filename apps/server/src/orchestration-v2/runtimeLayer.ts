@@ -237,15 +237,12 @@ const layerOrchestratorProvided = Orchestrator.layer.pipe(
   ),
 );
 
-const layerThreadRewindProvided = ThreadRewindService.layerWithCodeRewind.pipe(
-  Layer.provide(
-    Layer.mergeAll(
-      ProjectionStore.layer,
-      layerProviderSessionManagerProvided,
-      layerRuntimePolicyProvided,
-      layerOrchestratorProvided,
-      layerCheckpointRollbackServiceProvided,
-    ),
+const layerThreadRewindProvided = ThreadRewindService.layerProvided(
+  Layer.mergeAll(
+    layerProviderSessionManagerProvided,
+    layerRuntimePolicyProvided,
+    layerOrchestratorProvided,
+    layerCheckpointRollbackServiceProvided,
   ),
 );
 const layerAgentSessionImporterProvided = AgentSessionImporter.layer.pipe(

@@ -30,6 +30,7 @@ import {
   type RollbackProjection,
   type RollbackSource,
 } from "./CheckpointRollbackService.ts";
+import * as ProjectionStore from "./ProjectionStore.ts";
 import { ProjectionStoreV2 } from "./ProjectionStore.ts";
 import type { ThreadManagementService } from "./ThreadManagementService.ts";
 import * as ThreadCodeRewindService from "./ThreadCodeRewindService.ts";
@@ -238,6 +239,18 @@ export const layer: Layer.Layer<
  * drives its live session) and the checkpoint rollback service.
  */
 export const layerWithCodeRewind = layer.pipe(Layer.provideMerge(ThreadCodeRewindService.layer));
+
+/**
+ * `layerWithCodeRewind` with the projection store provided. `runtimeLayer.ts` passes
+ * the layers it already builds, so each service is built once.
+ */
+export const layerProvided = <E, R>(
+  dependencies: Layer.Layer<
+    Exclude<Layer.Services<typeof layerWithCodeRewind>, ProjectionStoreV2 | Path.Path>,
+    E,
+    R
+  >,
+) => layerWithCodeRewind.pipe(Layer.provide(Layer.mergeAll(ProjectionStore.layer, dependencies)));
 
 /**
  * Runs a `provider-thread.rewind` outbox effect. Waiting clients learn how the
