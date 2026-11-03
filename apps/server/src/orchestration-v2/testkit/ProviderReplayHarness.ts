@@ -30,6 +30,7 @@ import * as CheckpointCaptureService from "../CheckpointCaptureService.ts";
 import * as CheckpointService from "../CheckpointService.ts";
 import * as CheckpointRollbackService from "../CheckpointRollbackService.ts";
 import * as ThreadCodeRewindService from "../ThreadCodeRewindService.ts";
+import * as ThreadRewindService from "../ThreadRewindService.ts";
 import * as CommandPolicy from "../CommandPolicy.ts";
 import * as CommandReceiptStore from "../CommandReceiptStore.ts";
 import * as ContextHandoffService from "../ContextHandoffService.ts";
@@ -478,16 +479,6 @@ export function layerWithRegistry<Error>(
       ),
     ),
   );
-  const layerThreadCodeRewindServiceProvided = ThreadCodeRewindService.layer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        layerStores,
-        layerProviderSessionManagerProvided,
-        layerRuntime,
-        layerOrchestratorProvided,
-      ),
-    ),
-  );
   const layerCheckpointRollbackServiceProvided = CheckpointRollbackService.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -500,7 +491,17 @@ export function layerWithRegistry<Error>(
         layerRuntime,
         layerServerConfig,
         layerServerSettings,
-        layerThreadCodeRewindServiceProvided,
+      ),
+    ),
+  );
+  const layerThreadRewindProvided = ThreadRewindService.layerWithCodeRewind.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        layerStores,
+        layerProviderSessionManagerProvided,
+        layerRuntime,
+        layerOrchestratorProvided,
+        layerCheckpointRollbackServiceProvided,
       ),
     ),
   );
@@ -533,6 +534,7 @@ export function layerWithRegistry<Error>(
       Layer.mergeAll(
         layerRunFinalizationServiceProvided,
         layerCheckpointRollbackServiceProvided,
+        layerThreadRewindProvided,
         layerProviderSessionManagerProvided,
         layerProviderTurnControlServiceProvided,
         layerProviderTurnStartServiceProvided,
@@ -549,7 +551,7 @@ export function layerWithRegistry<Error>(
   const layerReplayRuntime = Layer.mergeAll(
     layerOrchestratorProvided,
     layerProviderSessionManagerProvided,
-    layerThreadCodeRewindServiceProvided,
+    layerThreadRewindProvided,
     layerEffectWorkerProvided,
     layerEventSinkProvided,
     layerContinuationWorkerProvided,

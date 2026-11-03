@@ -23,6 +23,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 
 import * as CheckpointRollbackService from "./CheckpointRollbackService.ts";
+import * as ThreadRewindService from "./ThreadRewindService.ts";
 import * as CheckpointService from "./CheckpointService.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EffectWorker from "./EffectWorker.ts";
@@ -141,9 +142,10 @@ function layerExecutorFor(input: {
       CheckpointRollbackService.CheckpointRollbackServiceV2,
       CheckpointRollbackService.CheckpointRollbackServiceV2.of({
         execute: input.rollback ?? (() => Effect.void),
-        rewind: () => Effect.succeed({ type: "completed" }),
+        rollbackConversation: () => Effect.void,
       }),
     ),
+    Layer.mock(ThreadRewindService.ThreadRewindServiceV2)({}),
     Layer.succeed(
       RuntimeRequestService.RuntimeRequestServiceV2,
       RuntimeRequestService.RuntimeRequestServiceV2.of({

@@ -17,7 +17,6 @@ import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as CheckpointRollbackService from "./CheckpointRollbackService.ts";
-import { ThreadCodeRewindServiceV2 } from "./ThreadCodeRewindService.ts";
 import { isCheckpointRestoreIsolated } from "./CheckpointRestoreSafety.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import { CheckpointServiceV2 } from "./CheckpointService.ts";
@@ -96,7 +95,6 @@ it.effect.each([
       Layer.provide(
         Layer.mergeAll(
           NodeServices.layer,
-          Layer.mock(ThreadCodeRewindServiceV2)({}),
           Layer.mock(ServerConfig.ServerConfig)({ worktreesDir: "/synthetic-worktrees" } as never),
           ServerSettings.layerTest(),
           ThreadCommandExecutor.layer,
