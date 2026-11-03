@@ -27,15 +27,12 @@ import {
   deriveTimelineEntriesFromVisibleTurnItems,
   deriveTimelineEntriesFromVisibleTurnItemsWithState,
   deriveRevertTurnCountByUserMessageId,
-  deriveMessageRewindTargets,
-  deriveRewindTurnCountByUserMessageId,
   derivePhase,
   isLatestRunSettled,
   selectHandoffImageResources,
   selectMessageImageResources,
   createMessageAttachmentPreviewProjector,
   providerErrorPresentation,
-  revertTouchesFiles,
   type TimelineEntry,
   workEntryIndicatesToolFailure,
   workEntryDisplayIndicatesToolFailure,
@@ -184,48 +181,6 @@ describe("V2 session presentation", () => {
     ).toMatchObject({ label: "Provider error after 10/10 retries" });
   });
 
-  it("offers a Claude rewind on every sent turn message, with no checkpoint at all", () => {
-    const message = (
-      id: string,
-      role: ChatMessage["role"],
-      runId: RunId | null,
-      inputIntent?: ChatMessage["inputIntent"],
-    ): TimelineEntry => {
-      const chatMessage: ChatMessage = {
-        id: MessageId.make(id),
-        role,
-        text: id,
-        runId,
-        ...(inputIntent === undefined ? {} : { inputIntent }),
-        streaming: false,
-        createdAt: "2026-06-20T00:00:00.000Z",
-        updatedAt: "2026-06-20T00:00:00.000Z",
-      };
-      return {
-        id: chatMessage.id,
-        kind: "message",
-        createdAt: chatMessage.createdAt,
-        message: chatMessage,
-      };
-    };
-    const [run1, run2, run3] = [RunId.make("run-1"), RunId.make("run-2"), RunId.make("run-3")];
-
-    const targets = deriveRewindTurnCountByUserMessageId([
-      message("first", "user", run1, "turn_start"),
-      message("first-reply", "assistant", run1),
-      message("steer", "user", run1, "steer"),
-      message("second", "user", run2, "queued_turn"),
-      message("third", "user", run3, "turn_start"),
-      message("unsent", "user", null, "turn_start"),
-    ]);
-
-    expect([...targets]).toEqual([
-      [MessageId.make("first"), 0],
-      [MessageId.make("second"), 1],
-      [MessageId.make("third"), 2],
-    ]);
-  });
-
   it("assigns run rollback to the turn-start message instead of a later steer", () => {
     const runId = RunId.make("run-steered");
     const turnStartMessageId = MessageId.make("message-turn-start");
@@ -287,30 +242,6 @@ describe("V2 session presentation", () => {
 
     expect([...targets]).toEqual([[turnStartMessageId, 0]]);
     expect(targets.has(steerMessageId)).toBe(false);
-  });
-
-  it("asks about files only when a run after the revert point changed or lost them", () => {
-    const checkpoint = (
-      turnCount: number,
-      status: "ready" | "missing" | "stale",
-      files: ReadonlyArray<string>,
-    ) => ({
-      runId: RunId.make(`run-${turnCount}`),
-      checkpointTurnCount: turnCount,
-      checkpointRef: `checkpoint-run-${turnCount}` as never,
-      status,
-      files: files.map((path) => ({ path, kind: "modified", additions: 1, deletions: 0 })),
-      assistantMessageId: null,
-      completedAt: "2026-06-20T00:00:03.000Z",
-    });
-    // Runs 1 and 3 changed nothing; run 2 never started.
-    const noFileChanges = [checkpoint(1, "ready", []), checkpoint(3, "ready", [])];
-
-    expect(revertTouchesFiles(noFileChanges, 2)).toBe(false);
-    expect(revertTouchesFiles([checkpoint(1, "ready", ["a.ts"]), ...noFileChanges], 1)).toBe(false);
-    expect(revertTouchesFiles([...noFileChanges, checkpoint(4, "ready", ["a.ts"])], 2)).toBe(true);
-    expect(revertTouchesFiles([...noFileChanges, checkpoint(4, "missing", [])], 2)).toBe(true);
-    expect(revertTouchesFiles([...noFileChanges, checkpoint(4, "stale", ["a.ts"])], 2)).toBe(false);
   });
 
   describe("revert targets after a rewind", () => {
@@ -1855,49 +1786,4 @@ it("renders automatic completion as a work entry instead of a user bubble", () =
       ],
     })[0]?.kind,
   ).toBe("message");
-});
-
-describe("deriveMessageRewindTargets", () => {
-  const userTurn = (id: string, runId: RunId | null): TimelineEntry => {
-    const chatMessage: ChatMessage = {
-      id: MessageId.make(id),
-      role: "user",
-      text: id,
-      runId,
-      inputIntent: "turn_start",
-      streaming: false,
-      createdAt: "2026-06-20T00:00:00.000Z",
-      updatedAt: "2026-06-20T00:00:00.000Z",
-    };
-    return {
-      id: chatMessage.id,
-      kind: "message",
-      createdAt: chatMessage.createdAt,
-      message: chatMessage,
-    };
-  };
-  const entries = [userTurn("first", RunId.make("run-1")), userTurn("second", RunId.make("run-2"))];
-
-  it("lets a Claude thread rewind to every sent turn, checkpoint or not", () => {
-    const targets = deriveMessageRewindTargets({
-      timelineEntries: entries,
-      turnDiffSummaries: [],
-      supportsConversationRollback: false,
-      supportsMessageRewind: true,
-    });
-    expect([...targets]).toEqual([
-      [MessageId.make("first"), 0],
-      [MessageId.make("second"), 1],
-    ]);
-  });
-
-  it("offers nothing when the provider can neither rewind nor roll back", () => {
-    const targets = deriveMessageRewindTargets({
-      timelineEntries: entries,
-      turnDiffSummaries: [],
-      supportsConversationRollback: false,
-      supportsMessageRewind: false,
-    });
-    expect(targets.size).toBe(0);
-  });
 });

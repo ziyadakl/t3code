@@ -16,7 +16,7 @@ import {
 } from "@t3tools/client-runtime/state/project-grouping";
 
 import { NativeStackScreenOptions } from "../../native/StackHeader";
-import { useUnarchivedProjectsWithThreads } from "../../state/entities";
+import { useUnarchivedProjectsWithThreads } from "../../state/archivedProjects";
 import { environmentThreadShells } from "../../state/threads";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";

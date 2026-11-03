@@ -38,26 +38,6 @@ describe("worktree cleanup inheritance", () => {
 });
 
 describe("settingInheritanceLayers", () => {
-  it.each(["sidebarAutoSettleAfterDays", "sidebarAutoArchiveSettledAfterDays"] as const)(
-    "shows %s as days, and off as Never",
-    (key) => {
-      const settings = { ...DEFAULT_SERVER_SETTINGS, [key]: null };
-      const layers = settingInheritanceLayers(
-        {
-          environmentId,
-          label: "Laptop",
-          projectId: null,
-          ...resolveProjectSettings(settings, null),
-        },
-        settings,
-        key,
-      );
-      expect(layers.map((layer) => layer.value)).toEqual([
-        "Never",
-        `${DEFAULT_SERVER_SETTINGS[key]} days`,
-      ]);
-    },
-  );
   it("identifies the background activity profile supplied by each layer", () => {
     const settings = {
       ...DEFAULT_SERVER_SETTINGS,

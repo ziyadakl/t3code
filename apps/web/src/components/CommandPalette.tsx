@@ -135,8 +135,8 @@ import {
   useHiddenThreadKeys,
   useEnvironmentThreadRefs,
   useProjects,
-  useVisibleThreadShells,
   useServerConfigs,
+  useVisibleThreadShells,
   waitForProject,
 } from "../state/entities";
 import { visibleLinkedThreads } from "@t3tools/client-runtime/state/threads";
@@ -152,8 +152,8 @@ import {
   isScratchProject,
   isUnsupportedWindowsProjectPath,
   resolveProjectPathForDispatch,
-  withoutArchivedProjects,
 } from "@t3tools/client-runtime/state/projects";
+import { withoutArchivedProjects } from "@t3tools/client-runtime/state/archived-projects";
 import { resolvePastedPath } from "@t3tools/shared/path";
 import {
   dispatchCommandPalette,
@@ -470,8 +470,7 @@ function OpenCommandPaletteDialog(props: {
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
   const paletteRouteTarget = useThreadRouteTarget();
-  // Archived projects and their threads stay out of every list here; only
-  // re-adding an archived project's folder reaches them, to restore it.
+  // Archived projects stay out of every list; re-adding their folder restores them.
   const allProjects = useProjects();
   const allThreads = useVisibleThreadShells();
   const { projects, threads } = withoutArchivedProjects(allProjects, allThreads);

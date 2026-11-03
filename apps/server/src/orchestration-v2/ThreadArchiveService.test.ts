@@ -27,7 +27,7 @@ import * as ServerActivation from "../serverActivation.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as EventStore from "./EventStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
-import * as ProjectionStore from "./ProjectionStore.ts";
+import * as ThreadArchiveQueries from "./ThreadArchiveQueries.ts";
 import * as ThreadArchiveService from "./ThreadArchiveService.ts";
 
 const NOW_MS = Date.parse("2026-10-13T12:00:00.000Z");
@@ -39,8 +39,8 @@ function at(offsetMs: number): DateTime.Utc {
 
 function candidate(
   id: string,
-  overrides: Partial<ProjectionStore.ProjectionAutoArchiveCandidate> = {},
-): ProjectionStore.ProjectionAutoArchiveCandidate {
+  overrides: Partial<ThreadArchiveQueries.ProjectionAutoArchiveCandidate> = {},
+): ThreadArchiveQueries.ProjectionAutoArchiveCandidate {
   return {
     id: ThreadId.make(id),
     settledSince: at(-10 * DAY_MS),
@@ -55,7 +55,7 @@ function candidate(
 
 describe("resolveAutoArchiveReason", () => {
   const resolve = (
-    thread: ProjectionStore.ProjectionAutoArchiveCandidate,
+    thread: ThreadArchiveQueries.ProjectionAutoArchiveCandidate,
     afterDays: number | null = 7,
   ) => ThreadArchiveService.resolveAutoArchiveReason(thread, NOW_MS, afterDays);
 
@@ -114,9 +114,9 @@ const testCrypto = Crypto.make({
 });
 
 interface HarnessOptions {
-  readonly candidates?: ReadonlyArray<ProjectionStore.ProjectionAutoArchiveCandidate>;
+  readonly candidates?: ReadonlyArray<ThreadArchiveQueries.ProjectionAutoArchiveCandidate>;
   readonly children?: Readonly<
-    Record<string, ReadonlyArray<ProjectionStore.ProjectionSubagentChild>>
+    Record<string, ReadonlyArray<ThreadArchiveQueries.ProjectionSubagentChild>>
   >;
   readonly settings?: ContractServerSettings;
 }
@@ -148,7 +148,7 @@ const makeHarness = Effect.fn("makeThreadArchiveHarness")(function* (options: Ha
       : Effect.die(new Error(`Unexpected command: ${command.type}`));
 
   const layerDependencies = Layer.mergeAll(
-    Layer.mock(ProjectionStore.ProjectionStoreV2)({
+    Layer.mock(ThreadArchiveQueries.ThreadArchiveQueries)({
       getAutoArchiveCandidates: () =>
         Queue.offer(sweeps, undefined).pipe(Effect.as(options.candidates ?? [])),
       getSubagentChildren: (threadId) =>

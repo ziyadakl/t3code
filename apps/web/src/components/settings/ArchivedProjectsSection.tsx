@@ -1,4 +1,4 @@
-import { isProjectArchived } from "@t3tools/client-runtime/state/projects";
+import { isProjectArchived } from "@t3tools/client-runtime/state/archived-projects";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,

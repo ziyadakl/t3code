@@ -6,7 +6,6 @@ import {
 } from "@t3tools/contracts";
 import { useEnvironmentsWithScope } from "../../state/session";
 import { AutoSettleDaysField } from "./components/AutoSettleDaysField";
-import { ThreadDaysField } from "./components/ThreadDaysField";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
@@ -23,7 +22,13 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
 import { SettingsScreen } from "./components/SettingsScreen";
-import { planAutoSettleSettingsSync, type AutoSettleSettings } from "./autoSettleSettingsSync";
+import { AutoArchiveSection } from "./AutoArchiveSection";
+import {
+  autoSettleBannerText,
+  planAutoSettleAndArchiveSync,
+  supportsAutoArchive,
+} from "./autoArchiveSettings";
+import type { AutoSettleSettings } from "./autoSettleSettingsSync";
 import { useSettingsEnvironmentFilter } from "./settings-environment-filter";
 import {
   managedSettingReason,
@@ -51,7 +56,6 @@ export function SettingsLabsRouteScreen() {
 }
 
 const AUTO_SETTLE_DEFAULT_DAYS = DEFAULT_SERVER_SETTINGS.sidebarAutoSettleAfterDays ?? 3;
-const AUTO_ARCHIVE_DEFAULT_DAYS = DEFAULT_SERVER_SETTINGS.sidebarAutoArchiveSettledAfterDays ?? 7;
 
 /**
  * Usage-limit and auto-settle rows. The Threads page owns their writes, so they share its queue
@@ -93,14 +97,8 @@ export function AutoSettleSettingsRows(props: {
     },
   ) => props.write(patch);
 
-  // An environment-wide setting, so it is hidden while a project is selected.
-  const supportsAutoArchive =
-    !projectSelected &&
-    displayTargets.every(
-      (target) =>
-        target.environment.serverConfig.environment.capabilities.threadAutoArchive === true,
-    );
-  const { patch: autoSettlePatch, mismatches } = planAutoSettleSettingsSync(
+  const archiveSupported = supportsAutoArchive(displayTargets, projectSelected);
+  const { patch: autoSettlePatch, mismatches } = planAutoSettleAndArchiveSync(
     {
       environmentId: reference.environment.environmentId,
       projectId: reference.projectId,
@@ -112,15 +110,14 @@ export function AutoSettleSettingsRows(props: {
       label: target.environment.label,
       settings: target.settings,
     })),
-    { includeAutoArchive: supportsAutoArchive },
+    { includeAutoArchive: archiveSupported },
   );
 
+  const banner = autoSettleBannerText(archiveSupported);
   const disabled = !canWriteSettings || props.pending;
   const disabledFor = (...keys: string[]) =>
     disabled || managedSettingReason(displayTargets, ...keys) !== undefined;
   const afterDays = referenceSettings.sidebarAutoSettleAfterDays;
-  // Like auto-settle, a mixed selection shows the reference value and lists the rest below.
-  const archiveAfterDays = referenceSettings.sidebarAutoArchiveSettledAfterDays;
 
   return (
     <View className="gap-6">
@@ -173,46 +170,22 @@ export function AutoSettleSettingsRows(props: {
           </View>
         ) : null}
       </SettingsSection>
-      {supportsAutoArchive ? (
-        <SettingsSection title="Auto-archive">
-          <SettingsSwitchRow
-            icon="archivebox"
-            label="Auto-archive settled threads"
-            value={archiveAfterDays !== null}
-            disabled={disabled}
-            onValueChange={(value) =>
-              writeToAll({
-                sidebarAutoArchiveSettledAfterDays: value ? AUTO_ARCHIVE_DEFAULT_DAYS : null,
-              })
-            }
-          />
-          {archiveAfterDays !== null ? (
-            <View className="flex-row items-center gap-4 px-4 py-4 android:min-h-14 android:py-3">
-              <View className="w-[22px] android:w-6" />
-              <Text className="flex-1 text-foreground text-lg android:text-base">Settled days</Text>
-              <ThreadDaysField
-                value={archiveAfterDays}
-                disabled={disabled}
-                label="Days settled before auto-archive"
-                onValueChange={(value) => writeToAll({ sidebarAutoArchiveSettledAfterDays: value })}
-              />
-            </View>
-          ) : null}
-        </SettingsSection>
+      {archiveSupported ? (
+        <AutoArchiveSection
+          archiveAfterDays={referenceSettings.sidebarAutoArchiveSettledAfterDays}
+          disabled={disabled}
+          write={props.write}
+        />
       ) : null}
       {!props.pending && mismatches.length > 0 ? (
         <SettingsSection title="Across environments">
           <View className="gap-3 p-4">
-            <Text className="text-base text-foreground">
-              {supportsAutoArchive
-                ? "Auto-settle and auto-archive defaults differ"
-                : "Auto-settle defaults differ"}
-            </Text>
+            <Text className="text-base text-foreground">{banner.title}</Text>
             <Text className="text-sm text-foreground-muted">
               {mismatches.map((mismatch) => mismatch.label).join(", ")}
             </Text>
             <Button
-              label={supportsAutoArchive ? "Apply these defaults" : "Apply auto-settle defaults"}
+              label={banner.applyLabel}
               tone="secondary"
               disabled={disabledFor("sidebarAutoSettleOnMerge", "sidebarAutoSettleAfterDays")}
               onPress={() => writeToAll(autoSettlePatch)}

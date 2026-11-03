@@ -3,6 +3,7 @@
  * narrows the whole sidebar to one environment: filtering the roots means
  * project groups, the scope picker, shelves and search all follow.
  */
+import { withoutArchivedProjects } from "@t3tools/client-runtime/state/archived-projects";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { selectProjectGroupingSettings } from "@t3tools/client-runtime/state/project-grouping";
 import type {
@@ -19,7 +20,7 @@ import {
   useEnvironmentMachines,
   usePrimaryEnvironmentId,
 } from "../../state/environments";
-import { useDelegatedUnderParent } from "../../state/entities";
+import { useDelegatedUnderParent, useProjects, useQuietThreadShells } from "../../state/entities";
 import { useThreadSelectionStore } from "../../threadSelectionStore";
 import { useUiStateStore } from "../../uiStateStore";
 import {
@@ -35,25 +36,30 @@ import { SidebarEnvironmentFilter } from "./SidebarEnvironmentFilter";
 type EnvironmentIdentities = ReturnType<typeof useEnvironmentIdentities>;
 
 /**
- * Called in the sidebar's lookups, after archived projects are dropped. The
- * lookups keep every machine's projects and threads (the open thread or draft
- * stays listed on any machine and still needs its project's icon and name);
- * this returns the effective filter and the narrowed projects and groups.
+ * Called in the sidebar's lookups. Reads the projects and threads, drops archived
+ * projects and their threads, then narrows to the filtered machine, in that order.
+ * Returns every machine's projects and threads too (the open thread or draft stays
+ * listed on any machine and still needs its project's icon and name).
  */
 export function useSidebarEnvironmentFilter(input: {
-  allProjects: ReadonlyArray<EnvironmentProject>;
-  allThreads: ReadonlyArray<EnvironmentThreadShell>;
   /** Every machine's project groups. */
   allProjectGroups: ReadonlyArray<SidebarProjectSnapshot>;
   environments: EnvironmentIdentities;
   environmentLabelById: ReadonlyMap<EnvironmentId, string>;
 }): {
+  allProjects: ReadonlyArray<EnvironmentProject>;
+  allThreads: ReadonlyArray<EnvironmentThreadShell>;
   /** The machine the sidebar is filtered to; null means all machines. */
   environmentFilterId: EnvironmentId | null;
   projects: ReadonlyArray<EnvironmentProject>;
   projectGroups: ReadonlyArray<SidebarProjectSnapshot>;
 } {
-  const { allProjects, allThreads, allProjectGroups, environments, environmentLabelById } = input;
+  const { allProjectGroups, environments, environmentLabelById } = input;
+  // Quiet threads: see useSidebarProjectGroups.
+  const { projects: allProjects, threads: allThreads } = withoutArchivedProjects(
+    useProjects(),
+    useQuietThreadShells(),
+  );
   const selectedEnvironmentId = useEnvironmentFilterStore((store) => store.selectedEnvironmentId);
   const delegatedUnderParent = useDelegatedUnderParent();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
@@ -81,7 +87,7 @@ export function useSidebarEnvironmentFilter(input: {
           environmentLabelById,
           delegatedUnderParent,
         });
-  return { environmentFilterId, projects, projectGroups };
+  return { allProjects, allThreads, environmentFilterId, projects, projectGroups };
 }
 
 // Outlined call to action under a sidebar empty-state message.

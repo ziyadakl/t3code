@@ -27,7 +27,7 @@ import {
   buildSidebarProjectSnapshots,
   projectGroupsSpanEnvironments,
 } from "~/sidebarProjectGrouping";
-import { useUnarchivedProjectsAndThreads } from "~/state/entities";
+import { useUnarchivedProjectsAndThreads } from "~/state/archivedProjects";
 import {
   useEnvironments,
   usePrimaryEnvironmentId,

@@ -24,7 +24,6 @@ import { describe, expect, it } from "vite-plus/test";
 import { EnvironmentId, MessageId, RunId } from "@t3tools/contracts";
 import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
 import {
-  isMessageRewindDisabled,
   computeStableMessagesTimelineRows,
   deriveMessagesTimelineRows,
   timelineTurnFoldRunIdsByEntryId,
@@ -4300,48 +4299,6 @@ describe("failed turn transcript", () => {
       });
     },
   );
-});
-
-describe("isMessageRewindDisabled", () => {
-  it("is disabled while a rewind is already running", () => {
-    expect(
-      isMessageRewindDisabled({
-        isRevertingCheckpoint: true,
-        isWorking: false,
-        canInterrupt: true,
-      }),
-    ).toBe(true);
-  });
-
-  it("is disabled while work runs that no Stop can reach", () => {
-    expect(
-      isMessageRewindDisabled({
-        isRevertingCheckpoint: false,
-        isWorking: true,
-        canInterrupt: false,
-      }),
-    ).toBe(true);
-  });
-
-  it("stays enabled while a stoppable turn runs, since the click stops it", () => {
-    expect(
-      isMessageRewindDisabled({
-        isRevertingCheckpoint: false,
-        isWorking: true,
-        canInterrupt: true,
-      }),
-    ).toBe(false);
-  });
-
-  it("is enabled when the thread is idle", () => {
-    expect(
-      isMessageRewindDisabled({
-        isRevertingCheckpoint: false,
-        isWorking: false,
-        canInterrupt: false,
-      }),
-    ).toBe(false);
-  });
 });
 
 describe("live subagents after their parent turn settles", () => {

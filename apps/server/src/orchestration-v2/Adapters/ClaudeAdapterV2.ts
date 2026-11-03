@@ -1,5 +1,15 @@
 import * as DocumentText from "../../provider/DocumentText.ts";
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
+import {
+  claudePromptResumeAt,
+  claudeThreadStartResumeAt,
+  claudeTurnRewindFields,
+  makeClaudeRewindFiles,
+  recordClaudePromptEcho,
+  wrapQueryRewindFiles,
+  type ClaudeQueryRewindFiles,
+  type ClaudeRewindProtocolLogEvent,
+} from "./ClaudeRewind.ts";
 import { normalizeCompactCommand } from "@t3tools/shared/compactCommand";
 import { claudeTaskOutputRoot, tailClaudeTaskOutput } from "./ClaudeTaskOutputTail.ts";
 import {
@@ -48,7 +58,6 @@ import {
   type PermissionResult,
   type PermissionUpdate,
   type Query as ClaudeQuery,
-  type RewindFilesResult,
   type Settings as ClaudeSdkSettings,
   type SpawnOptions as ClaudeSpawnOptions,
   type SpawnedProcess as ClaudeSpawnedProcess,
@@ -122,7 +131,6 @@ import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
-import * as Hex from "effect/encoding/Hex";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -545,11 +553,7 @@ export interface ClaudeAgentSdkQuerySession {
   ) => Effect.Effect<boolean, ClaudeAgentSdkQueryRunnerError>;
   readonly interrupt: Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
   readonly close: Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
-  /** Needs the query opened with `enableFileCheckpointing`. */
-  readonly rewindFiles?: (
-    userMessageId: string,
-    options: { readonly dryRun: boolean },
-  ) => Effect.Effect<RewindFilesResult, ClaudeAgentSdkQueryRunnerError>;
+  readonly rewindFiles?: ClaudeQueryRewindFiles;
 }
 
 type ClaudeQueryStreamExit = Exit.Exit<void, ClaudeAgentSdkQueryRunnerError>;
@@ -776,20 +780,7 @@ export type ClaudeAgentSdkProtocolLogEvent =
         readonly type: "query.close";
       };
     }
-  | {
-      readonly direction: "outgoing";
-      readonly stage: "decoded";
-      readonly payload: {
-        readonly type: "query.rewind_files";
-        readonly userMessageId: string;
-        readonly dryRun: boolean;
-      };
-    }
-  | {
-      readonly direction: "incoming";
-      readonly stage: "decoded";
-      readonly payload: { readonly type: "files.rewound" } & RewindFilesResult;
-    }
+  | ClaudeRewindProtocolLogEvent
   | {
       readonly direction: "outgoing";
       readonly stage: "decoded";
@@ -1240,40 +1231,7 @@ export const layerQueryRunner: Layer.Layer<
                   }),
                 ),
               ),
-            rewindFiles: (userMessageId, options) =>
-              logProtocolEvent({
-                direction: "outgoing",
-                stage: "decoded",
-                payload: { type: "query.rewind_files", userMessageId, dryRun: options.dryRun },
-              }).pipe(
-                Effect.andThen(
-                  Effect.tryPromise({
-                    // A real restore the CLI refuses (for example "No file
-                    // checkpoint found for this message.") rejects, where a dry
-                    // run answers canRewind: false. Both answer the same way here.
-                    try: () =>
-                      queryRuntime
-                        .rewindFiles(userMessageId, { dryRun: options.dryRun })
-                        .catch((cause: unknown): RewindFilesResult => {
-                          if (
-                            cause instanceof Error &&
-                            Reflect.get(cause, "errorClass") === "control_request_failed"
-                          ) {
-                            return { canRewind: false, error: cause.message };
-                          }
-                          throw cause;
-                        }),
-                    catch: (cause) => queryRunnerError(cause, "rewindFiles"),
-                  }),
-                ),
-                Effect.tap((result) =>
-                  logProtocolEvent({
-                    direction: "incoming",
-                    stage: "decoded",
-                    payload: { type: "files.rewound", ...result },
-                  }),
-                ),
-              ),
+            rewindFiles: wrapQueryRewindFiles(queryRuntime, logProtocolEvent, queryRunnerError),
             stopTask: (taskId) =>
               Effect.tryPromise({
                 try: () => queryRuntime.stopTask(taskId),
@@ -1590,9 +1548,7 @@ export function makeClaudeQueryOptions(input: {
   if (requestThinkingSummaries && extraArgs["thinking-display"] === undefined) {
     extraArgs["thinking-display"] = "summarized";
   }
-  // Claude echoes each prompt with the uuid its file checkpoint is keyed by;
-  // a rewind restores files by that uuid.
-  extraArgs["replay-user-messages"] = null;
+  extraArgs["replay-user-messages"] = null; // echoes each prompt with its checkpoint uuid
   const threadIdentity: ClaudeAgentSdkThreadIdentity = input.resume
     ? { resume: input.nativeThreadId }
     : { sessionId: input.nativeThreadId };
@@ -1688,8 +1644,7 @@ export function makeClaudeQueryOptions(input: {
     ...(deviceInstructions
       ? { hooks: { SubagentStart: [{ hooks: [subagentDeviceInstructions] }] } }
       : {}),
-    // Never empty: replay-user-messages is always set above.
-    extraArgs,
+    ...(Object.keys(extraArgs).length === 0 ? {} : { extraArgs }),
   };
   const additionalDirectories = [
     ...(input.cwd === null ? [] : [input.cwd]),
@@ -2104,11 +2059,7 @@ export const resolveClaudeRollbackResumeSessionAt = Effect.fn(
 )(function* (input: ProviderAdapter.ProviderAdapterV2RollbackThreadInput) {
   switch (input.target.type) {
     case "thread_start":
-      return (
-        input.target.nativeResumeAt ??
-        input.providerThread.nativeMetadata?.forkHeadMessageId ??
-        null
-      );
+      return claudeThreadStartResumeAt(input);
     case "provider_turn": {
       const target = input.target;
       if (target.providerTurn.providerThreadId !== input.providerThread.id) {
@@ -2130,18 +2081,9 @@ export const resolveClaudeRollbackResumeSessionAt = Effect.fn(
       if (providerTurnsAfterTarget.length === 0) {
         return null;
       }
-      // A turn that ended before Claude replied (stopped, failed) recorded no
-      // assistant uuid. Prompt uuids are random, so the session resumes just
-      // after the prompt uuid its provider turn recorded.
-      const promptId =
-        target.providerTurn.nativeUserMessageId ?? target.providerTurn.nativePromptId;
-      if (promptId !== undefined) {
-        return promptId;
-      }
-      // Turns from builds that recorded no prompt uuid sent one derived from
-      // the attempt.
-      if (target.providerTurn.runAttemptId !== null) {
-        return yield* legacyClaudePromptUuid(target.providerTurn.runAttemptId);
+      const promptResumeAt = yield* claudePromptResumeAt(target.providerTurn);
+      if (promptResumeAt !== null) {
+        return promptResumeAt;
       }
 
       // Only compaction can be omitted without dropping a retained user prompt.
@@ -2163,18 +2105,6 @@ export const resolveClaudeRollbackResumeSessionAt = Effect.fn(
       });
     }
   }
-});
-
-// Legacy only: the prompt uuid builds before random prompt ids derived from
-// the run attempt. New turns record the uuid they actually send.
-const legacyClaudePromptUuid = Effect.fn("legacyClaudePromptUuid")(function* (attemptId: string) {
-  const crypto = yield* Crypto.Crypto;
-  const digest = yield* crypto
-    .digest("SHA-256", new TextEncoder().encode(`t3-claude-prompt:${attemptId}`))
-    .pipe(Effect.orDie);
-  const hex = Hex.encode(digest);
-  const variant = ((Number.parseInt(hex[16]!, 16) & 0x3) | 0x8).toString(16);
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 });
 
 type ClaudeUserContent = SDKUserMessage["message"]["content"];
@@ -4138,8 +4068,7 @@ interface ActiveClaudeTurnContext {
   readonly nativeThreadId: string;
   readonly nativeTurnId: string;
   nativeMessageCursor: string | null;
-  // The SDK uuid of the prompt that started this turn, from its replay echo.
-  nativeUserMessageId: string | null;
+  nativeUserMessageId: string | null; // the prompt's SDK uuid, from its replay echo
   readonly providerTurnId: OrchestrationV2ProviderTurn["id"];
   readonly providerTurnOrdinal: number;
   readonly startedAt: DateTime.Utc;
@@ -5709,14 +5638,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             nativeId: input.context.nativeMessageCursor ?? input.context.nativeTurnId,
             strength: "weak",
           },
-          ...(input.context.nativeUserMessageId === null
-            ? {}
-            : { nativeUserMessageId: input.context.nativeUserMessageId }),
-          // Recorded from the start, so a turn stopped before Claude echoes
-          // its prompt can still be rewound.
-          ...(input.context.promptUuid === null
-            ? {}
-            : { nativePromptId: input.context.promptUuid }),
+          ...claudeTurnRewindFields(input.context),
           ordinal: input.context.providerTurnOrdinal,
           status: input.status,
           startedAt: input.context.startedAt,
@@ -9707,15 +9629,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         }) {
           const message = input.message;
           const context = yield* Ref.get(activeTurn);
-          // A prompt's replay echo is bookkeeping, not conversation. The
-          // first one of a prompted turn names the uuid its files are
-          // checkpointed by; nothing else reads these frames.
-          if (message.type === "user" && "isReplay" in message && message.isReplay === true) {
-            if (context?.promptUuid != null && context.nativeUserMessageId === null) {
-              context.nativeUserMessageId = message.uuid;
-            }
-            return;
-          }
+          if (recordClaudePromptEcho(context, message)) return;
           const liveQuery = yield* Ref.get(queryContext);
           if (
             context?.promptUuid === null &&
@@ -10979,76 +10893,17 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             ),
         );
 
-        // Claude keeps a session's file history in its transcript. This
-        // thread's live process answers when there is one; otherwise a process
-        // resumed only for the restore answers and is closed again.
-        const rewindFiles = Effect.fn("ClaudeAdapterV2.rewindFiles")(
-          function* (rewindInput: ProviderAdapter.ProviderAdapterV2RewindFilesInput) {
-            const nativeThreadId = yield* getNativeThreadId(rewindInput.providerThread);
-            const rewind = (
-              session: ClaudeAgentSdkQuerySession,
-            ): Effect.Effect<
-              RewindFilesResult,
-              ProviderAdapter.ProviderAdapterProtocolError | ClaudeAgentSdkQueryRunnerError
-            > =>
-              session.rewindFiles === undefined
-                ? Effect.fail(
-                    new ProviderAdapter.ProviderAdapterProtocolError({
-                      driver: CLAUDE_PROVIDER,
-                      detail: "This Claude query cannot restore files.",
-                    }),
-                  )
-                : session.rewindFiles(rewindInput.nativeUserMessageId, {
-                    dryRun: rewindInput.dryRun,
-                  });
-            const live = yield* Ref.get(queryContext);
-            const result =
-              live !== null && live.nativeThreadId === nativeThreadId && !live.stopping
-                ? yield* rewind(live.query)
-                : yield* Effect.acquireUseRelease(
-                    queryRunner.open({
-                      threadId: input.threadId,
-                      providerSessionId: input.providerSessionId,
-                      options: {
-                        ...makeClaudeQueryOptions({
-                          modelSelection: rewindInput.modelSelection,
-                          nativeThreadId,
-                          resume: true,
-                          cwd: rewindInput.runtimePolicy.cwd,
-                          settings: adapterOptions.settings,
-                          environment: adapterOptions.environment,
-                        }),
-                        // This process only restores files. Loading the user's
-                        // and project's settings runs their SessionStart hooks,
-                        // and Claude withholds init until they finish: one
-                        // project hook held a restore preview for 7.5 s.
-                        settingSources: [],
-                      },
-                    }),
-                    rewind,
-                    (session) => session.close.pipe(Effect.ignore),
-                  );
-            return {
-              canRewind: result.canRewind,
-              ...(result.error === undefined ? {} : { error: result.error }),
-              filesChanged: result.filesChanged ?? [],
-              insertions: result.insertions ?? 0,
-              deletions: result.deletions ?? 0,
-              skippedLinks: result.skippedLinks ?? 0,
-            } satisfies ProviderAdapter.ProviderAdapterV2RewindFilesResult;
-          },
-          (effect, rewindInput) =>
-            effect.pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ProviderAdapter.ProviderAdapterRewindFilesError({
-                    driver: CLAUDE_PROVIDER,
-                    providerThreadId: rewindInput.providerThread.id,
-                    cause,
-                  }),
-              ),
-            ),
-        );
+        const rewindFiles = makeClaudeRewindFiles({
+          driver: CLAUDE_PROVIDER,
+          threadId: input.threadId,
+          providerSessionId: input.providerSessionId,
+          queryRunner,
+          liveQuery: Ref.get(queryContext),
+          getNativeThreadId,
+          makeQueryOptions: makeClaudeQueryOptions,
+          settings: adapterOptions.settings,
+          environment: adapterOptions.environment,
+        });
 
         const interruptTurn = Effect.fn("ClaudeAdapterV2.interruptTurn")(
           function* (turnInput: ProviderAdapter.ProviderAdapterV2InterruptInput) {
@@ -11697,10 +11552,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               const nativeThreadId = yield* getNativeThreadId(rollbackInput.providerThread);
               yield* closeLiveQueryForNativeThread(nativeThreadId);
               const now = yield* DateTime.now;
-
               const resumeSessionAt = yield* resolveClaudeRollbackResumeSessionAt(
                 rollbackInput,
               ).pipe(Effect.provideService(Crypto.Crypto, crypto));
+
               if (rollbackInput.target.type === "thread_start" && resumeSessionAt === null) {
                 const resetNativeThreadId = yield* queryRunner.allocateSessionId;
                 return {

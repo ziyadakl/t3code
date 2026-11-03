@@ -147,9 +147,7 @@ import {
   readThreadShell,
   useAllEnvironmentProjectSnapshotsReady,
   useDelegatedUnderParent,
-  useProjects,
   useServerConfigs,
-  useQuietThreadShells,
 } from "../state/entities";
 import { environmentPresentations } from "../state/presentation";
 import { primaryServerKeybindingsAtom } from "../state/server";
@@ -168,7 +166,7 @@ import {
   resolveThreadRouteTarget,
 } from "../threadRoutes";
 import type { SidebarThreadSummary } from "../types";
-import { isScratchProject, withoutArchivedProjects } from "@t3tools/client-runtime/state/projects";
+import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { cn } from "~/lib/utils";
 import { ProjectEnvironmentBadge } from "./ProjectEnvironmentBadge";
 import {
@@ -863,12 +861,6 @@ function isOptimisticDropReleased(input: {
 
 // Build maps in a hook so the compiler can prove they are frozen and cache them.
 function useSidebarLookups() {
-  // Fork: archived projects and their threads stay off the sidebar.
-  // Quiet threads: see useSidebarProjectGroups.
-  const { projects: allProjects, threads: allThreads } = withoutArchivedProjects(
-    useProjects(),
-    useQuietThreadShells(),
-  );
   const environments = useEnvironmentIdentities();
   const serverConfigs = useServerConfigs();
   const providerEntriesByEnvironment = useAtomValue(sidebarProviderEntriesAtom);
@@ -880,14 +872,14 @@ function useSidebarLookups() {
   const environmentLabelById = new Map(
     environments.map((environment) => [environment.environmentId, environment.label] as const),
   );
-  // Fork (machine filter): `projects` and `projectGroups` are one machine's.
-  const { environmentFilterId, projects, projectGroups } = useSidebarEnvironmentFilter({
-    allProjects,
-    allThreads,
-    allProjectGroups,
-    environments,
-    environmentLabelById,
-  });
+  // Fork (machine filter): `allProjects` and `allThreads` span every machine, without
+  // archived projects; `projects` and `projectGroups` are one machine's.
+  const { allProjects, allThreads, environmentFilterId, projects, projectGroups } =
+    useSidebarEnvironmentFilter({
+      allProjectGroups,
+      environments,
+      environmentLabelById,
+    });
   // Lookups span every machine: the open thread or draft stays listed on any
   // machine and still needs its project's icon and name.
   const projectByKey = new Map(

@@ -105,7 +105,7 @@ describe("storage cleanup settings", () => {
       },
     });
     expect(settings.worktreeCleanup).toMatchObject({
-      rules: { worktreeKeepWhen: "uncommitted-changes", worktreeSettledAfterDays: null },
+      rules: { worktreeKeepWhen: "uncommitted-changes" },
     });
     expect(
       decodeServerSettingsPatch({ storageCleanup: { worktreeKeepWhen: "tracked-changes" } }),
@@ -414,19 +414,6 @@ describe("ClientSettings quit confirmation", () => {
 
     expect(settings.confirmQuit).toBe(mode);
     expect(encodeClientSettings(settings).confirmQuit).toBe(mode);
-  });
-});
-describe("ServerSettings thread auto-archive", () => {
-  it("archives settled threads after seven days by default, and can be turned off", () => {
-    expect(decodeServerSettings({}).sidebarAutoArchiveSettledAfterDays).toBe(7);
-    expect(
-      decodeServerSettings({ sidebarAutoArchiveSettledAfterDays: null })
-        .sidebarAutoArchiveSettledAfterDays,
-    ).toBeNull();
-    expect(decodeServerSettingsPatch({ sidebarAutoArchiveSettledAfterDays: 14 })).toMatchObject({
-      sidebarAutoArchiveSettledAfterDays: 14,
-    });
-    expect(() => decodeServerSettings({ sidebarAutoArchiveSettledAfterDays: 0 })).toThrow();
   });
 });
 
