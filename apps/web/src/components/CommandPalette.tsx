@@ -216,6 +216,7 @@ import {
   type SearchOverlayMode,
 } from "./CommandPalette.logic";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
+import { isSidebarHiddenThread } from "./Sidebar.logic";
 import { CommandPaletteContent } from "./CommandPaletteContent";
 import {
   selectCommandPaletteClientSettings,
@@ -472,7 +473,8 @@ function OpenCommandPaletteDialog(props: {
   const paletteRouteTarget = useThreadRouteTarget();
   // Archived projects stay out of every list; re-adding their folder restores them.
   const allProjects = useProjects();
-  const allThreads = useVisibleThreadShells();
+  // Side chats and subagents open inside their parent, so opening a project never lands on one.
+  const allThreads = useVisibleThreadShells().filter((thread) => !isSidebarHiddenThread(thread));
   const { projects, threads } = withoutArchivedProjects(allProjects, allThreads);
   const referenceThreadRef =
     pathname === "/pull-requests"
