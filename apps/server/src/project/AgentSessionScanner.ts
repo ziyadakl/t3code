@@ -43,6 +43,11 @@ import {
   createTranscriptJsonSelector,
   TranscriptJsonLimitError,
 } from "./AgentSessionJson.ts";
+import {
+  type ClaudeRecordPosition,
+  type ParsedMessage,
+  withClaudeTurnIds,
+} from "./ImportedClaudeTranscript.ts";
 
 const TRANSCRIPT_PREFIX_BYTES = 32 * 1024;
 const METADATA_READ_BYTES = 8 * 1024;
@@ -156,43 +161,6 @@ export interface AgentSessionThreadMessage {
    * prompt itself when nothing answered it.
    */
   readonly nativeTurnId?: string;
-}
-
-/** Where a Claude record sits in its transcript, for working out turn ends. */
-interface ClaudeRecordPosition {
-  readonly uuid: string | undefined;
-  readonly recordIndex: number;
-  /** The last main-chain reply written before this record. */
-  readonly replyBefore: { readonly uuid: string; readonly recordIndex: number } | undefined;
-}
-
-type ParsedMessage = AgentSessionThreadMessage & {
-  readonly codexResponseUser: boolean;
-  readonly claude?: ClaudeRecordPosition;
-};
-
-/**
- * Gives each retained Claude prompt its uuid and the uuid its turn ended at.
- * A turn runs until the next retained prompt, so a prompt before messages the
- * import cap dropped ends where the dropped span ends.
- */
-function withClaudeTurnIds(
-  messages: ReadonlyArray<ParsedMessage>,
-  lastReply: ClaudeRecordPosition["replyBefore"],
-): ReadonlyArray<AgentSessionThreadMessage> {
-  return messages.map(({ codexResponseUser: _codexResponseUser, claude, ...message }, index) => {
-    if (message.role !== "user" || claude?.uuid === undefined) return message;
-    const nextPrompt = messages.slice(index + 1).find((candidate) => candidate.role === "user");
-    const turnEnd = nextPrompt === undefined ? lastReply : nextPrompt.claude?.replyBefore;
-    return {
-      ...message,
-      nativeUserMessageId: claude.uuid,
-      nativeTurnId:
-        turnEnd !== undefined && turnEnd.recordIndex > claude.recordIndex
-          ? turnEnd.uuid
-          : claude.uuid,
-    };
-  });
 }
 
 export interface AgentSessionThread {

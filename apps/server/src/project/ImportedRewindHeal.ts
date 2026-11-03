@@ -5,6 +5,7 @@ import * as Layer from "effect/Layer";
 import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.ts";
 import * as AgentSessionImporter from "./AgentSessionImporter.ts";
+import { isImportedThreadId } from "./ImportedClaudeTranscript.ts";
 
 const make = Effect.gen(function* () {
   const importer = yield* AgentSessionImporter.AgentSessionImporter;
@@ -20,10 +21,7 @@ const make = Effect.gen(function* () {
     const rows = yield* runtimes.list();
     let healed = 0;
     for (const row of rows) {
-      if (
-        row.providerName !== "claudeAgent" ||
-        !AgentSessionImporter.isImportedThreadId(row.threadId)
-      ) {
+      if (row.providerName !== "claudeAgent" || !isImportedThreadId(row.threadId)) {
         continue;
       }
       const source = AgentSessionImporter.latestImportedTranscript(row.runtimePayload);
