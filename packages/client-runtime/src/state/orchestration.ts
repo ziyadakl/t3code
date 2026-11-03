@@ -24,6 +24,7 @@ import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import * as ManagedRelayDpopSigner from "../relay/managedRelay.ts";
 import { EnvironmentRpcUnavailableError } from "../rpc/client.ts";
+import { threadRewindQueryAtoms } from "./threadRewind.ts";
 import { fetchEnvironmentThreadTranscript } from "./threadTranscriptHttp.ts";
 
 export function createOrchestrationEnvironmentAtoms<R, E>(
@@ -124,13 +125,7 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
       staleTimeMs: 60_000,
       idleTtlMs: 60_000,
     }),
-    // A dry run of a code restore for one message; always fresh, files change.
-    threadRewindPreview: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:orchestration:thread-rewind-preview",
-      tag: ORCHESTRATION_V2_WS_METHODS.previewThreadRewind,
-      staleTimeMs: 0,
-      idleTtlMs: 0,
-    }),
+    ...threadRewindQueryAtoms(runtime),
     fullThreadDiff: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:orchestration:full-thread-diff",
       tag: ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff,

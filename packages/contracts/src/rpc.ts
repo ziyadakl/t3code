@@ -82,6 +82,7 @@ import {
   EnvironmentAuthorizationError,
 } from "./auth.ts";
 import { ClientActivityReportInput } from "./background.ts";
+import { WsOrchestrationV2PreviewThreadRewindRpc } from "./rpcThreadRewind.ts";
 import {
   FilesystemGetMetadataInput,
   FilesystemGetMetadataResult,
@@ -226,7 +227,6 @@ import {
 import {
   ORCHESTRATION_V2_WS_METHODS,
   OrchestrationGetWorkflowScriptError,
-  OrchestrationPreviewThreadRewindError,
   OrchestrationV2GetNativeChildWorkError,
   OrchestrationV2StopWorkflowError,
   OrchestrationV2ForceStopThreadError,
@@ -1745,15 +1745,6 @@ const WsOrchestrationV2DispatchCommandRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS
   success: OrchestrationV2RpcSchemas.dispatchCommand.output,
   error: Schema.Union([OrchestrationV2DispatchCommandError, EnvironmentAuthorizationError]),
 });
-
-const WsOrchestrationV2PreviewThreadRewindRpc = Rpc.make(
-  ORCHESTRATION_V2_WS_METHODS.previewThreadRewind,
-  {
-    payload: OrchestrationV2RpcSchemas.previewThreadRewind.input,
-    success: OrchestrationV2RpcSchemas.previewThreadRewind.output,
-    error: Schema.Union([OrchestrationPreviewThreadRewindError, EnvironmentAuthorizationError]),
-  },
-);
 
 const WsOrchestrationV2GetTurnDiffRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.getTurnDiff, {
   payload: OrchestrationV2RpcSchemas.getTurnDiff.input,

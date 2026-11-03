@@ -336,9 +336,13 @@ jobs:
       # Upstream runs this on an 8 vCPU Blacksmith runner. The fork's GitHub-hosted
       # runner has 4, and the heavy Word, PDF and spreadsheet previews in
       # AttachmentFilePreview.browser.test.tsx time out at 15s when other test
-      # files share the CPU. One file at a time passes with upstream's timeouts.
+      # files share the CPU. That one file runs alone in its own step; every
+      # other file runs in parallel, as upstream runs them.
       - name: Test
-        run: vp run --filter @t3tools/web test --no-file-parallelism
+        run: vp run --filter @t3tools/web test --exclude '**/AttachmentFilePreview.browser.test.tsx'
+
+      - name: Test attachment previews alone
+        run: vp run --filter @t3tools/web test AttachmentFilePreview.browser.test.tsx
 
       # Browser tests run source modules; this boots the production chunk graph.
       - name: Boot the built web client
