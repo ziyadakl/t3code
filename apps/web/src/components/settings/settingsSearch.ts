@@ -12,6 +12,8 @@ import { DEFAULT_KEYBINDINGS } from "@t3tools/shared/keybindings";
 import * as Schema from "effect/Schema";
 import { TYPOGRAPHY_ADVANCED_STORAGE_KEY } from "../../appearanceFonts";
 import { writeLocalStorageValue } from "../../hooks/useLocalStorage";
+import { PROJECT_GROUPS_SETTINGS_SEARCH_ITEMS } from "../sidebar/projectGroups/projectGroupsSettingsSearch";
+import { AUTO_ARCHIVE_SETTINGS_SEARCH_ITEMS } from "./autoArchiveSettingsSearch";
 import { commandLabel } from "./KeybindingsSettings.logic";
 import type { ResolvedSettingsScope } from "./settingsScope";
 
@@ -458,21 +460,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
     searchTerms: ["hide fold running monitoring threads inbox sidebar shelf"],
   },
-  {
-    id: "sidebar-project-groups",
-    title: "Group threads by project",
-    to: "/settings/general",
-    searchTerms: ["fold collapse threads project headers groups sidebar flat list layout"],
-  },
-  {
-    id: "sidebar-float-to-top",
-    title: "Float to the top",
-    to: "/settings/general",
-    searchTerms: [
-      "needs you statuses done input approval failed woke limited waiting sidebar groups",
-    ],
-    requiresSidebarProjectGroups: true,
-  },
+  ...PROJECT_GROUPS_SETTINGS_SEARCH_ITEMS,
   {
     id: "boring-sidebar",
     title: "Boring sidebar (group by project)",
@@ -547,21 +535,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     requiresThreadAutoSettlement: true,
     scope: "project-defaults",
   },
-  {
-    id: "auto-archive-settled-threads",
-    title: "Auto-archive settled threads",
-    to: "/settings/general",
-    searchTerms: ["sidebar archive cleanup old settled helper subagent automatically"],
-    requiresThreadAutoArchive: true,
-  },
-  {
-    id: "days-before-auto-archive",
-    title: "Days settled before auto-archive",
-    to: "/settings/general",
-    targetId: "auto-archive-settled-threads",
-    searchTerms: ["thread archive timeout sidebar"],
-    requiresThreadAutoArchive: true,
-  },
+  ...AUTO_ARCHIVE_SETTINGS_SEARCH_ITEMS,
   {
     id: "thread-notifications",
     title: "Thread notifications",

@@ -19,7 +19,6 @@ import {
 } from "./runtime.ts";
 import {
   type InterruptThreadTurnInput,
-  type RewindThreadInput,
   archiveThread,
   closeGuestShare,
   resolveGuestMessage,
@@ -40,7 +39,6 @@ import {
   respondToThreadUserInput,
   dismissThreadUserInput,
   revertThreadCheckpoint,
-  rewindThread,
   setThreadInteractionMode,
   setThreadRuntimeMode,
   pinThread,
@@ -63,6 +61,7 @@ import {
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as ThreadHistoryController from "./threadHistoryController.ts";
+import { threadRewindCommandAtoms } from "./threadRewind.ts";
 
 export type LoadEarlierThreadHistoryInput = {
   readonly threadId: ThreadId;
@@ -295,12 +294,7 @@ export function createThreadEnvironmentAtoms<R, E>(
       scheduler,
       concurrency,
     }),
-    rewind: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:rewind",
-      execute: (input: RewindThreadInput) => rewindThread(input),
-      scheduler,
-      concurrency,
-    }),
+    ...threadRewindCommandAtoms(runtime, { scheduler, concurrency }),
     stopSession: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:stop-session",
       execute: stopThreadSession,

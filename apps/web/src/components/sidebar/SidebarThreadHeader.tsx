@@ -15,17 +15,10 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 export interface SidebarThreadHeaderProps {
   searchFieldRef?: RefObject<HTMLDivElement | null>;
   hasProjects: boolean;
-  /**
-   * Whether the machine filter leaves any project to scope to. Gates only the
-   * scope picker: Add project stays while the filtered machine has none.
-   */
+  /** Gates only the scope picker; Add project stays. */
   hasVisibleProjects: boolean;
   projectScope: ReactNode;
-  /**
-   * The machine filter (null with a single machine), rendered ahead of
-   * everything else and outside the project gates: a machine with no
-   * projects must not hide the way back.
-   */
+  /** Null with one machine. Outside the project gates. */
   environmentFilter: ReactNode;
   onNewProject: () => void;
   onNewThread: (event: ReactMouseEvent) => void;

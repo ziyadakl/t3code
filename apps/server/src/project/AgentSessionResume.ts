@@ -30,6 +30,7 @@ import { ServerSettingsService } from "../serverSettings.ts";
 import * as AgentSessionImporter from "./AgentSessionImporter.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
 import * as ClaudeSessionSources from "./ClaudeSessionSources.ts";
+import { importedThreadId } from "./ImportedClaudeTranscript.ts";
 import * as ProjectService from "./ProjectService.ts";
 
 const make = Effect.gen(function* () {
@@ -213,7 +214,7 @@ const make = Effect.gen(function* () {
       return { threadId: continued, created: false } satisfies AgentSessionResumeResult;
     }
     const { target, inWorktree, runCwd, read } = yield* handOffAndRead(project, session);
-    const threadId = AgentSessionImporter.importedThreadId({
+    const threadId = importedThreadId({
       providerInstanceId: target.providerInstanceId,
       providerSessionId: read.thread.providerSessionId,
     });

@@ -1,5 +1,5 @@
 import { Debouncer } from "@tanstack/react-pacer";
-import { EnvironmentId, type PullRequestMergeMethod } from "@t3tools/contracts";
+import type { PullRequestMergeMethod } from "@t3tools/contracts";
 import { create } from "zustand";
 import { normalizeProjectPathForComparison } from "@t3tools/client-runtime/state/projects";
 
@@ -27,7 +27,6 @@ export interface PersistedUiState {
   projectOrderCwds?: string[];
   defaultAdvertisedEndpointKey?: string | null;
   sidebarProjectScopeKey?: string | null;
-  sidebarEnvironmentFilterId?: string | null;
   sidebarProjectScopeKeys?: string[];
   threadChangedFilesExpansionVersion?: number;
   threadChangedFilesExpandedById?: Record<string, Record<string, boolean>>;
@@ -38,10 +37,6 @@ export interface UiProjectState {
   projectExpandedById: Record<string, boolean>;
   projectOrder: string[];
   sidebarProjectScopeKeys: string[];
-  // Machine (environment) the sidebar list is filtered to, or null for "all
-  // machines". Kept as chosen even when that machine is gone; the sidebar
-  // derives the effective filter from the machines it currently knows.
-  sidebarEnvironmentFilterId: EnvironmentId | null;
 }
 
 export interface UiThreadState {
@@ -64,7 +59,6 @@ const initialState: UiState = {
   projectExpandedById: {},
   projectOrder: [],
   sidebarProjectScopeKeys: [],
-  sidebarEnvironmentFilterId: null,
   threadLastVisitedAtById: {},
   threadChangedFilesExpandedById: {},
   defaultAdvertisedEndpointKey: null,
@@ -103,11 +97,6 @@ function sanitizeBooleanRecord(value: unknown): Record<string, boolean> {
 
 function sanitizeOptionalKey(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-// Blank ids would fail EnvironmentId's own validation, so they load as null.
-function sanitizeEnvironmentId(value: unknown): EnvironmentId | null {
-  return typeof value === "string" && value.trim().length > 0 ? EnvironmentId.make(value) : null;
 }
 
 function sanitizeTimestampRecord(value: unknown): Record<string, string> {
@@ -165,7 +154,6 @@ export function parsePersistedState(parsed: PersistedUiState): UiState {
     sidebarProjectScopeKeys: sanitizeStringArray(
       parsed.sidebarProjectScopeKeys ?? [parsed.sidebarProjectScopeKey],
     ),
-    sidebarEnvironmentFilterId: sanitizeEnvironmentId(parsed.sidebarEnvironmentFilterId),
     pullRequestMergeMethod: isPullRequestMergeMethod(parsed.pullRequestMergeMethod)
       ? parsed.pullRequestMergeMethod
       : initialState.pullRequestMergeMethod,
@@ -245,7 +233,6 @@ export function persistState(state: UiState): void {
           state.sidebarProjectScopeKeys.length === 1
             ? (state.sidebarProjectScopeKeys[0] ?? null)
             : null,
-        sidebarEnvironmentFilterId: state.sidebarEnvironmentFilterId,
         threadChangedFilesExpansionVersion: THREAD_CHANGED_FILES_EXPANSION_VERSION,
         threadChangedFilesExpandedById: state.threadChangedFilesExpandedById,
         pullRequestMergeMethod: state.pullRequestMergeMethod,
@@ -341,19 +328,6 @@ function setDefaultAdvertisedEndpointKey(state: UiState, key: string | null): Ui
   return {
     ...state,
     defaultAdvertisedEndpointKey: nextKey,
-  };
-}
-
-export function setSidebarEnvironmentFilterId(
-  state: UiState,
-  environmentId: EnvironmentId | null,
-): UiState {
-  if (state.sidebarEnvironmentFilterId === environmentId) {
-    return state;
-  }
-  return {
-    ...state,
-    sidebarEnvironmentFilterId: environmentId,
   };
 }
 
@@ -459,7 +433,6 @@ interface UiStateStore extends UiState {
   markThreadUnread: (threadId: string, latestTurnCompletedAt: string | null | undefined) => void;
   setThreadChangedFilesExpanded: (threadId: string, turnId: string, expanded: boolean) => void;
   setDefaultAdvertisedEndpointKey: (key: string | null) => void;
-  setSidebarEnvironmentFilterId: (environmentId: EnvironmentId | null) => void;
   setSidebarProjectScopeKeys: (projectKeys: readonly string[]) => void;
   setPullRequestMergeMethod: (method: PullRequestMergeMethod) => void;
   setProjectExpanded: (projectIds: string | readonly string[], expanded: boolean) => void;
@@ -480,8 +453,6 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
     set((state) => setThreadChangedFilesExpanded(state, threadId, turnId, expanded)),
   setDefaultAdvertisedEndpointKey: (key) =>
     set((state) => setDefaultAdvertisedEndpointKey(state, key)),
-  setSidebarEnvironmentFilterId: (environmentId) =>
-    set((state) => setSidebarEnvironmentFilterId(state, environmentId)),
   setSidebarProjectScopeKeys: (projectKeys) =>
     set((state) => setSidebarProjectScopeKeys(state, projectKeys)),
   setPullRequestMergeMethod: (method) => set((state) => setPullRequestMergeMethod(state, method)),

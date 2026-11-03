@@ -10,7 +10,6 @@ import * as Option from "effect/Option";
 import * as Duration from "effect/Duration";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
-import * as Struct from "effect/Struct";
 import {
   ForwardCompatibleNullable,
   ForwardCompatibleOptional,
@@ -20,6 +19,10 @@ import {
   TrimmedNonEmptyString,
   TrimmedString,
 } from "./baseSchemas.ts";
+import {
+  SidebarFloatToTopStatuses,
+  SidebarFloatToTopStatusesPatch,
+} from "./sidebarProjectGroups.ts";
 import { UsageLimitSourceId } from "./usageLimitSourceId.ts";
 import { UsageModelFilter } from "./usage.ts";
 import { SecretProviderId, SecretProviderSlug } from "./secretReference.ts";
@@ -85,8 +88,6 @@ export const SidebarAutoSettleAfterDays = Schema.Number.check(
 );
 export type SidebarAutoSettleAfterDays = typeof SidebarAutoSettleAfterDays.Type;
 const DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS: SidebarAutoSettleAfterDays = 3;
-/** Days a thread stays settled before it is archived; same range as auto-settle. */
-const DEFAULT_SIDEBAR_AUTO_ARCHIVE_SETTLED_AFTER_DAYS: SidebarAutoSettleAfterDays = 7;
 
 export const MAX_SNOOZE_PRESET_MINUTES = 30 * 24 * 60;
 export const MAX_SNOOZE_PRESETS = 8;
@@ -352,41 +353,6 @@ export type ModelPreferences = {
   readonly providerModelPreferences: typeof ProviderModelPreferences.Type;
 };
 
-/**
- * Which sidebar top statuses float a thread above the project groups. Keys
- * match the web sidebar's `SidebarV2TopStatusKind` (minus `working`, which
- * lives in the Working shelf). A missing key decodes to its default.
- */
-export const SidebarFloatToTopStatuses = Schema.Struct({
-  done: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-  input: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-  approval: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-  failed: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-  woke: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  limited: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  waiting: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-});
-export type SidebarFloatToTopStatuses = typeof SidebarFloatToTopStatuses.Type;
-export type SidebarFloatToTopStatus = keyof SidebarFloatToTopStatuses;
-
-/** A "Float to the top" update: statuses it leaves out keep their saved value. */
-export const SidebarFloatToTopStatusesPatch = Schema.Struct({
-  done: Schema.optionalKey(Schema.Boolean),
-  input: Schema.optionalKey(Schema.Boolean),
-  approval: Schema.optionalKey(Schema.Boolean),
-  failed: Schema.optionalKey(Schema.Boolean),
-  woke: Schema.optionalKey(Schema.Boolean),
-  limited: Schema.optionalKey(Schema.Boolean),
-  waiting: Schema.optionalKey(Schema.Boolean),
-});
-
-/** The statuses switched on in a "Float to the top" record. */
-export function resolveSidebarFloatToTopStatusSet(
-  statuses: SidebarFloatToTopStatuses,
-): ReadonlySet<SidebarFloatToTopStatus> {
-  return new Set(Struct.keys(statuses).filter((status) => statuses[status]));
-}
-
 export const ClientSettingsSchema = Schema.Struct({
   notificationMode: NotificationMode.pipe(
     Schema.withDecodingDefault(Effect.succeed("off" as const)),
@@ -528,8 +494,6 @@ export const ClientSettingsSchema = Schema.Struct({
   // the boring sidebar; the boring sidebar toggle clears it.
   legacySidebarEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   sidebarWorkingShelfEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-  // Fork: the active list folds threads under one header per project, and
-  // threads whose top status is switched on float above the groups.
   sidebarProjectGroupsEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(true)),
   ),
@@ -1305,7 +1269,7 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS)),
   ),
   sidebarAutoArchiveSettledAfterDays: Schema.NullOr(SidebarAutoSettleAfterDays).pipe(
-    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_AUTO_ARCHIVE_SETTLED_AFTER_DAYS)),
+    Schema.withDecodingDefault(Effect.succeed(7)),
   ),
   compactIdleThreads: LegacyCompactIdleThreads.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
@@ -1911,25 +1875,4 @@ export const ClientSettingsPatch = Schema.Struct({
 });
 export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;
 
-/**
- * Applies a client-settings patch. Top-level keys replace the saved value; the
- * "Float to the top" record merges, so a patch naming some statuses keeps the rest.
- */
-export function applyClientSettingsPatch(
-  current: ClientSettings,
-  patch: ClientSettingsPatch,
-): ClientSettings {
-  const { sidebarFloatToTopStatuses, ...rest } = patch;
-  return {
-    ...current,
-    ...rest,
-    ...(sidebarFloatToTopStatuses === undefined
-      ? {}
-      : {
-          sidebarFloatToTopStatuses: {
-            ...current.sidebarFloatToTopStatuses,
-            ...sidebarFloatToTopStatuses,
-          },
-        }),
-  };
-}
+export * from "./sidebarProjectGroups.ts";

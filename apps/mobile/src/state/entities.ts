@@ -1,6 +1,4 @@
 import { useAtomValue } from "@effect/atom-react";
-import { withoutArchivedProjects } from "@t3tools/client-runtime/state/projects";
-import { useMemo } from "react";
 import { deriveReportedModelSelection } from "@t3tools/client-runtime/state/thread-execution";
 
 import { appAtomRegistry } from "./atom-registry";
@@ -182,20 +180,6 @@ export function useVisibleThreadShells(): ReadonlyArray<EnvironmentThreadShell> 
 
 export function useNavigationThreadShells(): ReadonlyArray<EnvironmentThreadShell> {
   return useAtomValue(environmentThreadShells.navigationThreadShellsAtom);
-}
-
-/** Projects and the given threads, without archived projects or their threads. */
-export function useUnarchivedProjectsWithThreads(threads: ReadonlyArray<EnvironmentThreadShell>): {
-  readonly projects: ReadonlyArray<EnvironmentProject>;
-  readonly threads: ReadonlyArray<EnvironmentThreadShell>;
-} {
-  const projects = useProjects();
-  return useMemo(() => withoutArchivedProjects(projects, threads), [projects, threads]);
-}
-
-/** Navigation lists without archived projects or their threads. */
-export function useUnarchivedNavigationProjectsAndThreads() {
-  return useUnarchivedProjectsWithThreads(useNavigationThreadShells());
 }
 
 export function useProject(ref: ScopedProjectRef | null): EnvironmentProject | null {

@@ -37,11 +37,6 @@ const WRITING_STYLE_LABELS: Record<string, string> = {
   custom: "Custom instructions",
 };
 
-const DAY_SETTING_KEYS: ReadonlySet<keyof ServerSettings> = new Set([
-  "sidebarAutoSettleAfterDays",
-  "sidebarAutoArchiveSettledAfterDays",
-]);
-
 const BACKGROUND_ACTIVITY_PROFILE_LABELS: Record<string, string> = {
   balanced: "Balanced",
   performance: "Performance",
@@ -53,7 +48,7 @@ function formatValue(key: keyof ServerSettings, value: unknown): string {
   if (value === null || value === undefined) {
     return key === "pullRequestMergeMethod"
       ? "Last selected"
-      : DAY_SETTING_KEYS.has(key)
+      : key === "sidebarAutoSettleAfterDays" || key === "sidebarAutoArchiveSettledAfterDays"
         ? "Never"
         : key === "defaultModelSelection"
           ? "Automatic"
@@ -67,7 +62,9 @@ function formatValue(key: keyof ServerSettings, value: unknown): string {
   }
   if (typeof value === "boolean") return value ? "On" : "Off";
   if (typeof value === "number") {
-    return DAY_SETTING_KEYS.has(key) ? `${value} ${value === 1 ? "day" : "days"}` : String(value);
+    return key === "sidebarAutoSettleAfterDays" || key === "sidebarAutoArchiveSettledAfterDays"
+      ? `${value} ${value === 1 ? "day" : "days"}`
+      : String(value);
   }
   if (typeof value === "string") {
     if (key === "defaultThreadEnvMode" && (value === "local" || value === "worktree")) {

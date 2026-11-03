@@ -31,7 +31,6 @@ import {
   type ToolGroupSummaryKind,
 } from "@t3tools/client-runtime/work-log/presentation";
 import {
-  deriveMessageRewindTargets,
   formatDuration,
   isStreamingMessageTextUpdate,
   isStreamingTurnItemTextUpdate,
@@ -43,6 +42,7 @@ import {
   type TimelineEntry,
   type WorkLogEntry,
 } from "../../session-logic";
+import { deriveMessageRewindTargets } from "./messageRewind.logic";
 import {
   type ChatMessage,
   type ProposedPlan,
@@ -665,18 +665,6 @@ function expandedWorkGroupRow(
     groupedEntries,
     isExpandedToolGroup: true,
   };
-}
-
-/**
- * The rewind arrow is off during a rewind and while work runs that no Stop
- * reaches; a stoppable turn leaves it on, since the click stops the turn first.
- */
-export function isMessageRewindDisabled(input: {
-  isRevertingCheckpoint: boolean;
-  isWorking: boolean;
-  canInterrupt: boolean;
-}): boolean {
-  return input.isRevertingCheckpoint || (input.isWorking && !input.canInterrupt);
 }
 
 export function resolveAssistantMessageCopyState({

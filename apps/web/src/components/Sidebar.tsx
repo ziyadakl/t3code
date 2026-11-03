@@ -105,22 +105,16 @@ import { isMacPlatform } from "~/lib/utils";
 import { readLocalApi } from "../localApi";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import {
-  getProjectOrderKey,
   pickableProjectGroups,
   selectProjectGroupingSettings,
 } from "@t3tools/client-runtime/state/project-grouping";
 import {
-  buildSidebarProjectSnapshots,
   projectGroupsSpanEnvironments,
   resolveSidebarProjectScopeKeys,
   getSidebarProjectSettingsKey,
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
-import {
-  legacyProjectCwdPreferenceKey,
-  resolveProjectExpanded,
-  useUiStateStore,
-} from "../uiStateStore";
+import { resolveProjectExpanded, useUiStateStore } from "../uiStateStore";
 import {
   getThreadKeysToDeselectAfterDelete,
   useThreadSelectionStore,
@@ -133,7 +127,6 @@ import {
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useOrderWhileOpen } from "../hooks/useOrderWhileOpen";
 import { useProjectPin } from "../hooks/useProjectGroupUpdate";
-import { useSidebarProjectGroups } from "../hooks/useSidebarProjectGroups";
 import { useTerminalFocus } from "../hooks/useTerminalFocus";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { registerSettleAndAdvance } from "../settleAndAdvance";
@@ -153,9 +146,7 @@ import {
   readThreadShell,
   useAllEnvironmentProjectSnapshotsReady,
   useDelegatedUnderParent,
-  useProjects,
   useServerConfigs,
-  useQuietThreadShells,
 } from "../state/entities";
 import { environmentPresentations } from "../state/presentation";
 import { primaryServerKeybindingsAtom } from "../state/server";
@@ -174,7 +165,7 @@ import {
   resolveThreadRouteTarget,
 } from "../threadRoutes";
 import type { SidebarThreadSummary } from "../types";
-import { isScratchProject, withoutArchivedProjects } from "@t3tools/client-runtime/state/projects";
+import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { cn } from "~/lib/utils";
 import { ProjectEnvironmentBadge } from "./ProjectEnvironmentBadge";
 import {
@@ -188,10 +179,6 @@ import {
   groupSidebarThreadsByProject,
   sidebarFolderExpansionKeys,
   buildBulkTitleRegenerationContextMenuItem,
-  archiveThreadsAndReport,
-  buildBulkArchiveContextMenuItem,
-  refreshBulkArchiveTargets,
-  resolveBulkArchiveCompletion,
   buildBulkUnpinContextMenuItem,
   deleteSelectedThreadEntries,
   filterSidebarProjectScopeItems,
@@ -215,7 +202,6 @@ import {
   sidebarListItemId,
   sidebarThreadKeyAtY,
   sortInboxThreadsByReturn,
-  sortSidebarV2ProjectGroups,
   sortPinnedThreadsForSidebar,
   sortThreadsForSidebar,
   sortWorkingThreadsBySend,
@@ -223,11 +209,6 @@ import {
   useThreadJumpHintsVisible,
   type SidebarListItem,
   type SidebarSection,
-  filterToEnvironment,
-  isDraftSessionInSidebarScope,
-  resolveSidebarEnvironmentFilter,
-  sidebarProjectScopeTriggerLabel,
-  sidebarSearchEnvironmentIds,
   resolveSidebarRowThreadId,
 } from "./Sidebar.logic";
 import {
@@ -268,12 +249,15 @@ import {
 } from "./ui/combobox";
 import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
-import { SidebarEnvironmentFilter } from "./sidebar/SidebarEnvironmentFilter";
+import { useSidebarBulkArchive } from "./sidebar/useSidebarBulkArchive";
 import {
-  SidebarNeedsYouHeader,
-  SidebarProjectGroupHeader,
-  useSidebarProjectGroups as useSidebarInboxGroups,
-} from "./sidebar/SidebarProjectGroups";
+  useSidebarEnvironmentFilter,
+  useSidebarEnvironmentFilterUi,
+} from "./sidebar/useSidebarEnvironmentFilter";
+import {
+  renderProjectGroupMarker,
+  useSidebarInboxGroups,
+} from "./sidebar/projectGroups/SidebarProjectGroups";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
 import { TooltipProvider } from "./ui/tooltip";
 import { composerDraftHasUserContent, DraftId, useComposerDraftStore } from "../composerDraftStore";
@@ -293,7 +277,6 @@ import {
   SidebarDragBoundary,
   SidebarSectionHeader,
   SidebarSectionPlaceholder,
-  SortableSidebarMarker,
 } from "./sidebar/SidebarListMarkers";
 
 function sameSidebarProviderEntries(
@@ -445,9 +428,9 @@ function useSidebarThreads(input: {
   readonly connectedEnvironmentIds: readonly EnvironmentId[];
   readonly optimisticDrop: SidebarOptimisticDrop | null;
   readonly threads: readonly EnvironmentThreadShell[];
-  // Every thread, not the filtered ones: a thread hidden by the machine filter
+  // The machine filter's threads: `threads` stays every thread so a hidden one
   // still reserves its order key and keeps its return stamp.
-  readonly allThreads: readonly EnvironmentThreadShell[];
+  readonly visibleThreads: readonly EnvironmentThreadShell[];
   readonly delegatedUnderParent: ReadonlySet<string>;
   readonly routeThreadKey: string | null;
   readonly routeRowThreadKey: string | null;
@@ -466,7 +449,7 @@ function useSidebarThreads(input: {
     connectedEnvironmentIds,
     optimisticDrop,
     threads,
-    allThreads,
+    visibleThreads,
     delegatedUnderParent,
     routeThreadKey,
     routeRowThreadKey,
@@ -495,7 +478,7 @@ function useSidebarThreads(input: {
   );
   const nowMinute = useNowMinute();
   // Minute-quantized clocks would delay second-precise snooze wakes by up to a minute.
-  const snoozeWakeClock = useSnoozeWakeClock(threads);
+  const snoozeWakeClock = useSnoozeWakeClock(visibleThreads);
   const [settledShelfExpanded, setSettledShelfExpanded] = useLocalStorage(
     SETTLED_SHELF_EXPANDED_KEY,
     false,
@@ -525,8 +508,8 @@ function useSidebarThreads(input: {
     settledTail.scopeKey === projectScopeKey ? settledTail.count : SETTLED_TAIL_INITIAL_COUNT;
 
   const partition = partitionSidebarThreads({
-    threads,
-    observedThreads: allThreads,
+    threads: visibleThreads,
+    observedThreads: threads,
     scopedProjectKeys,
     delegatedUnderParent,
     serverConfigs,
@@ -572,7 +555,6 @@ function useSidebarThreads(input: {
   const visibleWorkingThreads = workingShelfExpanded
     ? workingThreads
     : routeThreadOnly(workingThreads, routeRowThreadKey);
-  // Fork (grouped layout): "Needs you" plus one foldable group per project.
   // Upstream's boring-mode folders take precedence when both are on.
   const projectGroupsLayout = useSidebarInboxGroups({
     activeThreads,
@@ -580,8 +562,9 @@ function useSidebarThreads(input: {
     routeThreadKey,
     snoozeNow: partition.snoozeNow,
     observedReturnAt: inboxReturns.returnedAt,
+    workingShelfEnabled,
+    suppressed: folderGroups !== null,
   });
-  const groupedActive = folderGroups === null ? projectGroupsLayout.grouped : null;
   const projectFolders =
     folderGroups === null
       ? null
@@ -602,12 +585,11 @@ function useSidebarThreads(input: {
               : EMPTY_THREADS,
           };
         });
-  // Folded group rows don't render, so they leave keyboard order and jump hints.
   const orderedThreads = [
     ...pinnedThreads,
     ...(projectFolders !== null
       ? projectFolders.flatMap((folder) => folder.threads)
-      : (groupedActive?.visibleThreads ?? activeThreads)),
+      : projectGroupsLayout.orderedActive),
     ...visibleWorkingThreads,
     ...visibleSnoozedThreads,
     ...renderedSettledThreads,
@@ -625,9 +607,7 @@ function useSidebarThreads(input: {
   return {
     ...partition,
     threads,
-    allThreads,
     projectGroupsLayout,
-    groupedActive,
     workingShelfEnabled,
     searchableThreads: [
       ...pinnedThreads,
@@ -666,13 +646,11 @@ function useSidebarThreads(input: {
     sectionByThreadKey,
     pinnedKeys: pinnedThreads.map(threadShellKey),
     activeKeys: activeThreads.map(threadShellKey),
-    // Hidden and filtered threads keep their keys. Reserve those slots without
-    // including the rows in the visible drop order or writing to them.
     pinnedKeysById: new Map(
-      allThreads.map((thread) => [threadShellKey(thread), thread.pinOrderKey ?? null] as const),
+      threads.map((thread) => [threadShellKey(thread), thread.pinOrderKey ?? null] as const),
     ),
     activeKeysById: new Map(
-      allThreads.map((thread) => [threadShellKey(thread), thread.activeOrderKey ?? null] as const),
+      threads.map((thread) => [threadShellKey(thread), thread.activeOrderKey ?? null] as const),
     ),
   };
 }
@@ -873,67 +851,15 @@ function isOptimisticDropReleased(input: {
 }
 
 // Build maps in a hook so the compiler can prove they are frozen and cache them.
-function useSidebarLookups(selectedEnvironmentFilterId: EnvironmentId | null) {
-  // Fork: archived projects and their threads stay off the sidebar.
-  // Quiet threads: see useSidebarProjectGroups.
-  const { projects: allProjects, threads: allThreads } = withoutArchivedProjects(
-    useProjects(),
-    useQuietThreadShells(),
-  );
-  const delegatedUnderParent = useDelegatedUnderParent();
-  // Every machine's project groups. New thread is not filter-aware (the palette
-  // picker and the default project span every machine), so its
-  // create-directly-or-pick decision counts these; rows kept visible from
-  // another machine and a paused project scope read names here.
-  const allProjectGroups = useSidebarProjectGroups();
+function useSidebarLookups() {
   const environments = useEnvironmentIdentities();
   const serverConfigs = useServerConfigs();
   const providerEntriesByEnvironment = useAtomValue(sidebarProviderEntriesAtom);
-  const projectOrder = useUiStateStore((store) => store.projectOrder);
-  const sortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
-  const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
-  const primaryEnvironmentId = usePrimaryEnvironmentId();
-  // Fork (machine filter): narrows the whole sidebar to one environment.
-  // Filtering the roots means project groups, the scope picker, shelves and
-  // search all follow. A saved choice for a machine that is gone (or a
-  // single-machine catalog) resolves to all machines without clearing it.
-  const environmentFilterId = resolveSidebarEnvironmentFilter(
-    selectedEnvironmentFilterId,
-    environments.map((environment) => environment.environmentId),
-  );
   const environmentLabelById = new Map(
     environments.map((environment) => [environment.environmentId, environment.label] as const),
   );
-  const projects = filterToEnvironment(allProjects, environmentFilterId);
-  // Filtered, the groups are rebuilt from that machine's projects only, as
-  // useSidebarProjectGroups builds them for every machine.
-  const projectGroups =
-    environmentFilterId === null
-      ? allProjectGroups
-      : sortSidebarV2ProjectGroups(
-          buildSidebarProjectSnapshots({
-            projects:
-              sortOrder === "manual"
-                ? orderItemsByPreferredIds({
-                    items: projects,
-                    preferredIds: projectOrder,
-                    getId: getProjectOrderKey,
-                    getPreferenceIds: (project) => [
-                      getProjectOrderKey(project),
-                      legacyProjectCwdPreferenceKey(project.workspaceRoot),
-                    ],
-                  })
-                : projects,
-            groupScratchProjects: true,
-            settings: projectGroupingSettings,
-            primaryEnvironmentId,
-            resolveEnvironmentLabel: (environmentId) =>
-              environmentLabelById.get(environmentId) ?? null,
-          }),
-          filterToEnvironment(allThreads, environmentFilterId),
-          sortOrder,
-          delegatedUnderParent,
-        );
+  const { allProjects, threads, environmentFilterId, projects, projectGroups, allProjectGroups } =
+    useSidebarEnvironmentFilter({ environments, environmentLabelById });
   // Lookups span every machine: the open thread or draft stays listed on any
   // machine and still needs its project's icon and name.
   const projectByKey = new Map(
@@ -958,9 +884,8 @@ function useSidebarLookups(selectedEnvironmentFilterId: EnvironmentId | null) {
   ];
   return {
     allProjects,
-    allThreads,
+    threads,
     projects,
-    environments,
     environmentFilterId,
     serverConfigs,
     projectGroups,
@@ -1024,27 +949,11 @@ function readRouteThreadKey(router: AnyRouter): string | null {
   return ref === null ? null : scopedThreadKey(ref);
 }
 
-// Outlined call to action under a sidebar empty-state message.
-function SidebarEmptyStateButton(props: { onClick: () => void; children: ReactNode }) {
-  return (
-    <button
-      type="button"
-      onClick={props.onClick}
-      className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-sidebar-border px-2.5 py-1 text-2xs font-medium text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
-    >
-      {props.children}
-    </button>
-  );
-}
-
 export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReveal }) {
-  const selectedEnvironmentFilterId = useUiStateStore((store) => store.sidebarEnvironmentFilterId);
-  const setEnvironmentFilterId = useUiStateStore((store) => store.setSidebarEnvironmentFilterId);
   const {
     allProjects,
-    allThreads,
+    threads,
     projects,
-    environments,
     environmentFilterId,
     serverConfigs,
     projectGroups,
@@ -1055,8 +964,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     projectDisplayNameByKey,
     projectGroupByScopeKey,
     projectScopeItems: lookupProjectScopeItems,
-  } = useSidebarLookups(selectedEnvironmentFilterId);
-  // Fork (machine filter): New thread spans every machine, so it counts every machine's groups.
+  } = useSidebarLookups();
+  // New thread spans every machine, so it counts every machine's groups.
   const allOpenProjectGroupCount = pickableProjectGroups(allProjectGroups).length;
   const allProjectGroupCount = allProjectGroups.length;
   const delegatedUnderParent = useDelegatedUnderParent();
@@ -1156,10 +1065,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const routeDraftThread = useComposerDraftStore((store) =>
     routeTarget?.kind === "draft" ? store.getDraftSession(routeTarget.draftId) : null,
   );
-  const environmentFilterLabel =
-    environmentFilterId === null
-      ? null
-      : (environmentLabelById.get(environmentFilterId) ?? "this machine");
   const environmentMachineById = useEnvironmentMachines();
   const projectGroupsRef = useRef(projectGroups);
   const persistedProjectScopeKeys = useUiStateStore((store) => store.sidebarProjectScopeKeys);
@@ -1181,12 +1086,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
   const [searchHighlightKey, setSearchHighlightKey] = useState<string | null>(null);
   const connectedEnvironmentIds = useConnectedEnvironmentIds();
-  // Filtered to one machine, only that machine's server is asked, and only
-  // while it is connected.
-  const searchEnvironmentIds = sidebarSearchEnvironmentIds(
-    connectedEnvironmentIds,
-    environmentFilterId,
-  );
   const queuePendingFileDrop = useSidebarPendingFileDropStore((s) => s.queuePendingFileDrop);
   const clearPendingFileDrop = useSidebarPendingFileDropStore((s) => s.clearPendingFileDrop);
   const [renamingThreadRef, setRenamingThreadRef] = useState<ScopedThreadRef | null>(null);
@@ -1272,19 +1171,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             resolveSidebarRowThreadId(
               routeThreadRef.threadId,
               routeThreadRef.environmentId,
-              allThreads,
+              threads,
             ),
           ),
         );
-  // The open thread stays listed on any machine so the filter never hides
-  // what the user is looking at.
-  const threads = filterToEnvironment(
-    allThreads,
-    environmentFilterId,
-    (thread) =>
-      routeThreadKey !== null &&
-      (threadShellKey(thread) === routeThreadKey || threadShellKey(thread) === routeRowThreadKey),
-  );
   const isSearchingThreads = threadSearchQuery.trim().length > 0;
 
   // History, the palette and links can open a thread the scope hides or the list
@@ -1297,10 +1187,16 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     isSearching: isSearchingThreads,
     scopedProjectKeys: chosenScopeProjectKeys,
     delegatedUnderParent,
-    findThread: (key) => allThreads.find((candidate) => threadShellKey(candidate) === key),
+    findThread: (key) => threads.find((candidate) => threadShellKey(candidate) === key),
   });
   const projectScopeKeys = revealWidensScope ? [] : chosenProjectScopeKeys;
   const projectScopeKey = projectScopeKeys.length === 0 ? null : projectScopeKeys.join("\n");
+  const environmentFilter = useSidebarEnvironmentFilterUi({
+    environmentFilterId,
+    environmentLabelById,
+    allProjectGroups,
+    projectScopeKeys,
+  });
   const toggleProjectScopeKey = (key: string) =>
     setProjectScopeKeys(
       projectScopeKeys.includes(key)
@@ -1353,7 +1249,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const scopedProjectRefs = scopedProjectGroups.flatMap((project) => project.memberProjectRefs);
   const scopedProjectKeys = revealWidensScope ? null : chosenScopeProjectKeys;
   const threadSearch = useThreadSearch(
-    searchEnvironmentIds,
+    environmentFilter.searchEnvironmentIds(connectedEnvironmentIds),
     threadSearchQuery,
     scopedProjectGroups.length === 0
       ? {}
@@ -1370,11 +1266,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         continue;
       }
       if (
-        !isDraftSessionInSidebarScope(session, {
-          scopedProjectKeys,
-          environmentFilterId,
-          isRouteDraft: draftKey === routeDraftIdForRows,
-        })
+        !environmentFilter.showsDraft(session, scopedProjectKeys, draftKey === routeDraftIdForRows)
       ) {
         continue;
       }
@@ -1382,16 +1274,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     }
     return count;
   });
-  // Scope flips drop the selection: rows selected under the old scope may be
-  // hidden now, and bulk actions must never count or touch invisible rows.
-  const scopeSignature = JSON.stringify([environmentFilterId, projectScopeKey]);
-  const clearedScopeSignatureRef = useRef<string | null>(null);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- clears the thread selection when the machine filter or project scope changes
-  useEffect(() => {
-    if (clearedScopeSignatureRef.current === scopeSignature) return;
-    clearedScopeSignatureRef.current = scopeSignature;
-    clearSelection();
-  }, [clearSelection, scopeSignature, clearedScopeSignatureRef]);
 
   const openProjectSettings = useStableCallback(
     (projectGroup: SidebarProjectSnapshot, projectRef?: ScopedProjectRef) => {
@@ -1475,7 +1357,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   );
 
   const {
-    workingShelfEnabled,
     pinnedThreads,
     draggableThreadKeys,
     activeReorderableThreadKeys,
@@ -1511,7 +1392,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     pinnedKeysById,
     activeKeysById,
     projectGroupsLayout,
-    groupedActive,
   } = useSidebarThreads({
     projectScopeKey,
     scopedProjectKeys,
@@ -1519,7 +1399,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     connectedEnvironmentIds,
     optimisticDrop,
     threads,
-    allThreads,
+    visibleThreads: environmentFilter.visibleThreads(threads, routeThreadKey, routeRowThreadKey),
     delegatedUnderParent,
     routeThreadKey,
     routeRowThreadKey,
@@ -1533,14 +1413,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     keepEmptyFolders: (group) =>
       scopedProjectGroups.length > 0 || (group.pinned && !group.archived),
   });
-  // Fork (grouped layout): off while upstream's boring-mode folders are on.
-  const projectGroupsEnabled = groupedActive !== null;
-  const openProjectGroupForDrop = projectGroupsEnabled
-    ? projectGroupsLayout.openGroupForDrop
-    : () => {};
-  // Fork: the inbox keeps a user-arranged order only while it is neither
-  // time-ordered (Working beta) nor grouped by project, where rows hold places.
-  const inboxArrangeable = !workingShelfEnabled && !projectGroupsEnabled;
 
   // Ranked across environments as the palette ranks them, so one
   // environment's list does not sit above another's better matches; rows
@@ -1618,6 +1490,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const orderedThreadKeysRef = useRef(orderedThreadKeys);
   // Read changing maps/sets through refs so streamed events preserve row callbacks.
   const threadByKeyRef = useRef(threadByKey);
+  const bulkArchive = useSidebarBulkArchive({
+    threadByKeyRef,
+    canOperateThreads,
+    checkThreadOperations,
+  });
   const settledThreadKeysRef = useRef(settledThreadKeys);
   const snoozedThreadKeysRef = useRef(snoozedThreadKeys);
 
@@ -2035,7 +1912,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     optimisticDrop !== null &&
     isOptimisticDropReleased({
       optimisticDrop,
-      threads: allThreads,
+      threads,
       pinnedKeys,
       activeKeys,
       now: snoozeNow,
@@ -2126,7 +2003,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     const pinnedRows = rowsOf(pinnedThreads, "pinned");
     items.push(...pinnedRows);
     items.push({ kind: "marker", marker: "pinned-divider" });
-    const activeRows = groupedActive?.items ?? rowsOf(activeThreads, "active");
+    const activeRows = projectGroupsLayout.activeRows ?? rowsOf(activeThreads, "active");
     items.push({ kind: "marker", marker: "active-placeholder" });
     items.push(...activeRows);
     if (workingThreads.length > 0) {
@@ -2209,8 +2086,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           threadByKey,
           settledThreads,
           activeThreads,
-          // Grouped, the inbox has no flat order to land in.
-          workingShelfEnabled: workingShelfEnabled && !projectGroupsEnabled,
+          workingShelfEnabled: projectGroupsLayout.flatTimeOrdered,
         });
   const sidebarSortingStrategy = createSidebarSortingStrategy({
     items: sidebarListItems,
@@ -2218,7 +2094,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     boundaryLabelHeight: SIDEBAR_DRAG_LABEL_HEIGHT,
     settledOrder: draggedSettledOrder,
     ...(draggedActiveOrder === undefined ? {} : { activeOrder: draggedActiveOrder }),
-    inboxArrangeable,
+    inboxArrangeable: projectGroupsLayout.inboxArrangeable,
     settledExpanded: settledShelfExpanded,
     settledVisibleCount,
     routeThreadKey: routeRowThreadKey,
@@ -2250,7 +2126,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             activeOrder: activeKeys,
             activeKeysById,
             activeReorderableKeys: activeReorderableThreadKeys,
-            activeTimeOrdered: !inboxArrangeable,
+            activeTimeOrdered: projectGroupsLayout.activeTimeOrdered,
           }).kind !== "none"
         );
       },
@@ -2283,7 +2159,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       activeOrder: activeKeys,
       activeKeysById,
       activeReorderableKeys: activeReorderableThreadKeys,
-      activeTimeOrdered: !inboxArrangeable,
+      activeTimeOrdered: projectGroupsLayout.activeTimeOrdered,
     });
     if (plan.kind === "none") return;
     if (plan.kind === "settle" && settlingThreadKeysRef.current.has(activeKey)) return;
@@ -2319,9 +2195,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       assignedKeys: new Map(assignments.map(({ id, orderKey }) => [id, orderKey])),
     };
     setOptimisticDrop(drop);
-    // Fork (grouped layout): a thread back from a shelf must not vanish into a folded group.
+    // A thread back from a shelf must not vanish into a folded group.
     if (target.section === "active" && (activeSection === "settled" || activeSection === "snoozed"))
-      openProjectGroupForDrop(applySidebarThreadDrop(activeThread, "active", drop.occurredAt));
+      projectGroupsLayout.openGroupForDrop(
+        applySidebarThreadDrop(activeThread, "active", drop.occurredAt),
+      );
     void (async () => {
       const run = async (
         operation: Promise<AtomCommandResult<unknown, unknown>>,
@@ -2496,9 +2374,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       const unpinMenuItem = buildBulkUnpinContextMenuItem({
         pinnedCount: pinnedSelectedThreads.length,
       });
-      const { item: archiveMenuItem, targets: archivableThreads } = buildBulkArchiveContextMenuItem(
-        { threads: selectedThreads },
-      );
+      const archive = bulkArchive.prepare(selectedThreads);
       // Presets sync across environments, so the first selected thread's stand for all.
       // oxlint-disable-next-line react/purity -- runs in an event handler (oxc#27309)
       const menuOpenedAt = new Date();
@@ -2551,11 +2427,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 ]
               : []),
             { id: "mark-unread", label: `Mark unread (${count})` },
-            {
-              ...archiveMenuItem,
-              separatorBefore: true,
-              disabled: archiveMenuItem.disabled || !canOperateThreads(archivableThreads),
-            },
+            archive.menuItem,
             {
               id: "delete",
               label: `Delete (${count})`,
@@ -2567,21 +2439,20 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         ),
       );
       if (clicked._tag === "Failure" || clicked.value === null) return;
-      const currentThread = (thread: (typeof selectedThreads)[number]) =>
-        threadByKeyRef.current.get(
-          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-        );
-      const targetsByMenuId: Partial<Record<string, readonly (typeof selectedThreads)[number][]>> =
-        {
-          unpin: pinnedSelectedThreads,
-          "regenerate-title": regeneratableTitleThreads,
-          archive: archivableThreads,
-          settle: settlingThreads.flatMap((thread) => {
-            const current = currentThread(thread);
-            return current && current.settledOverride !== "settled" ? [current] : [];
-          }),
-        };
-      const actionTargets = targetsByMenuId[clicked.value] ?? selectedThreads;
+      if (clicked.value === "archive") return archive.run();
+      const actionTargets =
+        clicked.value === "unpin"
+          ? pinnedSelectedThreads
+          : clicked.value === "regenerate-title"
+            ? regeneratableTitleThreads
+            : clicked.value === "settle"
+              ? settlingThreads.flatMap((thread) => {
+                  const current = threadByKeyRef.current.get(
+                    scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+                  );
+                  return current && current.settledOverride !== "settled" ? [current] : [];
+                })
+              : selectedThreads;
       if (clicked.value === "settle" && actionTargets.length === 0) return;
       if (clicked.value !== "mark-unread" && !checkThreadOperations(actionTargets)) return;
       if (clicked.value?.startsWith("snooze:")) {
@@ -2672,41 +2543,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           if (thread) markThreadUnread(scopeThreadRef(thread.environmentId, thread.id));
         }
         clearSelection();
-        return;
-      }
-      if (clicked.value === "archive") {
-        if (confirmThreadArchive) {
-          const confirmed = await settlePromise(() =>
-            api.dialogs.confirm(
-              `Archive ${archivableThreads.length} thread${archivableThreads.length === 1 ? "" : "s"}?`,
-            ),
-          );
-          if (confirmed._tag === "Failure" || !confirmed.value) return;
-        }
-        const stillArchivable = refreshBulkArchiveTargets(archivableThreads, currentThread);
-        if (!checkThreadOperations(stillArchivable)) return;
-        await archiveThreadsAndReport({
-          entries: stillArchivable.map((thread) => {
-            const threadRef = scopeThreadRef(thread.environmentId, thread.id);
-            return { threadKey: scopedThreadKey(threadRef), threadRef };
-          }),
-          archive: ({ threadRef }, onArchived) => archiveThread(threadRef, { onArchived }),
-          reportError: (title, description) =>
-            toastManager.add(stackedThreadToast({ type: "error", title, description })),
-          removeFromSelection,
-          onAllArchived: (archivedThreadKeys) => {
-            const completion = resolveBulkArchiveCompletion({
-              archivedThreadKeys,
-              skippedCount: archivableThreads.length - stillArchivable.length,
-            });
-            if (completion.selection === "clear") {
-              clearSelection();
-              return;
-            }
-            removeFromSelection(archivedThreadKeys);
-            toastManager.add(stackedThreadToast({ type: "warning", ...completion.notice }));
-          },
-        });
         return;
       }
       if (clicked.value !== "delete") return;
@@ -3223,16 +3059,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               searchFieldRef={headerSearchRef}
               hasProjects={allProjects.length > 0}
               hasVisibleProjects={projectGroups.length > 0}
-              environmentFilter={
-                environments.length > 1 ? (
-                  <SidebarEnvironmentFilter
-                    environments={environments}
-                    machineByEnvironmentId={environmentMachineById}
-                    selectedEnvironmentId={environmentFilterId}
-                    onSelect={setEnvironmentFilterId}
-                  />
-                ) : null
-              }
+              environmentFilter={environmentFilter.headerControl}
               projectScope={
                 <Combobox
                   items={projectScopeItems}
@@ -3273,19 +3100,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                   <ComboboxTrigger
                     render={
                       <SidebarHeaderIconButton
-                        label={sidebarProjectScopeTriggerLabel({
-                          projectScopeKey,
-                          scopedProjectName:
-                            scopedProjectGroups.length > 0
-                              ? scopedProjectGroups.map((project) => project.displayName).join(", ")
-                              : null,
-                          savedProjectName:
-                            allProjectGroups
-                              .filter((group) => projectScopeKeys.includes(group.projectKey))
-                              .map((group) => group.displayName)
-                              .join(", ") || null,
-                          environmentFilterLabel,
-                        })}
+                        label={environmentFilter.scopeTriggerLabel(scopedProjectGroups)}
                       />
                     }
                   >
@@ -3515,21 +3330,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                   })}
                 </ul>
               </TooltipProvider>
+            ) : environmentFilter.label !== null ? (
+              environmentFilter.searchEmptyState(threadSearch.isPending)
             ) : (
-              <div className="flex flex-col items-center gap-2 px-2 py-6 text-center text-xs">
-                <p role="status" className="text-sidebar-muted-foreground">
-                  {threadSearch.isPending
-                    ? "Searching thread messages…"
-                    : environmentFilterLabel !== null
-                      ? `No threads found on ${environmentFilterLabel}`
-                      : "No threads found"}
-                </p>
-                {!threadSearch.isPending && environmentFilterLabel !== null ? (
-                  <SidebarEmptyStateButton onClick={() => setEnvironmentFilterId(null)}>
-                    Show all machines
-                  </SidebarEmptyStateButton>
-                ) : null}
-              </div>
+              <p
+                role="status"
+                className="px-2 py-6 text-center text-xs text-sidebar-muted-foreground"
+              >
+                {threadSearch.isPending ? "Searching thread messages…" : "No threads found"}
+              </p>
             )
           ) : null}
           {!isSearchingThreads ? (
@@ -3564,7 +3373,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         section: SidebarSection,
                         // The tree row of the project folder this row sits in.
                         folderRow?: string,
-                        // Fork (grouped layout): a one-line row under a project group header.
                         compact = false,
                       ) => {
                         const threadKey = scopedThreadKey(
@@ -3712,21 +3520,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           continue;
                         }
                         underGroupHeader = item.marker === "project-group";
-                        if (item.marker === "project-group") {
-                          const { foldKey, projectKey } = item;
-                          items.push(
-                            <SortableSidebarMarker key={sidebarListItemId(item)} marker={item}>
-                              <SidebarProjectGroupHeader
-                                header={item}
-                                project={
-                                  projectKey === null
-                                    ? null
-                                    : (projectGroupsLayout.projectByKey.get(projectKey) ?? null)
-                                }
-                                onToggle={() => projectGroupsLayout.toggleGroup(foldKey)}
-                              />
-                            </SortableSidebarMarker>,
-                          );
+                        const groupNode = renderProjectGroupMarker(item, projectGroupsLayout);
+                        if (groupNode !== null) {
+                          items.push(groupNode);
                           continue;
                         }
                         if (projectFolders !== null && item.marker === "active-placeholder") {
@@ -3755,15 +3551,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           continue;
                         }
                         switch (item.marker) {
-                          case "needs-you-header":
-                            items.push(
-                              <SortableSidebarMarker key={item.marker} marker={item.marker}>
-                                <SidebarNeedsYouHeader
-                                  empty={(groupedActive?.model.floating.length ?? 0) === 0}
-                                />
-                              </SortableSidebarMarker>,
-                            );
-                            break;
                           case "pinned-header":
                             items.push(
                               <SidebarDragBoundary
@@ -3918,24 +3705,17 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               {allProjects.length === 0 ? (
                 <>
                   <span>No projects yet</span>
-                  <SidebarEmptyStateButton onClick={openAddProjectCommandPalette}>
+                  <button
+                    type="button"
+                    onClick={openAddProjectCommandPalette}
+                    className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-sidebar-border px-2.5 py-1 text-2xs font-medium text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+                  >
                     <PlusIcon className="-mx-0.5 size-3" />
                     Add project
-                  </SidebarEmptyStateButton>
+                  </button>
                 </>
-              ) : environmentFilterLabel !== null ? (
-                <>
-                  <span>
-                    {scopedProjectGroups.length > 1
-                      ? `No threads in these projects on ${environmentFilterLabel}`
-                      : scopedProjectGroups[0]
-                        ? `No threads in ${scopedProjectGroups[0].displayName} on ${environmentFilterLabel}`
-                        : `No threads on ${environmentFilterLabel}`}
-                  </span>
-                  <SidebarEmptyStateButton onClick={() => setEnvironmentFilterId(null)}>
-                    Show all machines
-                  </SidebarEmptyStateButton>
-                </>
+              ) : environmentFilter.label !== null ? (
+                environmentFilter.listEmptyState(scopedProjectGroups)
               ) : scopedProjectGroups.length > 1 ? (
                 "No threads in these projects yet"
               ) : scopedProjectGroups[0] ? (

@@ -47,7 +47,6 @@ import {
   type ProviderReplayTranscript,
   type ProviderApprovalDecision,
   ProviderSessionId,
-  ProviderThreadId,
   ProviderTurnId,
   RunAttemptId,
   RunId,
@@ -111,11 +110,6 @@ import {
   projectionFor,
 } from "../testkit/fixtures/shared.ts";
 
-const ADAPTER_TEST_LAYER = Layer.mergeAll(
-  IdAllocator.layer,
-  McpProviderSessions.layer,
-  NodeServices.layer,
-);
 vi.mock("@anthropic-ai/claude-agent-sdk", async (importOriginal) => ({
   ...(await importOriginal<typeof ClaudeSdk>()),
   resolveSettings: vi.fn(),
@@ -1005,7 +999,11 @@ describe("ClaudeAdapterV2 Auto-accept edits", () => {
           decision: "accept",
         });
         assert.equal((yield* Fiber.join(decision))?.behavior, "allow");
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 });
@@ -1378,7 +1376,11 @@ describe("ClaudeAdapterV2 executable path", () => {
 
         assert.deepEqual(executablePaths, [packageExe]);
       }),
-    ).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+    ).pipe(
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
   );
 });
 
@@ -1737,7 +1739,11 @@ describe("ClaudeAdapterV2 resume compaction", () => {
           ),
           { behavior: "cancelled" },
         );
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 });
@@ -2516,7 +2522,11 @@ describe("ClaudeAdapterV2 attachments", () => {
           ),
         );
         assert.ok(leadingText.includes("/evil-plugin:exfil now"));
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 });
@@ -2694,7 +2704,11 @@ describe("ClaudeAdapterV2 native fork", () => {
 
         assert.equal(openedQueries[0]?.options.resume, "forked-native-session");
         assert.equal(openedQueries[0]?.options.sessionId, undefined);
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 });
@@ -2895,7 +2909,11 @@ describe("ClaudeAdapterV2 native session identity", () => {
           }),
         );
         return openedQueries;
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     );
 
   it.effect(
@@ -3427,7 +3445,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           (event) => event.type === "turn_item.updated" && event.turnItem.type === "user_message",
         ),
       );
-    }).pipe(Effect.scoped, Effect.provide(ADAPTER_TEST_LAYER)),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
   );
 
   it.effect("can rewind to a turn stopped before Claude echoed its prompt", () =>
@@ -3470,7 +3493,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         }),
         promptUuid,
       );
-    }).pipe(Effect.scoped, Effect.provide(ADAPTER_TEST_LAYER)),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
   );
 
   it.effect("restores code only from a turn whose prompt Claude echoed", () =>
@@ -3521,7 +3549,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         runFileCheckpointTurn({ attempts, providerTurns: [stopped, echoedRetry] }, runId)?.id,
         echoedRetry.id,
       );
-    }).pipe(Effect.scoped, Effect.provide(ADAPTER_TEST_LAYER)),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
   );
 
   it.effect.each(["release-after", "cancel-after", "release-before", "resume-pending"] as const)(
@@ -5004,7 +5037,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         assert.deepEqual(item.input, { city: "Berlin" });
       }
       assert.equal(new Set(items.map((item) => item.id)).size, 1);
-    }).pipe(Effect.scoped, Effect.provide(ADAPTER_TEST_LAYER)),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
   );
 
   it.effect.each([
@@ -5334,7 +5372,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           assert.lengthOf(harness.offeredMessages, 4);
           assert.lengthOf(harness.liveSelectionChanges, 3);
           assert.isTrue(yield* harness.hasPendingBackgroundWork);
-        }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
+        ),
       ),
   );
 
@@ -5511,7 +5553,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           ),
         );
         for (const item of latest.values()) assert.notInclude(item.text, "secret-signature");
-      }).pipe(Effect.scoped, Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
   );
 
   // regression: #15892 non-execution metadata is carried through, not guessed from result text
@@ -5580,7 +5627,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               event.type === "node.updated" && event.node.nativeItemRef?.nativeId === "tool-error",
           );
           assert.equal(node?.type === "node.updated" ? node.node.status : undefined, failed.status);
-        }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
+        ),
       ),
   );
 
@@ -5756,7 +5807,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           );
         }
         assert.lengthOf(harness.terminalEvents(), 1);
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 
@@ -5822,7 +5877,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       yield* Queue.take(harness.terminalReceipts);
       assert.lengthOf(notices(), 3);
       assert.notEqual(notices()[0]?.id, notices()[2]?.id);
-    }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
   );
 
   it.effect("keeps a later future-window event-supplied Claude reset over the embedded reset", () =>
@@ -5964,7 +6023,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         terminal.failure.class,
         apiErrorStatus === 429 ? "usage_limit" : "provider_error",
       );
-    }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
   );
 
   it.effect("names an expired Claude login instead of the terminal API error", () =>
@@ -6010,7 +6073,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       assert.include(terminal.failure.message, configDir);
       assert.include(terminal.failure.message, JSON.stringify(cwd));
       assert.notInclude(terminal.failure.message, "repeated API errors");
-    }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
   );
 
   it.effect("shows a 403 permission error instead of the login hint", () =>
@@ -6816,7 +6883,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           ? "Claude usage limit reached. Send the message again once the limit resets."
           : "Claude gave up after repeated API errors.",
       );
-    }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
   );
 
   it.effect.each([
@@ -6870,7 +6941,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       } else {
         assert.isUndefined(terminal.failure.resetAt);
       }
-    }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
   );
 
   it.effect.each([
@@ -6987,7 +7062,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           : [],
       );
       assert.deepEqual(reportedContext, [2]);
-    }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
   );
 
   const usageStreamFrame = (event: unknown, parentToolUseId: string | null = null) =>
@@ -7404,7 +7483,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         harness.offeredMessages[0]?.message.content,
         "/compact keep the auth rewrite",
       );
-    }).pipe(Effect.scoped, Effect.provide(ADAPTER_TEST_LAYER)),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
   );
 
   it.effect("shows automatic compaction before its boundary and completes the same item", () =>
@@ -8364,7 +8448,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           { id: "task-1", text: "Inspected", status: "completed" },
           { id: "task-2", text: "Implement", status: "pending" },
         ]);
-      }).pipe(Effect.scoped, Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
   );
 
   it.effect("removes deleted tasks without resurrecting them on later updates or turns", () =>
@@ -8390,7 +8479,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       for (const plan of harness.plans().slice(2)) {
         assert.isFalse(plan.steps.some((step) => step.id === "task-1"));
       }
-    }).pipe(Effect.scoped, Effect.provide(ADAPTER_TEST_LAYER)),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
   );
 
   it.effect.each([
@@ -8508,7 +8602,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         { id: "task-4", text: "Done", status: "completed" },
       ]);
       assert.deepEqual(plans[3]?.steps, []);
-    }).pipe(Effect.scoped, Effect.provide(ADAPTER_TEST_LAYER)),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
   );
 
   it.effect("applies subagent task tools to the parent turn's shared task list", () =>
@@ -8550,7 +8649,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         { id: "task-1", text: "Main task", status: "completed" },
         { id: "task-2", text: "Child task", status: "pending" },
       ]);
-    }).pipe(Effect.scoped, Effect.provide(ADAPTER_TEST_LAYER)),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
   );
 
   it.effect("recovers persisted tasks when a subagent's TaskList comes first", () =>
@@ -8591,7 +8695,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       yield* harness.call(createTask("1", "Ambiguous"), { extraToolResult: true });
       yield* harness.finishTurn();
       assert.deepEqual(harness.plans(), []);
-    }).pipe(Effect.scoped, Effect.provide(ADAPTER_TEST_LAYER)),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
   );
 
   it.effect("resolves API retries on resumed assistant activity", () =>
@@ -8870,7 +8979,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             ),
           );
           assert.isFalse(yield* harness.hasPendingBackgroundWork);
-        }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
+        ),
       ),
   );
 
@@ -9128,7 +9241,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         assert.deepEqual(roster, [
           { taskId: longRunning.taskId, kind: "monitor", description: "Monitor 0" },
         ]);
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 
@@ -9428,7 +9545,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         );
         assert.isFalse(yield* harness.hasPendingBackgroundWork);
         assert.lengthOf(harness.continuationRequests, 0);
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 
@@ -9863,7 +9984,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           assert.isFalse(yield* hasPendingBackgroundWorkForThread(providerThreadA));
           assert.isFalse(yield* hasPendingBackgroundWorkForThread(providerThreadB));
           assert.isFalse(yield* hasPendingBackgroundWork);
-        }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
+        ),
       ),
   );
 
@@ -10065,7 +10190,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             userRunItems.map((item) => item.type),
             ["assistant_message"],
           );
-        }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
+        ),
       ),
   );
 
@@ -10148,7 +10277,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             : undefined,
           "On branch main\nwarning: dirty",
         );
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 
@@ -10411,7 +10544,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         });
         const result = yield* Fiber.join(permission);
         assert.equal(result?.behavior, "allow");
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 
@@ -10572,7 +10709,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         yield* harness.awaitTerminal(2);
         assert.deepEqual(assistantTexts(), ["One.", "Two."]);
         assert.equal(harness.terminalEvents()[1]?.status, "failed");
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 
@@ -10608,7 +10749,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         if (terminal?.status !== "failed") return;
         assert.equal(terminal.threadDisposition, "reusable");
         assert.include(terminal.failure.message, "never started a turn");
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 
@@ -10824,7 +10969,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         );
         yield* harness.awaitTerminal(1);
         assert.equal(harness.terminalEvents()[0]?.status, "completed");
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 
@@ -10866,7 +11015,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         assert.lengthOf(harness.continuationRequests, 1);
         assert.lengthOf(harness.terminalEvents(), 1);
         assert.isTrue(yield* harness.hasPendingBackgroundWork);
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 
@@ -10921,7 +11074,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             (event) => event.type === "message.updated" && event.message.text === WAKE_RESULT_TEXT,
           ),
         );
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 
@@ -11120,7 +11277,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           ),
         );
         assert.isFalse(yield* harness.hasPendingBackgroundWork);
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 
@@ -11196,7 +11357,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         assert.equal(harness.terminalEvents()[0]?.status, "completed");
         assert.isTrue(hasMessageText(recoveryAssistantText));
         assert.isFalse(hasMessageText(staleResultText));
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 
@@ -11251,7 +11416,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           assert.isTrue(terminalized);
           assert.equal(harness.terminalEvents()[0]?.status, "interrupted");
           assert.lengthOf(harness.terminalEvents(), 1);
-        }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
+        ),
       ),
   );
 
@@ -11277,7 +11446,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         yield* harness.awaitTerminal(1);
         assert.equal(harness.terminalEvents()[0]?.status, "completed");
         assert.lengthOf(harness.offeredMessages, 0);
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 
@@ -11673,7 +11846,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           finalSubagent?.type === "subagent.updated" && finalSubagent.subagent.status,
           "completed",
         );
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 
@@ -11853,7 +12030,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           subagentRouting(harness.events, []).assistantTexts(outer?.childThreadId ?? undefined),
           ["OUTER_WORKING", "OUTER_DONE"],
         );
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 
@@ -11975,7 +12156,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         );
         assert.equal(nested?.type === "subagent.updated" && nested.subagent.status, "completed");
         assert.lengthOf(harness.continuationRequests, 0);
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 
@@ -12212,7 +12397,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             `command_execution:running:${input}`,
             `command_execution:completed:${input}`,
           ]);
-        }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
+        ),
       ),
   );
 
@@ -12357,7 +12546,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             `dynamic_tool:running:${input}`,
             `dynamic_tool:completed:${input}`,
           ]);
-        }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
+        ),
       ),
   );
 
@@ -12520,7 +12713,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             ),
           );
           assert.lengthOf(harness.continuationRequests, 1);
-        }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
+        ),
       ),
   );
 
@@ -12606,7 +12803,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           FINAL_REPORT,
         ]);
         assert.deepEqual(routing.assistantTexts(harness.threadId), ["The auditor finished."]);
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 
@@ -12688,7 +12889,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           assert.equal(latest.subagent.status, resume ? "running" : "completed");
           assert.equal(latest.subagent.result, resume ? null : "Finished audit.");
           assert.equal(latest.subagent.completedAt === null, resume);
-        }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
+        ),
       ),
   );
 
@@ -12796,7 +13001,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           completedAt: completed.subagent.completedAt!,
           result: "Native outcome.",
         });
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 
@@ -12906,7 +13115,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           yield* stop!({ providerThread: harness.providerThread, nativeTaskId: "agent-stop" });
           assert.deepEqual(stopped, ["agent-stop"]);
           assert.equal(closes, 0);
-        }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
+        ),
       ),
   );
 
@@ -13025,7 +13238,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           );
           const child = harness.events.find((event) => event.type === "app_thread.created");
           assert.equal(child?.appThread.modelSelection?.model, initialModel ?? parentModel);
-        }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
+        ),
       ),
   );
 
@@ -13123,7 +13340,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           },
           [`task-${SHADOW_TOOL_USE_ID}`]: { instanceId, model: "opus" },
         });
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 
@@ -13238,7 +13459,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             : [],
         );
         assert.deepEqual(childEfforts, ["low", "low", "max"]);
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 
@@ -13478,7 +13703,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
 
         assert.equal(subagentEvents().at(-1)?.subagent.status, "cancelled");
         assert.isFalse(yield* harness.hasPendingBackgroundWork);
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 
@@ -13731,7 +13960,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         assert.lengthOf(resumedWorkIndexes, 1);
         assert.isAbove(resumedWorkIndexes[0] ?? -1, reopenIndex);
         assert.isFalse(yield* harness.hasPendingBackgroundWork);
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 
@@ -13894,7 +14127,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         yield* changes.until(
           () => events.filter((event) => event.type === "turn.terminal").length === 2,
         );
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 
@@ -14069,7 +14306,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             ),
           );
           assert.isFalse(yield* hasPendingBackgroundWork);
-        }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
+        ),
       ),
   );
 
@@ -14250,7 +14491,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           }),
         );
         assert.lengthOf(processQueues, 3);
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 
@@ -14506,7 +14751,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           assert.isTrue(Exit.isFailure(failedStart));
           assert.equal(openCount, 1);
           assert.isTrue(yield* hasPendingBackgroundWork);
-        }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
+        ),
       ),
   );
 
@@ -14782,7 +15031,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             "completed",
           );
           assert.isFalse(yield* harness.hasPendingBackgroundWork);
-        }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
+        ),
       ),
   );
 
@@ -14970,7 +15223,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           ),
         );
         assert.deepEqual(stoppedTasks, [WORKFLOW_TASK_ID]);
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 
@@ -15221,7 +15478,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         assert.isNull(
           stoppedRoot?.type === "node.updated" ? stoppedRoot.node.startedAt : undefined,
         );
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 
@@ -15307,7 +15568,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               event.subagent.childThreadId === coordinator?.childThreadId,
           ),
         );
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 
@@ -15531,7 +15796,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             }),
           ),
         );
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 
@@ -15647,7 +15916,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             }),
           ),
         );
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     ),
   );
 
@@ -15749,7 +16022,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               settled,
             );
           }
-        }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
+        ),
       ),
   );
 
@@ -16506,7 +16783,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           },
           { objective: condition, status: "complete", checks: 1 },
         ]);
-      }).pipe(Effect.scoped, Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     );
 
     it.effect(
@@ -16672,7 +16954,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           status: "active",
           checks: 2,
         });
-      }).pipe(Effect.scoped, Effect.provide(ADAPTER_TEST_LAYER)),
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
     );
 
     it.effect("keeps the CLI's goal confirmation out of the conversation", () =>
@@ -16773,316 +17060,5 @@ describe("ClaudeAdapterV2 query message stream", () => {
       yield* Scope.close(scope, Exit.void);
       assert.isTrue(closed);
     }),
-  );
-});
-
-describe("ClaudeAdapterV2 file restore", () => {
-  const makeFileRestoreAdapter = Effect.fn("makeFileRestoreAdapter")(function* (sdk: {
-    readonly opened: Array<ClaudeAdapterV2.ClaudeAgentSdkQueryOptions>;
-    readonly rewinds: Array<{ readonly userMessageId: string; readonly dryRun: boolean }>;
-  }) {
-    const fileSystem = yield* FileSystem.FileSystem;
-    const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
-      prefix: "t3-claude-rewind-files-",
-    });
-    return yield* ClaudeAdapterV2.makeClaudeAdapterV2({
-      instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
-      settings: DEFAULT_CLAUDE_SETTINGS,
-      environment: {},
-      attachmentsDir,
-      fileSystem,
-      path: yield* Path.Path,
-      crypto: yield* Crypto.Crypto,
-      idAllocator: yield* IdAllocator.IdAllocatorV2,
-      queryRunner: {
-        allocateSessionId: Effect.succeed("native-thread-claude-rewind-files"),
-        open: (input) =>
-          Effect.sync(() => {
-            sdk.opened.push(input.options);
-            return {
-              messages: Stream.never,
-              offer: () => Effect.void,
-              setModel: () => Effect.void,
-              setPermissionMode: () => Effect.void,
-              applyFlagSettings: () => Effect.void,
-              stopTask: () => Effect.void,
-              backgroundTasks: () => Effect.succeed(false),
-              interrupt: Effect.void,
-              close: Effect.void,
-              rewindFiles: (userMessageId, options) =>
-                Effect.sync(() => {
-                  sdk.rewinds.push({ userMessageId, dryRun: options.dryRun });
-                  return options.dryRun
-                    ? {
-                        canRewind: true,
-                        filesChanged: ["/workspace/notes.md"],
-                        insertions: 1,
-                        deletions: 2,
-                      }
-                    : { canRewind: true, skippedLinks: 1 };
-                }),
-            };
-          }),
-        forkSession: () => Effect.die("unused"),
-        subagentLaunchToolUseId: () => Effect.succeed(null),
-        assertComplete: Effect.void,
-      },
-    });
-  });
-
-  it.effect("previews and restores files of an idle thread through its resumed session", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const sdk = { opened: [], rewinds: [] } as {
-          opened: Array<ClaudeAdapterV2.ClaudeAgentSdkQueryOptions>;
-          rewinds: Array<{ userMessageId: string; dryRun: boolean }>;
-        };
-        const adapter = yield* makeFileRestoreAdapter(sdk);
-        const threadId = ThreadId.make("thread-claude-rewind-files");
-        const runtime = yield* adapter.openSession({
-          threadId,
-          providerSessionId: ProviderSessionId.make("provider-session-claude-rewind-files"),
-          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
-          runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
-        });
-        const providerThread = yield* runtime.ensureThread({
-          threadId,
-          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
-          runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
-        });
-        assert.isFunction(runtime.rewindFiles);
-        const restore = (dryRun: boolean) =>
-          runtime.rewindFiles!({
-            providerThread,
-            nativeUserMessageId: "user-uuid-2",
-            dryRun,
-            modelSelection: CLAUDE_TEST_MODEL_SELECTION,
-            runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
-          });
-
-        const preview = yield* restore(true);
-        const restored = yield* restore(false);
-
-        assert.deepEqual(preview, {
-          canRewind: true,
-          filesChanged: ["/workspace/notes.md"],
-          insertions: 1,
-          deletions: 2,
-          skippedLinks: 0,
-        });
-        assert.deepEqual(restored, {
-          canRewind: true,
-          filesChanged: [],
-          insertions: 0,
-          deletions: 0,
-          skippedLinks: 1,
-        });
-        assert.deepEqual(sdk.rewinds, [
-          { userMessageId: "user-uuid-2", dryRun: true },
-          { userMessageId: "user-uuid-2", dryRun: false },
-        ]);
-        // The session's file history lives in its transcript: each restore
-        // resumes it with checkpointing on.
-        assert.isTrue(
-          sdk.opened.every(
-            (options) =>
-              options.resume === "native-thread-claude-rewind-files" &&
-              options.enableFileCheckpointing === true,
-          ),
-        );
-      }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
-    ),
-  );
-
-  it.effect(
-    "opens a restore-only Claude process without the user's settings and hooks, but a turn with them",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const sdk = { opened: [], rewinds: [] } as {
-            opened: Array<ClaudeAdapterV2.ClaudeAgentSdkQueryOptions>;
-            rewinds: Array<{ userMessageId: string; dryRun: boolean }>;
-          };
-          const adapter = yield* makeFileRestoreAdapter(sdk);
-          const threadId = ThreadId.make("thread-claude-rewind-files-settings");
-          const runtime = yield* adapter.openSession({
-            threadId,
-            providerSessionId: ProviderSessionId.make(
-              "provider-session-claude-rewind-files-settings",
-            ),
-            modelSelection: CLAUDE_TEST_MODEL_SELECTION,
-            runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
-          });
-          const providerThread = yield* runtime.ensureThread({
-            threadId,
-            modelSelection: CLAUDE_TEST_MODEL_SELECTION,
-            runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
-          });
-          const restore = (dryRun: boolean) =>
-            runtime.rewindFiles!({
-              providerThread,
-              nativeUserMessageId: "user-uuid-3",
-              dryRun,
-              modelSelection: CLAUDE_TEST_MODEL_SELECTION,
-              runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
-            });
-          yield* restore(true);
-          yield* restore(false);
-          yield* runtime.startTurn(
-            makeClaudeTestTurnInput({
-              threadId,
-              providerThread,
-              now: yield* DateTime.now,
-              attemptId: RunAttemptId.make("attempt-claude-rewind-files-settings"),
-              text: "Edit the notes.",
-              attachments: [],
-              runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
-            }),
-          );
-
-          assert.equal(sdk.opened.length, 3);
-          const [previewOptions, restoreOptions, turnOptions] = sdk.opened;
-          // A project SessionStart hook held a restore preview for 7.5 s:
-          // a process that only restores files loads no settings files.
-          assert.deepEqual(previewOptions?.settingSources, []);
-          assert.deepEqual(restoreOptions?.settingSources, []);
-          assert.isUndefined(turnOptions?.settingSources);
-        }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
-      ),
-  );
-
-  it.effect(
-    "previews and restores files through a running turn's Claude process without starting another",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const sdk = { opened: [], rewinds: [] } as {
-            opened: Array<ClaudeAdapterV2.ClaudeAgentSdkQueryOptions>;
-            rewinds: Array<{ userMessageId: string; dryRun: boolean }>;
-          };
-          const adapter = yield* makeFileRestoreAdapter(sdk);
-          const threadId = ThreadId.make("thread-claude-rewind-files-live");
-          const runtime = yield* adapter.openSession({
-            threadId,
-            providerSessionId: ProviderSessionId.make("provider-session-claude-rewind-files-live"),
-            modelSelection: CLAUDE_TEST_MODEL_SELECTION,
-            runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
-          });
-          const providerThread = yield* runtime.ensureThread({
-            threadId,
-            modelSelection: CLAUDE_TEST_MODEL_SELECTION,
-            runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
-          });
-          yield* runtime.startTurn(
-            makeClaudeTestTurnInput({
-              threadId,
-              providerThread,
-              now: yield* DateTime.now,
-              attemptId: RunAttemptId.make("attempt-claude-rewind-files-live"),
-              text: "Edit the notes.",
-              attachments: [],
-              runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
-            }),
-          );
-
-          const restore = (dryRun: boolean) =>
-            runtime.rewindFiles!({
-              providerThread,
-              nativeUserMessageId: "user-uuid-1",
-              dryRun,
-              modelSelection: CLAUDE_TEST_MODEL_SELECTION,
-              runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
-            });
-          const preview = yield* restore(true);
-          const restored = yield* restore(false);
-
-          assert.deepEqual(preview.filesChanged, ["/workspace/notes.md"]);
-          assert.isTrue(restored.canRewind);
-          assert.equal(sdk.opened.length, 1);
-          assert.deepEqual(sdk.rewinds, [
-            { userMessageId: "user-uuid-1", dryRun: true },
-            { userMessageId: "user-uuid-1", dryRun: false },
-          ]);
-        }).pipe(Effect.provide(ADAPTER_TEST_LAYER)),
-      ),
-  );
-});
-
-describe("ClaudeAdapterV2 rewind cursor", () => {
-  const providerThreadId = ProviderThreadId.make("provider-thread-claude-rewind-cursor");
-  const turn = (ordinal: number, nativeId: string) =>
-    ({
-      id: ProviderTurnId.make(`provider-turn-${ordinal}`),
-      providerThreadId,
-      runAttemptId: RunAttemptId.make(`attempt-${ordinal}`),
-      nativeTurnRef: { driver: "claudeAgent", nativeId, strength: "weak" },
-      ordinal,
-      status: "completed",
-    }) as unknown as OrchestrationV2ProviderTurn;
-  const resolve = (target: OrchestrationV2ProviderTurn, turns: OrchestrationV2ProviderTurn[]) =>
-    ClaudeAdapterV2.resolveClaudeRollbackResumeSessionAt({
-      providerThread: { id: providerThreadId } as never,
-      target: { type: "provider_turn", appRunOrdinal: target.ordinal, providerTurn: target },
-      providerThreadTurns: turns,
-    });
-
-  it.effect("resumes at the turn's last assistant uuid", () =>
-    Effect.gen(function* () {
-      const target = turn(1, "assistant-uuid-1");
-      assert.equal(
-        yield* resolve(target, [target, turn(2, "assistant-uuid-2")]),
-        "assistant-uuid-1",
-      );
-    }).pipe(Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("resumes after the prompt of a turn that ended before Claude replied", () =>
-    Effect.gen(function* () {
-      const target = {
-        ...turn(1, "turn:attempt-1"),
-        nativeUserMessageId: "prompt-uuid-1",
-      } as OrchestrationV2ProviderTurn;
-      assert.equal(yield* resolve(target, [target, turn(2, "assistant-uuid-2")]), "prompt-uuid-1");
-    }).pipe(Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("resumes after the prompt of a stopped turn recorded before prompt ids were kept", () =>
-    Effect.gen(function* () {
-      // Builds before random prompt ids sent a uuid derived from the attempt
-      // and recorded none, so the derivation is the only cursor such a turn has.
-      const target = turn(1, "turn:attempt-1");
-      assert.equal(
-        yield* resolve(target, [target, turn(2, "assistant-uuid-2")]),
-        "01dd98ff-23e3-41d9-8bb1-9896b5445060",
-      );
-    }).pipe(Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("cannot resume after a turn that recorded neither a reply nor its prompt", () =>
-    Effect.gen(function* () {
-      const target = {
-        ...turn(1, "turn:attempt-1"),
-        runAttemptId: null,
-      } as OrchestrationV2ProviderTurn;
-      const exit = yield* Effect.exit(resolve(target, [target, turn(2, "assistant-uuid-2")]));
-      assert.isTrue(Exit.isFailure(exit));
-    }).pipe(Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("starts over at the thread start, or resumes where an import's start is", () =>
-    Effect.gen(function* () {
-      const resolveStart = (nativeResumeAt?: string) =>
-        ClaudeAdapterV2.resolveClaudeRollbackResumeSessionAt({
-          providerThread: { id: providerThreadId } as never,
-          target: {
-            type: "thread_start",
-            appRunOrdinal: 0,
-            ...(nativeResumeAt === undefined ? {} : { nativeResumeAt }),
-          },
-          providerThreadTurns: [],
-        });
-      assert.equal(yield* resolveStart(), null);
-      assert.equal(yield* resolveStart("reply-2"), "reply-2");
-    }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

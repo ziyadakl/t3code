@@ -104,12 +104,6 @@ describe("searchSettings", () => {
     ).toEqual(["network-access", "connections-environment"]);
   });
 
-  it("finds the sidebar project group settings", () => {
-    expect(searchSettings("fold threads by project")[0]?.id).toBe("sidebar-project-groups");
-    expect(searchSettings("float to the top")[0]?.id).toBe("sidebar-float-to-top");
-    expect(searchSettings("needs you")[0]?.id).toBe("sidebar-float-to-top");
-  });
-
   it("hides desktop-only settings from browser search", () => {
     expect(SETTINGS_SEARCH_ITEMS.some((item) => item.id === "quit-confirmation")).toBe(true);
     expect(searchSettings("hold to quit")).toEqual([]);
@@ -152,47 +146,6 @@ describe("searchSettings", () => {
       "linked-environments",
     ]);
     expect(available.map((item) => item.id).filter((id) => gatedIds.has(id))).toEqual([]);
-  });
-
-  it("offers auto-archive settings only when a server supports them", () => {
-    const itemIds = (hasThreadAutoArchive: boolean) =>
-      searchSettings(
-        "auto-archive",
-        filterAvailableSettingsSearchItems({
-          hasCloudPublicConfig: false,
-          hasEnvironment: true,
-          hasProviderSettingsEnvironment: true,
-          hasMacProviderSettingsEnvironment: false,
-          canManageLocalBackend: false,
-          isWslSettingsRowVisible: false,
-          hasThreadAutoSettlement: true,
-          hasThreadAutoArchive,
-        }),
-      ).map((item) => item.id);
-
-    expect(itemIds(false)).toEqual([]);
-    expect(itemIds(true)).toEqual(["auto-archive-settled-threads", "days-before-auto-archive"]);
-  });
-
-  it("offers Float to the top only while project groups are on", () => {
-    const itemIds = (sidebarProjectGroupsEnabled: boolean) =>
-      searchSettings(
-        "float to the top",
-        filterAvailableSettingsSearchItems({
-          hasCloudPublicConfig: false,
-          hasEnvironment: false,
-          hasProviderSettingsEnvironment: false,
-          hasMacProviderSettingsEnvironment: false,
-          canManageLocalBackend: false,
-          isWslSettingsRowVisible: false,
-          hasThreadAutoSettlement: false,
-          hasThreadAutoArchive: false,
-          sidebarProjectGroupsEnabled,
-        }),
-      ).map((item) => item.id);
-
-    expect(itemIds(false)).not.toContain("sidebar-float-to-top");
-    expect(itemIds(true)).toContain("sidebar-float-to-top");
   });
 
   it("finds linked environments on a remote host without local maintenance access", () => {
@@ -271,15 +224,6 @@ describe("settings search targets", () => {
     expect(isSettingsSearchScopeAvailable(target.scope, "project")).toBe(false);
     expect(isSettingsSearchScopeAvailable(target.scope, "environment")).toBe(true);
   });
-
-  it.each(["auto-archive-settled-threads", "days-before-auto-archive"])(
-    "retains the auto-archive capability requirement for %s",
-    (targetId) => {
-      expect(getSettingsSearchTargetScope(targetId)).toMatchObject({
-        requiresThreadAutoArchive: true,
-      });
-    },
-  );
 
   it("keeps environment-wide settings out of project scopes", () => {
     const updates = getSettingsSearchTargetScope("provider-update-checks")!;
@@ -399,32 +343,6 @@ describe("source control host search items", () => {
     expect(searchSettings("ghes").map((item) => item.id)).toContain(
       sourceControlHostSettingsSearchId("github"),
     );
-  });
-});
-
-describe("auto-archive search availability", () => {
-  function environment(id: string, capabilities: Record<string, boolean>) {
-    return {
-      environmentId: EnvironmentId.make(id),
-      connection: { phase: "connected" as const },
-      serverConfig: { environment: { capabilities } },
-    };
-  }
-
-  it("judges the auto-archive capability, not auto-settlement", () => {
-    const settleOnly = environment("settle-only", { threadAutoSettlement: true });
-    const archiving = environment("archiving", {
-      threadAutoSettlement: true,
-      threadAutoArchive: true,
-    });
-
-    expect(
-      getThreadAutoSettlementSearchAvailability(
-        [settleOnly, archiving],
-        { kind: "environment", environmentIds: [settleOnly.environmentId] },
-        "threadAutoArchive",
-      ),
-    ).toEqual({ eligibleEnvironmentIds: [archiving.environmentId], isTargetAvailable: false });
   });
 });
 

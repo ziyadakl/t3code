@@ -12,7 +12,6 @@ import {
   managedUpdatesMessage,
   ProviderDriverKind,
   type ProviderInstanceId,
-  type SidebarFloatToTopStatus,
   type SidebarProjectGroupingMode,
 } from "@t3tools/contracts";
 import {
@@ -99,6 +98,16 @@ import {
   SettingsSection,
 } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
+import {
+  PROJECT_GROUPS_RESTORE_DEFAULTS,
+  ProjectGroupsSettingsRows,
+  projectGroupsChangedLabels,
+} from "../sidebar/projectGroups/ProjectGroupsSettingsRows";
+import {
+  AUTO_ARCHIVE_RESTORE_DEFAULTS,
+  AutoArchiveSettingsRows,
+  autoArchiveChangedLabels,
+} from "./AutoArchiveSettingsRows";
 import { BackgroundActivitySettingsRow } from "./BackgroundActivitySettings";
 import { AdvancedSettings } from "./AdvancedSettings";
 import { PullRequestLinksOpenInAppSetting } from "./IntegrationsSettings";
@@ -121,18 +130,6 @@ const RESPONSE_STREAMING_MODE_DESCRIPTIONS: Record<ResponseStreamingMode, string
   paragraph: "Each paragraph or code block appears as soon as it is complete.",
 };
 
-const SIDEBAR_FLOAT_TO_TOP_STATUS_OPTIONS: ReadonlyArray<{
-  readonly status: SidebarFloatToTopStatus;
-  readonly label: string;
-}> = [
-  { status: "done", label: "Done" },
-  { status: "input", label: "Needs input" },
-  { status: "approval", label: "Needs approval" },
-  { status: "failed", label: "Failed" },
-  { status: "woke", label: "Woke" },
-  { status: "limited", label: "Limited" },
-  { status: "waiting", label: "Waiting" },
-];
 const SIDEBAR_PROJECT_SORT_ORDER_LABELS: Record<SidebarProjectSortOrder, string> = {
   updated_at: "Last user message",
   created_at: "Created at",
@@ -496,16 +493,7 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.sidebarWorkingShelfEnabled !== DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled
       ? ["Working section"]
       : []),
-    ...(settings.sidebarProjectGroupsEnabled !==
-    DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupsEnabled
-      ? ["Group threads by project"]
-      : []),
-    ...(!Equal.equals(
-      settings.sidebarFloatToTopStatuses,
-      DEFAULT_UNIFIED_SETTINGS.sidebarFloatToTopStatuses,
-    )
-      ? ["Float to the top"]
-      : []),
+    ...projectGroupsChangedLabels(settings),
     ...(settings.sidebarAutoSettleAfterDays !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
       ? ["Auto-settle inactive threads"]
       : []),
@@ -516,10 +504,7 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.sidebarAutoSettleOnMerge !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge
       ? ["Auto-settle merged threads"]
       : []),
-    ...(settings.sidebarAutoArchiveSettledAfterDays !==
-    DEFAULT_UNIFIED_SETTINGS.sidebarAutoArchiveSettledAfterDays
-      ? ["Auto-archive settled threads"]
-      : []),
+    ...autoArchiveChangedLabels(settings),
     ...(settings.autoResumeLimitedThreads !== DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads
       ? ["Resume after usage limits"]
       : []),
@@ -676,13 +661,11 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       sidebarProjectSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder,
       sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
-      sidebarProjectGroupsEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupsEnabled,
-      sidebarFloatToTopStatuses: DEFAULT_UNIFIED_SETTINGS.sidebarFloatToTopStatuses,
+      ...PROJECT_GROUPS_RESTORE_DEFAULTS,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleKeepPullRequests: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleKeepPullRequests,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
-      sidebarAutoArchiveSettledAfterDays:
-        DEFAULT_UNIFIED_SETTINGS.sidebarAutoArchiveSettledAfterDays,
+      ...AUTO_ARCHIVE_RESTORE_DEFAULTS,
       autoResumeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads,
       snoozeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads,
       snoozePresets: DEFAULT_UNIFIED_SETTINGS.snoozePresets,
@@ -733,17 +716,13 @@ export function useSettingsRestore(onRestored?: () => void) {
 }
 
 const AUTO_SETTLE_DEFAULT_DAYS = DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays ?? 3;
-const AUTO_ARCHIVE_DEFAULT_DAYS = DEFAULT_UNIFIED_SETTINGS.sidebarAutoArchiveSettledAfterDays ?? 7;
 
-/** A day-count field for thread settings such as auto-settle and auto-archive. */
-function ThreadDaysInput({
+function AutoSettleDaysInput({
   value,
   onCommit,
-  ariaLabel,
 }: {
   value: number;
   onCommit: (days: number) => void;
-  ariaLabel: string;
 }) {
   const [draft, setDraft] = useState(String(value));
   const [draftSource, setDraftSource] = useState(value);
@@ -772,7 +751,7 @@ function ThreadDaysInput({
         }
       }}
       onBlur={() => setDraft(String(value))}
-      aria-label={ariaLabel}
+      aria-label="Days of inactivity before auto-settle"
     />
   );
 }
@@ -939,75 +918,7 @@ export function GeneralSettingsPanel() {
             />
           }
         />
-        <SettingsRow
-          {...searchableSetting("sidebar-project-groups")}
-          description="Fold active threads under one header per project. Turn off for a flat list."
-          resetAction={
-            settings.sidebarProjectGroupsEnabled !==
-            DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupsEnabled ? (
-              <SettingResetButton
-                label="project groups"
-                onClick={() =>
-                  updateSettings({
-                    sidebarProjectGroupsEnabled:
-                      DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupsEnabled,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.sidebarProjectGroupsEnabled}
-              onCheckedChange={(checked) =>
-                updateSettings({ sidebarProjectGroupsEnabled: Boolean(checked) })
-              }
-              aria-label="Group threads by project"
-            />
-          }
-        />
-
-        {settings.sidebarProjectGroupsEnabled ? (
-          <SettingsRow
-            {...searchableSetting("sidebar-float-to-top")}
-            description="Threads with these statuses sit above the project groups until the status clears."
-            resetAction={
-              !Equal.equals(
-                settings.sidebarFloatToTopStatuses,
-                DEFAULT_UNIFIED_SETTINGS.sidebarFloatToTopStatuses,
-              ) ? (
-                <SettingResetButton
-                  label="float to the top"
-                  onClick={() =>
-                    updateSettings({
-                      sidebarFloatToTopStatuses: DEFAULT_UNIFIED_SETTINGS.sidebarFloatToTopStatuses,
-                    })
-                  }
-                />
-              ) : null
-            }
-          >
-            <div className="mt-3 grid max-w-2xl gap-x-6 gap-y-2 pb-3.5 sm:grid-cols-2">
-              {SIDEBAR_FLOAT_TO_TOP_STATUS_OPTIONS.map(({ status, label }) => (
-                <label key={status} className="flex items-center justify-between gap-3">
-                  <span className="text-sm">{label}</span>
-                  <Switch
-                    checked={settings.sidebarFloatToTopStatuses[status]}
-                    onCheckedChange={(checked) =>
-                      updateSettings({
-                        sidebarFloatToTopStatuses: {
-                          ...settings.sidebarFloatToTopStatuses,
-                          [status]: Boolean(checked),
-                        },
-                      })
-                    }
-                    aria-label={`Float ${label} threads to the top`}
-                  />
-                </label>
-              ))}
-            </div>
-          </SettingsRow>
-        ) : null}
+        <ProjectGroupsSettingsRows />
       </SettingsSection>
 
       <SettingsSection id="confirmations" title="Confirmations">
@@ -1611,11 +1522,6 @@ export function ThreadsSettingsPanel() {
     (environment?.serverConfig
       ? providersByEnvironment.get(environment.environmentId)
       : undefined) ?? EMPTY_SERVER_PROVIDERS;
-  const supportsAutoArchive =
-    connectedEnvironments.length > 0 &&
-    connectedEnvironments.every(
-      (target) => target.serverConfig?.environment.capabilities.threadAutoArchive === true,
-    );
   const supportsAutoSettlementScope = connectedEnvironments.every(
     (target) => target.serverConfig?.environment.capabilities.threadAutoSettlementScope === true,
   );
@@ -1810,9 +1716,8 @@ export function ThreadsSettingsPanel() {
               title={searchableSetting("days-before-auto-settle").title}
               description="Any new activity un-settles a thread automatically."
               control={
-                <ThreadDaysInput
+                <AutoSettleDaysInput
                   value={settings.sidebarAutoSettleAfterDays}
-                  ariaLabel="Days of inactivity before auto-settle"
                   onCommit={(days) => updateSettings({ sidebarAutoSettleAfterDays: days })}
                 />
               }
@@ -1836,61 +1741,7 @@ export function ThreadsSettingsPanel() {
               }
             />
           ) : null}
-          {supportsAutoArchive ? (
-            <>
-              <SettingsRow
-                serverScoped
-                settingKeys={["sidebarAutoArchiveSettledAfterDays"]}
-                {...searchableSetting("auto-archive-settled-threads")}
-                description="Archive threads that stay settled this long. Helper threads are archived with their parent either way."
-                resetAction={
-                  settings.sidebarAutoArchiveSettledAfterDays !==
-                  DEFAULT_UNIFIED_SETTINGS.sidebarAutoArchiveSettledAfterDays ? (
-                    <SettingResetButton
-                      label="auto-archive"
-                      onClick={() =>
-                        updateSettings({
-                          sidebarAutoArchiveSettledAfterDays:
-                            DEFAULT_UNIFIED_SETTINGS.sidebarAutoArchiveSettledAfterDays,
-                        })
-                      }
-                    />
-                  ) : null
-                }
-                control={
-                  <ScopedSwitch
-                    settingKeys={["sidebarAutoArchiveSettledAfterDays"]}
-                    checked={settings.sidebarAutoArchiveSettledAfterDays !== null}
-                    onCheckedChange={(checked) =>
-                      updateSettings({
-                        sidebarAutoArchiveSettledAfterDays: checked
-                          ? AUTO_ARCHIVE_DEFAULT_DAYS
-                          : null,
-                      })
-                    }
-                    aria-label="Auto-archive settled threads"
-                  />
-                }
-              />
-              {settings.sidebarAutoArchiveSettledAfterDays !== null ? (
-                <SettingsRow
-                  serverScoped
-                  settingKeys={["sidebarAutoArchiveSettledAfterDays"]}
-                  title={searchableSetting("days-before-auto-archive").title}
-                  description="Pinned and snoozed threads are never archived automatically."
-                  control={
-                    <ThreadDaysInput
-                      value={settings.sidebarAutoArchiveSettledAfterDays}
-                      onCommit={(days) =>
-                        updateSettings({ sidebarAutoArchiveSettledAfterDays: days })
-                      }
-                      ariaLabel="Days settled before auto-archive"
-                    />
-                  }
-                />
-              ) : null}
-            </>
-          ) : null}
+          <AutoArchiveSettingsRows />
         </SettingsSection>
       ) : null}
 

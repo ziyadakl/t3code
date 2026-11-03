@@ -33,8 +33,6 @@ import {
   type MessageId,
   type ModelSelection,
   type OrchestrationMessageContext,
-  type OrchestrationV2Run,
-  type OrchestrationV2ThreadRewindPreview,
   type PreviewAnnotationPayload,
   type ProviderInteractionMode,
   ProviderDriverKind,
@@ -47,10 +45,6 @@ import {
   type ThreadId,
   type ThreadLinkedPullRequest,
   type RunId,
-  THREAD_REWIND_CHOICES,
-  type ThreadRewindChoice,
-  threadRewindPreviewOffersCode,
-  threadRewindRestores,
   type WorktreeSetupSnapshot,
 } from "@t3tools/contracts";
 import { worktreeSetupAgentStarted } from "@t3tools/client-runtime/worktree-setup";
@@ -84,8 +78,6 @@ import * as Schema from "effect/Schema";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentThreadShells, environmentThreadDetails } from "../state/threads";
 import { waitForAtomValue } from "../state/waitForAtomValue";
-import { orchestrationEnvironment } from "../state/orchestration";
-import { formatEnvironmentQueryError } from "../state/query";
 import {
   filterTerminalContextsWithText,
   formatTerminalContextLabel,
@@ -964,227 +956,48 @@ export async function waitForStartedServerThread(
   });
 }
 
-/**
- * Resolves with the thread's runs once none is live, the server's condition
- * for a rewind (Orchestrator `hasLiveRun`), after Stop was sent. Rejects when
- * the run has not stopped within `timeoutMs`.
- */
-export async function waitForThreadToStop(
-  threadRef: ScopedThreadRef,
-  timeoutMs = 15_000,
-): Promise<ReadonlyArray<OrchestrationV2Run>> {
-  const threadAtom = environmentThreadDetails.stateAtom(threadRef);
-  const stopped = await waitForAtomValue({
-    registry: appAtomRegistry,
-    atom: threadAtom,
-    predicate: (state) => {
-      const projection = Option.getOrNull(state.data);
-      return (
-        projection !== null &&
-        !projection.runs.some(
-          (run) =>
-            run.status === "preparing" || run.status === "starting" || run.status === "running",
-        )
-      );
-    },
-    timeoutMs,
-  });
-  if (!stopped) throw new Error("The current turn did not stop. Press Stop, then rewind again.");
-  return Option.getOrNull(appAtomRegistry.get(threadAtom).data)?.runs ?? [];
-}
-/**
- * Why a message rewind cannot start now, or null. A queued message, even one
- * Stop held, would be sent into the rewound chat; the server refuses it too.
- */
-export function messageRewindBlockedReason(
-  runs: ReadonlyArray<Pick<OrchestrationV2Run, "status" | "queueHeld">>,
-): string | null {
-  return runs.some((run) => run.status === "queued")
-    ? "Send or remove your queued messages before rewinding."
-    : null;
-}
-
-/** One row of the rewind menu; an unavailable row shows, disabled, in its place. */
-export interface MessageRewindMenuRow {
-  readonly choice: ThreadRewindChoice;
-  readonly available: boolean;
-}
-
-/**
- * The rewind menu for one sent message: every choice T3 Code can carry out, in Claude Code's
- * order. The code choices stay disabled until Claude's dry run says a restore would change a
- * file, so no row moves when it returns. `note` says what a code restore does, or why none.
- */
-export function deriveMessageRewindMenu(input: {
-  /** Null while the dry run is in flight, or when it failed. */
-  readonly preview: OrchestrationV2ThreadRewindPreview | null;
-  readonly error: string | null;
-}): { readonly rows: ReadonlyArray<MessageRewindMenuRow>; readonly note: string | null } {
-  const offersCode = input.preview !== null && threadRewindPreviewOffersCode(input.preview);
-  const rows = THREAD_REWIND_CHOICES.flatMap((choice) => {
-    const restores = threadRewindRestores(choice);
-    return restores === null ? [] : [{ choice, available: !restores.code || offersCode }];
-  });
-  if (input.preview === null) {
-    return {
-      rows,
-      note:
-        input.error === null
-          ? "Checking for code changes..."
-          : `Could not check for code changes: ${input.error}`,
-    };
-  }
-  if (!offersCode) {
-    return {
-      rows,
-      note: input.preview.unavailableReason ?? "Claude changed no files after this message.",
-    };
-  }
-  const files = input.preview.filesChanged.length;
-  return {
-    rows,
-    note: `Restoring code changes ${files === 1 ? "1 file" : `${files} files`} (+${input.preview.insertions} -${input.preview.deletions}).`,
-  };
-}
-
-/**
- * Fetches Claude's dry run of a code restore for one message through the
- * query the rewind menu reads. The query stays mounted until `release`, so a
- * menu opened before then shows the answer without checking again. Answers
- * `{ preview: null, error: null }` when the dry run is still out at the timeout.
- */
-export async function loadThreadRewindPreview(
-  target: {
-    readonly environmentId: EnvironmentId;
-    readonly threadId: ThreadId;
-    readonly messageId: MessageId;
-  },
-  timeoutMs = 20_000,
-): Promise<{
-  readonly preview: OrchestrationV2ThreadRewindPreview | null;
-  readonly error: string | null;
-  readonly release: () => void;
-}> {
-  const atom = orchestrationEnvironment.threadRewindPreview({
-    environmentId: target.environmentId,
-    input: { threadId: target.threadId, messageId: target.messageId },
-  });
-  const release = appAtomRegistry.subscribe(atom, () => {});
-  await waitForAtomValue({
-    registry: appAtomRegistry,
-    atom,
-    predicate: (result) => result._tag !== "Initial" && !result.waiting,
-    timeoutMs,
-  });
-  // Only a settled answer counts: a stale success while refetching is not one.
-  const result = appAtomRegistry.get(atom);
-  if (result.waiting) return { preview: null, error: null, release };
-  return {
-    preview: result._tag === "Success" ? result.value : null,
-    error: result._tag === "Failure" ? formatEnvironmentQueryError(result.cause) : null,
-    release,
-  };
-}
-/**
- * The next step of a click on a message's rewind arrow; call again with `afterStop` and the
- * settled runs after `stop-first` (interrupt, wait). `refuse`: show `reason` (a Claude queue
- * is refused before any Stop); `check-files`: dry run, then `decideMessageRewindStart`;
- * `ask`: open the dialog (other providers after a Stop); `revert`: rewind now.
- */
-export function planMessageRewind(input: {
-  readonly canInterrupt: boolean;
-  readonly isWorking: boolean;
-  readonly supportsMessageRewind: boolean;
-  readonly afterStop: boolean;
-  readonly runs: ReadonlyArray<Pick<OrchestrationV2Run, "status" | "queueHeld">>;
-}):
-  | { readonly kind: "refuse"; readonly reason: string }
-  | { readonly kind: "stop-first" | "check-files" | "ask" | "revert" } {
-  const blockedReason = input.supportsMessageRewind ? messageRewindBlockedReason(input.runs) : null;
-  if (blockedReason !== null) return { kind: "refuse", reason: blockedReason };
-  if (input.canInterrupt) return { kind: "stop-first" };
-  if (input.isWorking) {
-    // Sending, or work no Stop reaches: nothing to stop, so wait.
-    return { kind: "refuse", reason: "Wait for the current work to finish before rewinding." };
-  }
-  if (input.supportsMessageRewind) return { kind: "check-files" };
-  return input.afterStop ? { kind: "ask" } : { kind: "revert" };
-}
-/**
- * What a click on a Claude message's rewind arrow does once the dry run is
- * back: rewind the conversation at once when no code choice could apply, or
- * open the rewind menu. No answer (the dry run failed or timed out) always asks.
- */
-export function decideMessageRewindStart(input: {
-  readonly preview: OrchestrationV2ThreadRewindPreview | null;
-}): { readonly kind: "rewind-now" } | { readonly kind: "ask" } {
-  return input.preview !== null && !threadRewindPreviewOffersCode(input.preview)
-    ? { kind: "rewind-now" }
-    : { kind: "ask" };
-}
-/**
- * Runs `revert` (command `requestId`); resolves with the server's notice once the message's run is
- * rolled back or the thread records the rewind done, rejects on a recorded failure. `awaitsRecordedOutcome`
- * waits for the record; `turnCount` bounds the wait to the retained runs when the message is paged out.
- */
 export async function waitForRevertedMessage(
   threadRef: ScopedThreadRef,
-  messageId: MessageId,
+  turnCount: number,
   requestId: CommandId,
   revert: () => Promise<void>,
-  options: {
-    readonly awaitsRecordedOutcome?: boolean;
-    readonly timeoutMs?: number;
-    readonly turnCount?: number;
-  } = {},
-): Promise<string | null> {
-  const timeoutMs = options.timeoutMs ?? 120_000;
+  timeoutMs = 120_000,
+): Promise<void> {
   const threadAtom = environmentThreadDetails.stateAtom(threadRef);
   const readProjection = () => Option.getOrNull(appAtomRegistry.get(threadAtom).data);
   const initial = readProjection();
-  const messageRunId = initial?.messages.find((message) => message.id === messageId)?.runId;
-  const targetRun = initial?.runs.find((run) => run.id === messageRunId);
-  const isSettledRun = (status: string) =>
-    status === "completed" ||
-    status === "interrupted" ||
-    status === "failed" ||
-    status === "cancelled";
-  const turnCount = options.turnCount;
-  // Paging can omit the message and its run. The rollback commits the whole settled suffix at once.
-  const pagedOutWitness =
-    targetRun === undefined && turnCount !== undefined
-      ? initial?.runs.reduce<(typeof initial.runs)[number] | undefined>(
-          (latest, run) =>
-            run.ordinal <= turnCount || !isSettledRun(run.status)
-              ? latest
-              : latest === undefined || run.ordinal > latest.ordinal
-                ? run
-                : latest,
-          undefined,
-        )
-      : undefined;
-  if (targetRun === undefined && pagedOutWitness === undefined) {
-    throw new Error(
-      turnCount === undefined
-        ? "The message to rewind is no longer available."
-        : "The thread has changed. Select a message to rewind again.",
-    );
-  }
-  if (targetRun?.status === "rolled_back") {
+  const providerThreadId = initial?.thread.activeProviderThreadId;
+  const initialProviderThread = initial?.providerThreads.find(
+    (providerThread) => providerThread.id === providerThreadId,
+  );
+  const initialProviderThreadIds = new Set(initial?.providerThreads.map((thread) => thread.id));
+  // Paging can omit the source run. Rollback commits the entire settled suffix atomically.
+  const witness = initial?.runs.reduce<(typeof initial.runs)[number] | undefined>((latest, run) => {
+    if (
+      run.ordinal <= turnCount ||
+      (run.status !== "completed" &&
+        run.status !== "interrupted" &&
+        run.status !== "failed" &&
+        run.status !== "cancelled")
+    )
+      return latest;
+    return latest === undefined || run.ordinal > latest.ordinal ? run : latest;
+  }, undefined);
+  if (witness === undefined) {
     throw new Error("The thread has changed. Select a message to rewind again.");
   }
-  return new Promise<string | null>((resolve, reject) => {
+  return new Promise<void>((resolve, reject) => {
     let settled = false;
     let accepted = false;
     let unsubscribe = () => {};
     let timeout: ReturnType<typeof globalThis.setTimeout> | undefined;
-    const finish = (error?: unknown, notice: string | null = null) => {
+    const finish = (error?: unknown) => {
       if (settled) return;
       settled = true;
       if (timeout !== undefined) globalThis.clearTimeout(timeout);
       unsubscribe();
       if (error !== undefined) reject(error);
-      else resolve(notice);
+      else resolve();
     };
     const inspect = () => {
       const thread = readProjection();
@@ -1194,20 +1007,20 @@ export async function waitForRevertedMessage(
         finish(new Error(failure.message));
         return;
       }
-      const completion = thread.thread.rollbackCompletion;
-      if (completion?.requestId === requestId) {
-        finish(undefined, completion.notice ?? null);
-        return;
-      }
       if (
         accepted &&
-        (options.awaitsRecordedOutcome !== true || thread.thread.rollbackRequestId !== requestId) &&
-        (pagedOutWitness === undefined
-          ? thread.runs.some((run) => run.id === messageRunId && run.status === "rolled_back")
-          : thread.runs.some(
-              (run) => run.id === pagedOutWitness.id && run.status === "rolled_back",
-            ) &&
-            !thread.runs.some((run) => run.ordinal > (turnCount ?? 0) && isSettledRun(run.status)))
+        thread.providerThreads.some(
+          (providerThread) =>
+            (providerThread.id === providerThreadId ||
+              // Claude resets to a fresh root session when rewinding to thread start.
+              (turnCount === 0 &&
+                providerThread.ownerNodeId === null &&
+                providerThread.appThreadId === initial?.thread.id &&
+                providerThread.providerInstanceId === initialProviderThread?.providerInstanceId &&
+                !initialProviderThreadIds.has(providerThread.id))) &&
+            providerThread.lastRunOrdinal === (turnCount === 0 ? null : turnCount),
+        ) &&
+        thread.runs.some((run) => run.id === witness.id && run.status === "rolled_back")
       )
         finish();
     };

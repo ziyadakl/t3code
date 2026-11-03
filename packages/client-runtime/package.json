@@ -59,6 +59,10 @@
       "types": "./src/userMessage.ts",
       "default": "./src/userMessage.ts"
     },
+    "./state/archived-projects": {
+      "types": "./src/state/archivedProjects.ts",
+      "default": "./src/state/archivedProjects.ts"
+    },
     "./progress-note": {
       "types": "./src/progressNote.ts",
       "default": "./src/progressNote.ts"

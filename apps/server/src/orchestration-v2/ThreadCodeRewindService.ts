@@ -1,5 +1,6 @@
 import {
   CommandId,
+  OrchestrationPreviewThreadRewindError,
   type MessageId,
   type OrchestrationV2ThreadRewindPreview,
   type ProviderSessionId,
@@ -225,3 +226,15 @@ const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(ThreadCodeRewindServiceV2, make);
+
+/** The `previewThreadRewind` rpc handler: the preview, with its failure shaped for the client. */
+export const previewThreadRewindHandler =
+  (codeRewind: ThreadCodeRewindServiceV2["Service"]) =>
+  (input: Parameters<ThreadCodeRewindServiceV2["Service"]["preview"]>[0]) =>
+    codeRewind
+      .preview(input)
+      .pipe(
+        Effect.mapError(
+          (cause) => new OrchestrationPreviewThreadRewindError({ message: cause.message, cause }),
+        ),
+      );
