@@ -223,27 +223,6 @@ export type ProjectionSettlementCandidate = Pick<
     readonly latestUserAuthoredMessageAt: DateTime.Utc | null;
   };
 
-/**
- * An unarchived thread the auto-archive sweep may archive: one that is settled,
- * or a subagent child whose parent is archived, deleted or missing. A thread an
- * enabled scheduled task posts into is never a candidate.
- */
-export type ProjectionAutoArchiveCandidate = Pick<OrchestrationV2AppThread, "id" | "updatedAt"> & {
-  readonly pinnedAt: DateTime.Utc | null;
-  readonly snoozedUntil: DateTime.Utc | null;
-  /** When the user settled it; null unless it is settled. */
-  readonly settledSince: DateTime.Utc | null;
-  /** Subagent child whose parent is archived, deleted or missing. */
-  readonly orphaned: boolean;
-  /** Has a live run or a pending runtime request. */
-  readonly busy: boolean;
-};
-
-export type ProjectionSubagentChild = Pick<OrchestrationV2AppThread, "id" | "archivedAt"> & {
-  /** Has a live run or a pending runtime request, as for an auto-archive candidate. */
-  readonly busy: boolean;
-};
-
 const ProjectionCheckpointContext = Schema.Struct({
   runs: Schema.Array(
     OrchestrationV2RunJsonSchema.mapFields(({ id, ordinal, status }) => ({ id, ordinal, status })),
@@ -539,19 +518,6 @@ export interface ProjectionStoreV2Shape {
   readonly getSettlementCandidates: (
     threadId?: ThreadId,
   ) => Effect.Effect<ReadonlyArray<ProjectionSettlementCandidate>, ProjectionStoreV2Error>;
-  readonly getAutoArchiveCandidates: () => Effect.Effect<
-    ReadonlyArray<ProjectionAutoArchiveCandidate>,
-    ProjectionStoreV2Error
-  >;
-  /** Subagent children of `threadId` that are not deleted, archived or not. */
-  readonly getSubagentChildren: (
-    threadId: ThreadId,
-  ) => Effect.Effect<ReadonlyArray<ProjectionSubagentChild>, ProjectionStoreV2Error>;
-  /**
-   * Active (not deleted, not archived) threads with at least one pull request
-   * link, in shell snapshot order, or only `threadId` when given. Skips run,
-   * message and item reads.
-   */
   readonly getThreadsWithPullRequests: (
     threadId?: ThreadId,
   ) => Effect.Effect<ReadonlyArray<ProjectionThreadPullRequests>, ProjectionStoreV2Error>;
@@ -6512,104 +6478,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         )
         .pipe(Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })));
 
-    // A thread the archive sweep leaves alone: a live run or a pending runtime request.
-    const isBusyThread = (threadId: Statement.Fragment) => sql`
-      (
-        EXISTS (
-          SELECT 1 FROM orchestration_v2_projection_runs active
-          WHERE active.thread_id = ${threadId}
-            AND active.status IN ('preparing', 'starting', 'running', 'waiting')
-        )
-        OR EXISTS (
-          SELECT 1 FROM orchestration_v2_projection_runtime_requests request
-          WHERE request.thread_id = ${threadId} AND request.status = 'pending'
-        )
-      )
-    `;
-
-    const getAutoArchiveCandidates: ProjectionStoreV2Shape["getAutoArchiveCandidates"] = Effect.fn(
-      "ProjectionStore.getAutoArchiveCandidates",
-    )(
-      function* () {
-        const rows = yield* sql<{
-          readonly payload_json: string;
-          readonly orphaned: number;
-          readonly busy: number;
-        }>`
-          SELECT candidate.payload_json, candidate.orphaned,
-            ${isBusyThread(sql`candidate.thread_id`)} AS busy
-          FROM (
-            SELECT t.thread_id, t.payload_json, t.updated_at,
-              (
-                json_extract(t.payload_json, '$.lineage.relationshipToParent') = 'subagent'
-                AND (
-                  parent.thread_id IS NULL
-                  OR parent.deleted_at IS NOT NULL
-                  OR json_extract(parent.payload_json, '$.archivedAt') IS NOT NULL
-                )
-              ) AS orphaned
-            FROM orchestration_v2_projection_threads t
-            LEFT JOIN orchestration_v2_projection_threads parent
-              ON parent.thread_id = json_extract(t.payload_json, '$.lineage.parentThreadId')
-            WHERE t.deleted_at IS NULL
-              AND json_extract(t.payload_json, '$.archivedAt') IS NULL
-          ) candidate
-          WHERE (
-              candidate.orphaned
-              OR (
-                json_extract(candidate.payload_json, '$.settledOverride') = 'settled'
-                AND json_extract(candidate.payload_json, '$.settledAt') IS NOT NULL
-              )
-            )
-            -- Archived, it would refuse every later run of the task.
-            AND NOT EXISTS (
-              SELECT 1 FROM scheduled_tasks task
-              WHERE task.thread_id = candidate.thread_id AND task.enabled = 1
-            )
-          ORDER BY candidate.updated_at ASC, candidate.thread_id ASC
-        `;
-        return yield* Effect.forEach(rows, (row) =>
-          decodeThreadPayload(row.payload_json).pipe(
-            Effect.map((thread): ProjectionAutoArchiveCandidate => ({
-              id: thread.id,
-              settledSince: thread.settledOverride === "settled" ? thread.settledAt : null,
-              updatedAt: thread.updatedAt,
-              pinnedAt: thread.pinnedAt ?? null,
-              snoozedUntil: thread.snoozedUntil ?? null,
-              orphaned: row.orphaned === 1,
-              busy: row.busy === 1,
-            })),
-          ),
-        );
-      },
-      Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
-    );
-
-    const getSubagentChildren: ProjectionStoreV2Shape["getSubagentChildren"] = Effect.fn(
-      "ProjectionStore.getSubagentChildren",
-    )(
-      function* (threadId: Parameters<ProjectionStoreV2Shape["getSubagentChildren"]>[0]) {
-        const rows = yield* sql<{ readonly payload_json: string; readonly busy: number }>`
-          SELECT child.payload_json, ${isBusyThread(sql`child.thread_id`)} AS busy
-          FROM orchestration_v2_projection_threads child
-          WHERE child.deleted_at IS NULL
-            AND json_extract(child.payload_json, '$.lineage.parentThreadId') = ${threadId}
-            AND json_extract(child.payload_json, '$.lineage.relationshipToParent') = 'subagent'
-          ORDER BY child.created_at ASC, child.thread_id ASC
-        `;
-        return yield* Effect.forEach(rows, (row) =>
-          decodeThreadPayload(row.payload_json).pipe(
-            Effect.map((thread): ProjectionSubagentChild => ({
-              id: thread.id,
-              archivedAt: thread.archivedAt,
-              busy: row.busy === 1,
-            })),
-          ),
-        );
-      },
-      Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
-    );
-
     const getOpenRemoteDelegatedTasks: ProjectionStoreV2Shape["getOpenRemoteDelegatedTasks"] = sql<{
       readonly thread_id: string;
       readonly subagent_id: string;
@@ -7268,8 +7136,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       findGuestShareThreadId: readOnReader(findGuestShareThreadId),
       getThread: readOnReader(getThread),
       getSettlementCandidates: readOnReader(getSettlementCandidates),
-      getAutoArchiveCandidates: readOnReader(getAutoArchiveCandidates),
-      getSubagentChildren: readOnReader(getSubagentChildren),
       getThreadsWithPullRequests: readOnReader(getThreadsWithPullRequests),
       getThreadWorktreePaths: readOnReader(getThreadWorktreePaths),
       getOpenRemoteDelegatedTasks: getOpenRemoteDelegatedTasks.pipe(NodeSqliteClient.readOnly),

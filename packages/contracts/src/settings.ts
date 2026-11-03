@@ -85,8 +85,6 @@ export const SidebarAutoSettleAfterDays = Schema.Number.check(
 );
 export type SidebarAutoSettleAfterDays = typeof SidebarAutoSettleAfterDays.Type;
 const DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS: SidebarAutoSettleAfterDays = 3;
-/** Days a thread stays settled before it is archived; same range as auto-settle. */
-const DEFAULT_SIDEBAR_AUTO_ARCHIVE_SETTLED_AFTER_DAYS: SidebarAutoSettleAfterDays = 7;
 
 export const MAX_SNOOZE_PRESET_MINUTES = 30 * 24 * 60;
 export const MAX_SNOOZE_PRESETS = 8;
@@ -1305,7 +1303,7 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS)),
   ),
   sidebarAutoArchiveSettledAfterDays: Schema.NullOr(SidebarAutoSettleAfterDays).pipe(
-    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_AUTO_ARCHIVE_SETTLED_AFTER_DAYS)),
+    Schema.withDecodingDefault(Effect.succeed(7)),
   ),
   compactIdleThreads: LegacyCompactIdleThreads.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),

@@ -583,14 +583,6 @@ const layerThreadSettlementWorker = Layer.effectDiscard(
   ThreadSettlementService.make.pipe(Effect.flatMap((service) => service.start())),
 ).pipe(Layer.provide(layerPullRequestService), Layer.provide(ProjectionStoreV2.layer));
 
-// Archives long-settled threads, and archives subagent children with their
-// parent, through the orchestrator so sessions detach as for a user's archive.
-const layerThreadArchiveWorker = Layer.effectDiscard(
-  ThreadArchiveService.make.pipe(Effect.flatMap((service) => service.start())),
-).pipe(
-  Layer.provide(ProjectionStoreV2.layer),
-  Layer.provide(EventStoreV2.layerFromOrchestrationEventStore),
-);
 const layerIdleCompactionWorker = Layer.effectDiscard(
   IdleCompactionService.make.pipe(Effect.flatMap((service) => service.start())),
 ).pipe(Layer.provide(ProjectionStoreV2.layer));
@@ -635,7 +627,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   AgentAwarenessRelay.layer,
   HeldHooksWaker.layer,
   layerThreadSettlementWorker,
-  layerThreadArchiveWorker,
+  ThreadArchiveService.layerWorker,
   layerIdleCompactionWorker,
   StorageCleanup.layer.pipe(Layer.provide(ProjectionStoreV2.layer)),
   DatabaseStorage.layer.pipe(

@@ -15,7 +15,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as EventStore from "./EventStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
-import * as ProjectionStore from "./ProjectionStore.ts";
+import * as ThreadArchiveQueries from "./ThreadArchiveQueries.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 /** How long an orphaned subagent child stays after its last change, such as an unarchive. */
@@ -28,7 +28,7 @@ const ORPHAN_GRACE_MS = DAY_MS;
  * running and blocked threads, and threads an enabled scheduled task posts into, are kept.
  */
 export function resolveAutoArchiveReason(
-  thread: ProjectionStore.ProjectionAutoArchiveCandidate,
+  thread: ThreadArchiveQueries.ProjectionAutoArchiveCandidate,
   nowMs: number,
   archiveSettledAfterDays: number | null,
 ): "settled" | "orphaned" | null {
@@ -61,9 +61,9 @@ type ArchiveJob =
   | { readonly type: "sweep" }
   | { readonly type: "cascade"; readonly threadId: ThreadId; readonly archive: boolean };
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
-  const projections = yield* ProjectionStore.ProjectionStoreV2;
+  const projections = yield* ThreadArchiveQueries.ThreadArchiveQueries;
   const eventStore = yield* EventStore.EventStoreV2;
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const crypto = yield* Crypto.Crypto;
@@ -211,3 +211,12 @@ export const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(ThreadArchiveServiceV2, make);
+
+// Archives long-settled threads, and archives subagent children with their
+// parent, through the orchestrator so sessions detach as for a user's archive.
+export const layerWorker = Layer.effectDiscard(
+  make.pipe(Effect.flatMap((service) => service.start())),
+).pipe(
+  Layer.provide(ThreadArchiveQueries.layer),
+  Layer.provide(EventStore.layerFromOrchestrationEventStore),
+);
