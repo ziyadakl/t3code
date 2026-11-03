@@ -342,7 +342,7 @@ jobs:
         run: vp run --filter @t3tools/web test --exclude '**/AttachmentFilePreview.browser.test.tsx'
 
       - name: Test attachment previews alone
-        run: vp run --filter @t3tools/web test src/components/files/AttachmentFilePreview.browser.test.tsx
+        run: vp run --filter @t3tools/web test AttachmentFilePreview.browser.test.tsx
 
       # Browser tests run source modules; this boots the production chunk graph.
       - name: Boot the built web client
