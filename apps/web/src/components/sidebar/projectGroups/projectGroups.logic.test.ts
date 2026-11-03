@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 
-import type { SidebarListItem } from "../Sidebar.logic";
-import type { Thread } from "../../types";
-import { makeThreadFixture, type ThreadFixtureOverrides } from "../../test-fixtures";
+import type { SidebarListItem } from "../../Sidebar.logic";
+import type { Thread } from "../../../types";
+import { makeThreadFixture, type ThreadFixtureOverrides } from "../../../test-fixtures";
 import {
   buildSidebarGroupedActiveModel,
   buildSidebarGroupedActiveRows,

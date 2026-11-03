@@ -104,12 +104,6 @@ describe("searchSettings", () => {
     ).toEqual(["network-access", "connections-environment"]);
   });
 
-  it("finds the sidebar project group settings", () => {
-    expect(searchSettings("fold threads by project")[0]?.id).toBe("sidebar-project-groups");
-    expect(searchSettings("float to the top")[0]?.id).toBe("sidebar-float-to-top");
-    expect(searchSettings("needs you")[0]?.id).toBe("sidebar-float-to-top");
-  });
-
   it("hides desktop-only settings from browser search", () => {
     expect(SETTINGS_SEARCH_ITEMS.some((item) => item.id === "quit-confirmation")).toBe(true);
     expect(searchSettings("hold to quit")).toEqual([]);
@@ -152,27 +146,6 @@ describe("searchSettings", () => {
       "linked-environments",
     ]);
     expect(available.map((item) => item.id).filter((id) => gatedIds.has(id))).toEqual([]);
-  });
-
-  it("offers Float to the top only while project groups are on", () => {
-    const itemIds = (sidebarProjectGroupsEnabled: boolean) =>
-      searchSettings(
-        "float to the top",
-        filterAvailableSettingsSearchItems({
-          hasCloudPublicConfig: false,
-          hasEnvironment: false,
-          hasProviderSettingsEnvironment: false,
-          hasMacProviderSettingsEnvironment: false,
-          canManageLocalBackend: false,
-          isWslSettingsRowVisible: false,
-          hasThreadAutoSettlement: false,
-          hasThreadAutoArchive: false,
-          sidebarProjectGroupsEnabled,
-        }),
-      ).map((item) => item.id);
-
-    expect(itemIds(false)).not.toContain("sidebar-float-to-top");
-    expect(itemIds(true)).toContain("sidebar-float-to-top");
   });
 
   it("finds linked environments on a remote host without local maintenance access", () => {

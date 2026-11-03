@@ -4,29 +4,76 @@
  * every other active thread sits in a foldable group for its project.
  */
 import {
-  buildLogicalProjectKeyLookup,
   hasUnseenCompletion,
   resolveSidebarThreadStatus,
-  resolveSidebarV2TopStatus,
   resolveThreadLastVisitedAt,
   type SidebarListItem,
+  type SidebarThreadStatus,
   type SidebarV2TopStatusKind,
-} from "../Sidebar.logic";
+} from "../../Sidebar.logic";
 import { sortInboxThreadsByReturn } from "@t3tools/client-runtime/state/thread-inbox";
-import { parseTimestampDate } from "../../timestampFormat";
-import type { SidebarThreadSummary } from "../../types";
+import { parseTimestampDate } from "../../../timestampFormat";
+import type { SidebarThreadSummary } from "../../../types";
 
 type ThreadStatusInput = Parameters<typeof hasUnseenCompletion>[0];
 type SidebarThreadStatusInput = Parameters<typeof resolveSidebarThreadStatus>[0];
-type LogicalProjectRef = Parameters<typeof buildLogicalProjectKeyLookup>[0][number];
+type LogicalProjectRef = {
+  readonly projectKey: string;
+  readonly memberProjectRefs: ReadonlyArray<{
+    readonly environmentId: string;
+    readonly projectId: string;
+  }>;
+};
+
+/** Maps a thread's physical project (machine + project id) to the logical
+    project key that groups the same code across machines. */
+function buildLogicalProjectKeyLookup(
+  projects: ReadonlyArray<LogicalProjectRef>,
+): (thread: { readonly environmentId: string; readonly projectId: string }) => string | undefined {
+  const projectKeyByRef = new Map(
+    projects.flatMap((project) =>
+      project.memberProjectRefs.map(
+        (projectRef) =>
+          [`${projectRef.environmentId}\0${projectRef.projectId}`, project.projectKey] as const,
+      ),
+    ),
+  );
+  return (thread) => projectKeyByRef.get(`${thread.environmentId}\0${thread.projectId}`);
+}
+
+function resolveSidebarV2TopStatus(input: {
+  readonly status: SidebarThreadStatus;
+  readonly isUnread: boolean;
+  readonly isWoke: boolean;
+}): SidebarV2TopStatusKind | null {
+  if (input.status === "working") {
+    return "working";
+  }
+  if (input.status === "waiting") {
+    return "waiting";
+  }
+  if (input.status === "approval") {
+    return "approval";
+  }
+  if (input.status === "input" || input.status === "request") {
+    return input.status;
+  }
+  if (input.status === "failed" || input.status === "limited") {
+    return input.status;
+  }
+  if (input.isWoke) {
+    return "woke";
+  }
+  return input.isUnread ? "done" : null;
+}
 
 export interface SidebarThreadAttention {
   readonly isUnread: boolean;
   readonly isWoke: boolean;
 }
 
-/** Unread and woke, for the sidebar row's badge and the grouped layout alike,
-    so the layout floats and counts exactly what the badge shows. */
+/** Unread and woke, as the sidebar row's badge reads them, so the layout
+    floats and counts what the badge shows. */
 export function resolveSidebarThreadAttention(input: {
   readonly thread: ThreadStatusInput & {
     readonly settledOverride?: SidebarThreadSummary["settledOverride"] | undefined;
@@ -197,11 +244,11 @@ export type SidebarTopStatusIcon =
   | "done";
 
 /**
- * One table for how each top status reads: the row's badge, a group header's
- * counts, and the counts' order (most urgent first, the key order here).
- * Hues match the mobile Live Activity/widgets.
+ * One table for how each top status reads in a group header's counts, and the
+ * counts' order (most urgent first, the key order here). Hues match the row's
+ * badge and the mobile Live Activity/widgets.
  */
-export const SIDEBAR_TOP_STATUS_DISPLAY = {
+const SIDEBAR_TOP_STATUS_DISPLAY = {
   approval: { label: "Approval", icon: "approval", className: "text-warning-foreground" },
   input: { label: "Input", icon: "input", className: "text-indigo-600 dark:text-indigo-300" },
   // A guest is waiting on the owner.

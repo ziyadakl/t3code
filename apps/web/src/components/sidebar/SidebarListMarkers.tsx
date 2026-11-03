@@ -5,26 +5,20 @@ import { type ReactNode, useLayoutEffect } from "react";
 import { cn } from "~/lib/utils";
 import {
   animateSidebarLayoutChanges,
-  sidebarListItemId,
   sidebarMarkerId,
   type SidebarListMarker,
-  type SidebarProjectGroupHeaderItem,
 } from "../Sidebar.logic";
 import { SIDEBAR_SORTABLE_DRAG_DISABLED } from "./SidebarThreadRow";
 
-export function SortableSidebarMarker(props: {
-  // Fork (grouped layout): or a project group's header item.
-  marker: SidebarListMarker | SidebarProjectGroupHeaderItem;
+function SortableSidebarMarker(props: {
+  marker: SidebarListMarker;
   className?: string;
   children?: ReactNode;
   revealOverflow?: boolean;
   "data-testid"?: string;
 }) {
   const { node, setNodeRef, transform, transition } = useSortable({
-    id:
-      typeof props.marker === "string"
-        ? sidebarMarkerId(props.marker)
-        : sidebarListItemId(props.marker),
+    id: sidebarMarkerId(props.marker),
     disabled: SIDEBAR_SORTABLE_DRAG_DISABLED,
     animateLayoutChanges: animateSidebarLayoutChanges,
   });
@@ -42,10 +36,7 @@ export function SortableSidebarMarker(props: {
       className={cn("list-none", props.className)}
       style={{
         transform: CSS.Translate.toString(transform),
-        transition:
-          typeof props.marker === "string" && props.marker.endsWith("-placeholder")
-            ? "none"
-            : transition,
+        transition: props.marker.endsWith("-placeholder") ? "none" : transition,
         visibility: transform?.scaleY === 0 ? "hidden" : undefined,
       }}
     >

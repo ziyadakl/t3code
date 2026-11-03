@@ -4,20 +4,29 @@
  * legacy sidebar's project header look. The rows themselves are the
  * sidebar's own thread rows; Sidebar.tsx places these pieces in its list.
  */
+import { useSortable } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import { threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
 import { resolveSidebarFloatToTopStatusSet } from "@t3tools/contracts/settings";
 import * as Schema from "effect/Schema";
 import { FolderIcon, ChevronRightIcon } from "lucide-react";
-import { Fragment } from "react";
-import { useLocalStorage } from "../../hooks/useLocalStorage";
-import { useClientSettings } from "../../hooks/useSettings";
-import { cn } from "../../lib/utils";
-import { useUiStateStore } from "../../uiStateStore";
-import { ProjectFavicon, type ProjectFaviconProject } from "../ProjectFavicon";
-import type { SidebarProjectGroupHeaderItem } from "../Sidebar.logic";
-import { SidebarMenuButton } from "../ui/sidebar";
+import { Fragment, type ReactNode } from "react";
+import { useLocalStorage } from "../../../hooks/useLocalStorage";
+import { useClientSettings } from "../../../hooks/useSettings";
+import { cn } from "../../../lib/utils";
+import { useUiStateStore } from "../../../uiStateStore";
+import { ProjectFavicon, type ProjectFaviconProject } from "../../ProjectFavicon";
+import {
+  animateSidebarLayoutChanges,
+  sidebarListItemId,
+  sidebarMarkerId,
+  type SidebarListItem,
+} from "../../Sidebar.logic";
+import { SidebarMenuButton } from "../../ui/sidebar";
+import { SIDEBAR_SORTABLE_DRAG_DISABLED } from "../SidebarThreadRow";
+import type { SidebarProjectGroupHeaderItem } from "./projectGroupMarker";
 import {
   buildSidebarGroupedActiveModel,
   buildSidebarGroupedActiveRows,
@@ -48,9 +57,12 @@ export function useSidebarProjectGroups<TProject extends GroupedProject>(input: 
   readonly routeThreadKey: string | null;
   readonly snoozeNow: string;
   readonly observedReturnAt?: (thread: EnvironmentThreadShell) => number | undefined;
+  readonly workingShelfEnabled: boolean;
+  /** Upstream's boring-mode folders are on: they take precedence. */
+  readonly suppressed: boolean;
 }) {
   const { activeThreads, projects, routeThreadKey, snoozeNow, observedReturnAt } = input;
-  const enabled = useClientSettings((s) => s.sidebarProjectGroupsEnabled);
+  const enabled = useClientSettings((s) => s.sidebarProjectGroupsEnabled) && !input.suppressed;
   const floatToTopStatuses = useClientSettings((s) => s.sidebarFloatToTopStatuses);
   const threadLastVisitedAtById = useUiStateStore((state) => state.threadLastVisitedAtById);
   const [openFoldKeys, setOpenFoldKeys] = useLocalStorage(
@@ -95,14 +107,86 @@ export function useSidebarProjectGroups<TProject extends GroupedProject>(input: 
     if (foldKey !== null) toggleGroup(foldKey);
   };
   const projectByKey = new Map(projects.map((project) => [project.projectKey, project]));
-  return { grouped, toggleGroup, openGroupForDrop, projectByKey };
+  // The inbox keeps a user-arranged order only while it is neither time-ordered
+  // (Working beta) nor grouped by project, where rows hold places.
+  const inboxArrangeable = !input.workingShelfEnabled && grouped === null;
+  return {
+    grouped,
+    toggleGroup,
+    openGroupForDrop,
+    projectByKey,
+    inboxArrangeable,
+    activeTimeOrdered: !inboxArrangeable,
+    // Grouped, the inbox has no flat order for a dragged row to land in.
+    flatTimeOrdered: input.workingShelfEnabled && grouped === null,
+    /** The active threads in keyboard order. Folded group rows don't render,
+        so they leave keyboard order and jump hints. */
+    orderedActive: grouped?.visibleThreads ?? activeThreads,
+    /** The active section's list items; null when the list is flat. */
+    activeRows: grouped?.items ?? null,
+  };
+}
+
+type SidebarProjectGroupsLayout = ReturnType<typeof useSidebarProjectGroups>;
+
+/** A group marker's place in the sortable list; it never drags. */
+function SortableGroupMarker(props: { id: string; children: ReactNode }) {
+  const { setNodeRef, transform, transition } = useSortable({
+    id: props.id,
+    disabled: SIDEBAR_SORTABLE_DRAG_DISABLED,
+    animateLayoutChanges: animateSidebarLayoutChanges,
+  });
+  return (
+    <li
+      ref={setNodeRef}
+      data-thread-selection-safe
+      className="list-none"
+      style={{
+        transform: CSS.Translate.toString(transform),
+        transition,
+        visibility: transform?.scaleY === 0 ? "hidden" : undefined,
+      }}
+    >
+      {props.children}
+    </li>
+  );
+}
+
+/**
+ * The node for a marker the grouped layout owns ("Needs you" and a project
+ * group's header), or null for any other marker.
+ */
+export function renderProjectGroupMarker(
+  item: Extract<SidebarListItem, { kind: "marker" }>,
+  layout: SidebarProjectGroupsLayout,
+): ReactNode | null {
+  if (item.marker === "project-group") {
+    const { foldKey, projectKey } = item;
+    return (
+      <SortableGroupMarker key={sidebarListItemId(item)} id={sidebarListItemId(item)}>
+        <SidebarProjectGroupHeader
+          header={item}
+          project={projectKey === null ? null : (layout.projectByKey.get(projectKey) ?? null)}
+          onToggle={() => layout.toggleGroup(foldKey)}
+        />
+      </SortableGroupMarker>
+    );
+  }
+  if (item.marker === "needs-you-header") {
+    return (
+      <SortableGroupMarker key={item.marker} id={sidebarMarkerId(item.marker)}>
+        <SidebarNeedsYouHeader empty={(layout.grouped?.model.floating.length ?? 0) === 0} />
+      </SortableGroupMarker>
+    );
+  }
+  return null;
 }
 
 function threadKeyOf(thread: Pick<EnvironmentThreadShell, "environmentId" | "id">): string {
   return scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
 }
 
-export function SidebarNeedsYouHeader(props: { empty: boolean }) {
+function SidebarNeedsYouHeader(props: { empty: boolean }) {
   return (
     <div data-testid="sidebar-needs-you-header">
       <div className="flex h-8 items-center gap-2 px-2 text-xs font-medium text-sidebar-muted-foreground/60">
@@ -118,7 +202,7 @@ export function SidebarNeedsYouHeader(props: { empty: boolean }) {
   );
 }
 
-export function SidebarProjectGroupHeader(props: {
+function SidebarProjectGroupHeader(props: {
   header: SidebarProjectGroupHeaderItem;
   /** Null for the "No project" group, which shows a folder instead. */
   project: ProjectFaviconProject | null;

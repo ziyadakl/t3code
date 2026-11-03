@@ -43,6 +43,11 @@ import { observeIntersection } from "../lib/observeIntersection";
 import { deadlineAfter, deadlineStore } from "@t3tools/client-runtime/clock";
 import { useDeadlinePassed } from "../hooks/useDeadline";
 import { legacyProjectCwdPreferenceKey } from "../uiStateStore";
+import {
+  projectGroupListItemId,
+  type ProjectGroupsMarker,
+  type SidebarProjectGroupHeaderItem,
+} from "./sidebar/projectGroups/projectGroupMarker";
 
 export function shouldNavigateAfterThreadPark(input: {
   readonly threadKey: string;
@@ -218,24 +223,10 @@ export type SidebarListMarker =
   | "working-header"
   | "snoozed-header"
   | "settled-header"
-  /** Fork (grouped layout): the "Needs you" label above floating rows. */
-  | "needs-you-header";
+  | ProjectGroupsMarker;
 
 export function sidebarMarkerId(marker: SidebarListMarker): string {
   return `${SIDEBAR_MARKER_PREFIX}${marker}`;
-}
-
-/** Fork (grouped layout): a project group's header, carrying what it shows. */
-export interface SidebarProjectGroupHeaderItem {
-  readonly kind: "marker";
-  readonly marker: "project-group";
-  /** Where the group's fold state is stored; unique per group. */
-  readonly foldKey: string;
-  readonly open: boolean;
-  /** Logical project key; null for the "No project" group. */
-  readonly projectKey: string | null;
-  readonly displayName: string;
-  readonly statusCounts: Readonly<Partial<Record<SidebarV2TopStatusKind, number>>>;
 }
 
 export type SidebarListItem =
@@ -246,7 +237,7 @@ export type SidebarListItem =
 export function sidebarListItemId(item: SidebarListItem): string {
   if (item.kind === "thread") return item.key;
   return item.marker === "project-group"
-    ? `${SIDEBAR_MARKER_PREFIX}project-group:${item.foldKey}`
+    ? projectGroupListItemId(item)
     : sidebarMarkerId(item.marker);
 }
 
@@ -321,33 +312,6 @@ type SidebarThreadDropPlan =
       readonly unsnooze: boolean;
     }
   | { readonly kind: "settle" };
-
-/** What a row's hover action settles toward: cards settle, settled rows un-settle, snoozed rows wake. */
-export type SidebarSweepAction = "settle" | "unsettle" | "unsnooze";
-
-export type SidebarRowQuickAction = "discard-draft" | "snooze" | "settle" | "unsettle" | "wake";
-
-/**
- * The hover quick actions a thread row offers, in display order. Decided by the
- * row's section action alone, never by its look, so a slim grouped row offers
- * exactly what the full card does.
- */
-export function resolveSidebarRowQuickActions(input: {
-  variantAction: SidebarSweepAction;
-  settlementSupported: boolean;
-  snoozeSupported: boolean;
-  /** Capability, operator access and thread state all allow a snooze now. */
-  canSnoozeNow: boolean;
-  hasUnsentDraft: boolean;
-}): readonly SidebarRowQuickAction[] {
-  if (input.variantAction === "unsnooze") return input.snoozeSupported ? ["wake"] : [];
-  if (input.variantAction === "unsettle") return input.settlementSupported ? ["unsettle"] : [];
-  const actions: SidebarRowQuickAction[] = [];
-  if (input.hasUnsentDraft) actions.push("discard-draft");
-  if (input.canSnoozeNow) actions.push("snooze");
-  if (input.settlementSupported) actions.push("settle");
-  return actions;
-}
 
 export type SidebarDropVerb = "pin" | "unpin" | "settle" | "unsettle" | "wake";
 
@@ -1041,32 +1005,6 @@ export type SidebarV2TopStatusKind =
   | "woke"
   | "working";
 
-export function resolveSidebarV2TopStatus(input: {
-  readonly status: SidebarThreadStatus;
-  readonly isUnread: boolean;
-  readonly isWoke: boolean;
-}): SidebarV2TopStatusKind | null {
-  if (input.status === "working") {
-    return "working";
-  }
-  if (input.status === "waiting") {
-    return "waiting";
-  }
-  if (input.status === "approval") {
-    return "approval";
-  }
-  if (input.status === "input" || input.status === "request") {
-    return input.status;
-  }
-  if (input.status === "failed" || input.status === "limited") {
-    return input.status;
-  }
-  if (input.isWoke) {
-    return "woke";
-  }
-  return input.isUnread ? "done" : null;
-}
-
 export function firstValidTimestampMs(
   ...candidates: ReadonlyArray<string | null | undefined>
 ): number {
@@ -1350,22 +1288,6 @@ function sortProjectsByActivity<TProject extends SidebarProject>(
     .map(({ project }) => project);
 }
 
-/** Maps a thread's physical project (machine + project id) to the logical
-    project key that groups the same code across machines. */
-export function buildLogicalProjectKeyLookup(
-  projects: ReadonlyArray<Pick<LogicalSidebarProject, "projectKey" | "memberProjectRefs">>,
-): (thread: { readonly environmentId: string; readonly projectId: string }) => string | undefined {
-  const projectKeyByRef = new Map(
-    projects.flatMap((project) =>
-      project.memberProjectRefs.map(
-        (projectRef) =>
-          [`${projectRef.environmentId}\0${projectRef.projectId}`, project.projectKey] as const,
-      ),
-    ),
-  );
-  return (thread) => projectKeyByRef.get(`${thread.environmentId}\0${thread.projectId}`);
-}
-
 export function sortLogicalProjectsForSidebar<
   TProject extends LogicalSidebarProject,
   TThread extends ScopedSidebarThread,
@@ -1374,11 +1296,18 @@ export function sortLogicalProjectsForSidebar<
   threads: readonly TThread[],
   sortOrder: SidebarProjectSortOrder,
 ): TProject[] {
-  const projectKeyOf = buildLogicalProjectKeyLookup(projects);
+  const groupKeyByProjectRef = new Map(
+    projects.flatMap((project) =>
+      project.memberProjectRefs.map(
+        (projectRef) =>
+          [`${projectRef.environmentId}\0${projectRef.projectId}`, project.projectKey] as const,
+      ),
+    ),
+  );
   const threadsByProjectKey = new Map<string, TThread[]>();
   for (const thread of threads) {
     if (thread.archivedAt !== null) continue;
-    const projectKey = projectKeyOf(thread);
+    const projectKey = groupKeyByProjectRef.get(`${thread.environmentId}\0${thread.projectId}`);
     if (!projectKey) continue;
     const existing = threadsByProjectKey.get(projectKey);
     if (existing) {

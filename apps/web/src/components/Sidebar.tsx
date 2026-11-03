@@ -257,10 +257,9 @@ import {
   useSidebarEnvironmentFilterUi,
 } from "./sidebar/useSidebarEnvironmentFilter";
 import {
-  SidebarNeedsYouHeader,
-  SidebarProjectGroupHeader,
+  renderProjectGroupMarker,
   useSidebarProjectGroups as useSidebarInboxGroups,
-} from "./sidebar/SidebarProjectGroups";
+} from "./sidebar/projectGroups/SidebarProjectGroups";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
 import { TooltipProvider } from "./ui/tooltip";
 import { composerDraftHasUserContent, DraftId, useComposerDraftStore } from "../composerDraftStore";
@@ -280,7 +279,6 @@ import {
   SidebarDragBoundary,
   SidebarSectionHeader,
   SidebarSectionPlaceholder,
-  SortableSidebarMarker,
 } from "./sidebar/SidebarListMarkers";
 
 function sameSidebarProviderEntries(
@@ -567,8 +565,9 @@ function useSidebarThreads(input: {
     routeThreadKey,
     snoozeNow: partition.snoozeNow,
     observedReturnAt: inboxReturns.returnedAt,
+    workingShelfEnabled,
+    suppressed: folderGroups !== null,
   });
-  const groupedActive = folderGroups === null ? projectGroupsLayout.grouped : null;
   const projectFolders =
     folderGroups === null
       ? null
@@ -589,12 +588,11 @@ function useSidebarThreads(input: {
               : EMPTY_THREADS,
           };
         });
-  // Folded group rows don't render, so they leave keyboard order and jump hints.
   const orderedThreads = [
     ...pinnedThreads,
     ...(projectFolders !== null
       ? projectFolders.flatMap((folder) => folder.threads)
-      : (groupedActive?.visibleThreads ?? activeThreads)),
+      : projectGroupsLayout.orderedActive),
     ...visibleWorkingThreads,
     ...visibleSnoozedThreads,
     ...renderedSettledThreads,
@@ -614,7 +612,6 @@ function useSidebarThreads(input: {
     threads,
     allThreads,
     projectGroupsLayout,
-    groupedActive,
     workingShelfEnabled,
     searchableThreads: [
       ...pinnedThreads,
@@ -1386,7 +1383,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   );
 
   const {
-    workingShelfEnabled,
     pinnedThreads,
     draggableThreadKeys,
     activeReorderableThreadKeys,
@@ -1422,7 +1418,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     pinnedKeysById,
     activeKeysById,
     projectGroupsLayout,
-    groupedActive,
   } = useSidebarThreads({
     projectScopeKey,
     scopedProjectKeys,
@@ -1444,14 +1439,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     keepEmptyFolders: (group) =>
       scopedProjectGroups.length > 0 || (group.pinned && !group.archived),
   });
-  // Fork (grouped layout): off while upstream's boring-mode folders are on.
-  const projectGroupsEnabled = groupedActive !== null;
-  const openProjectGroupForDrop = projectGroupsEnabled
-    ? projectGroupsLayout.openGroupForDrop
-    : () => {};
-  // Fork: the inbox keeps a user-arranged order only while it is neither
-  // time-ordered (Working beta) nor grouped by project, where rows hold places.
-  const inboxArrangeable = !workingShelfEnabled && !projectGroupsEnabled;
 
   // Ranked across environments as the palette ranks them, so one
   // environment's list does not sit above another's better matches; rows
@@ -2042,7 +2029,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     const pinnedRows = rowsOf(pinnedThreads, "pinned");
     items.push(...pinnedRows);
     items.push({ kind: "marker", marker: "pinned-divider" });
-    const activeRows = groupedActive?.items ?? rowsOf(activeThreads, "active");
+    const activeRows = projectGroupsLayout.activeRows ?? rowsOf(activeThreads, "active");
     items.push({ kind: "marker", marker: "active-placeholder" });
     items.push(...activeRows);
     if (workingThreads.length > 0) {
@@ -2125,8 +2112,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           threadByKey,
           settledThreads,
           activeThreads,
-          // Grouped, the inbox has no flat order to land in.
-          workingShelfEnabled: workingShelfEnabled && !projectGroupsEnabled,
+          workingShelfEnabled: projectGroupsLayout.flatTimeOrdered,
         });
   const sidebarSortingStrategy = createSidebarSortingStrategy({
     items: sidebarListItems,
@@ -2134,7 +2120,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     boundaryLabelHeight: SIDEBAR_DRAG_LABEL_HEIGHT,
     settledOrder: draggedSettledOrder,
     ...(draggedActiveOrder === undefined ? {} : { activeOrder: draggedActiveOrder }),
-    inboxArrangeable,
+    inboxArrangeable: projectGroupsLayout.inboxArrangeable,
     settledExpanded: settledShelfExpanded,
     settledVisibleCount,
     routeThreadKey: routeRowThreadKey,
@@ -2166,7 +2152,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             activeOrder: activeKeys,
             activeKeysById,
             activeReorderableKeys: activeReorderableThreadKeys,
-            activeTimeOrdered: !inboxArrangeable,
+            activeTimeOrdered: projectGroupsLayout.activeTimeOrdered,
           }).kind !== "none"
         );
       },
@@ -2199,7 +2185,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       activeOrder: activeKeys,
       activeKeysById,
       activeReorderableKeys: activeReorderableThreadKeys,
-      activeTimeOrdered: !inboxArrangeable,
+      activeTimeOrdered: projectGroupsLayout.activeTimeOrdered,
     });
     if (plan.kind === "none") return;
     if (plan.kind === "settle" && settlingThreadKeysRef.current.has(activeKey)) return;
@@ -2237,7 +2223,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     setOptimisticDrop(drop);
     // Fork (grouped layout): a thread back from a shelf must not vanish into a folded group.
     if (target.section === "active" && (activeSection === "settled" || activeSection === "snoozed"))
-      openProjectGroupForDrop(applySidebarThreadDrop(activeThread, "active", drop.occurredAt));
+      projectGroupsLayout.openGroupForDrop(
+        applySidebarThreadDrop(activeThread, "active", drop.occurredAt),
+      );
     void (async () => {
       const run = async (
         operation: Promise<AtomCommandResult<unknown, unknown>>,
@@ -3559,21 +3547,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           continue;
                         }
                         underGroupHeader = item.marker === "project-group";
-                        if (item.marker === "project-group") {
-                          const { foldKey, projectKey } = item;
-                          items.push(
-                            <SortableSidebarMarker key={sidebarListItemId(item)} marker={item}>
-                              <SidebarProjectGroupHeader
-                                header={item}
-                                project={
-                                  projectKey === null
-                                    ? null
-                                    : (projectGroupsLayout.projectByKey.get(projectKey) ?? null)
-                                }
-                                onToggle={() => projectGroupsLayout.toggleGroup(foldKey)}
-                              />
-                            </SortableSidebarMarker>,
-                          );
+                        const groupNode = renderProjectGroupMarker(item, projectGroupsLayout);
+                        if (groupNode !== null) {
+                          items.push(groupNode);
                           continue;
                         }
                         if (projectFolders !== null && item.marker === "active-placeholder") {
@@ -3602,15 +3578,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           continue;
                         }
                         switch (item.marker) {
-                          case "needs-you-header":
-                            items.push(
-                              <SortableSidebarMarker key={item.marker} marker={item.marker}>
-                                <SidebarNeedsYouHeader
-                                  empty={(groupedActive?.model.floating.length ?? 0) === 0}
-                                />
-                              </SortableSidebarMarker>,
-                            );
-                            break;
                           case "pinned-header":
                             items.push(
                               <SidebarDragBoundary

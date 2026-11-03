@@ -135,7 +135,7 @@ Threads that are working or waiting on work they will resume from move into a co
 That includes subagents, watched pull requests, and background commands or monitors the agent
 says it is waiting on. A dev server or other process an agent leaves running does not keep a thread
 there. A thread returns to the top of the active list when it finishes, fails, or needs an approval or
-answer (with project groups on, to **Needs you** or its project's group). The Working section lists the thread you last sent work to first. Pinned threads stay in
+answer. The Working section lists the thread you last sent work to first. Pinned threads stay in
 the pinned section.
 
 This is on by default. Turn it off with **Settings → General → Working section** on web and desktop,
@@ -145,24 +145,9 @@ choice.
 While this is on, the active list is ordered by when each thread last came back to you, so you
 cannot drag or move threads within it. Your saved order returns when you turn it off.
 
-### Group threads by project
+The default sidebar also groups the active list by project: see [Project groups](./sidebar-project-groups.md).
 
-On web and desktop, the active list folds threads under one header per project. The same code
-opened on several machines shares one group, and threads with no project sit under **No project**.
-Groups start folded, never open by themselves, and remember whether you left them open or folded
-across restarts. The group with the newest activity comes first. A folded header shows a count per
-status of what still needs you: unread threads, plus threads waiting on your input or approval.
-
-Above the groups, **Needs you** holds threads whose status is switched on under **Settings →
-General → Float to the top**. By default **Done**, **Needs input**, **Needs approval**, and
-**Failed** float; **Woke**, **Limited**, and **Waiting** stay in their group. A thread drops back
-into its group once its status no longer applies.
-
-While grouping is on, you cannot drag threads into a custom order inside the active list. Pinned
-threads and the Working, Snoozed, and Settled sections work as before. Turn off **Settings →
-General → Group threads by project** for the flat list and your saved order.
-
-### Project folders (beta)
+### Group threads by project (beta)
 
 Turn on **Settings → Labs → Boring sidebar (group by project)** on web and desktop to put active
 threads in a folder for each project. Pinned projects come first. A project with no active

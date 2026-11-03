@@ -8,6 +8,7 @@ import {
   type SidebarListMarker,
   type SidebarSection,
 } from "./Sidebar.logic";
+import { groupedRowKeys, projectGroupedInbox } from "./sidebar/projectGroups/groupedDrag";
 
 const stationary = { x: 0, y: 0, scaleX: 1, scaleY: 1 };
 const hidden = { ...stationary, scaleY: 0 };
@@ -18,20 +19,6 @@ const isShelfHeader = (item: SidebarListItem | undefined) =>
   (item.marker === "working-header" ||
     item.marker === "snoozed-header" ||
     item.marker === "settled-header");
-
-const isGroupedInboxMarker = (item: SidebarListItem) =>
-  item.kind === "marker" && (item.marker === "needs-you-header" || item.marker === "project-group");
-
-/** Rows sitting under a project group header: one-line rows (grouped layout). */
-function groupedRowKeys(items: readonly SidebarListItem[]): ReadonlySet<string> {
-  const keys = new Set<string>();
-  let underGroup = false;
-  for (const item of items) {
-    if (item.kind === "marker") underGroup = item.marker === "project-group";
-    else if (underGroup) keys.add(item.key);
-  }
-  return keys;
-}
 
 export function restrictBelowSidebarLabel(
   { transform, containerNodeRect, draggingNodeRect }: Parameters<Modifier>[0],
@@ -152,14 +139,9 @@ export function createSidebarSortingStrategy(input: {
         }
         continue;
       }
-      if (groupedRows.has(item.key)) {
+      if (item.section === "pinned" || item.section === "active" || item.section === "working")
         // A one-line row in a project group measures neither a card nor a shelf row.
-      } else if (
-        item.section === "pinned" ||
-        item.section === "active" ||
-        item.section === "working"
-      )
-        cardHeight ??= rects[index]?.height;
+        cardHeight ??= groupedRows.has(item.key) ? undefined : rects[index]?.height;
       else slimHeight ??= rects[index]?.height;
       if (item.key !== active.key) groups[item.section].push(item);
     }
@@ -180,11 +162,7 @@ export function createSidebarSortingStrategy(input: {
     const index = group.findIndex(
       (item) => (ranks.get(item.key) ?? Number.POSITIVE_INFINITY) > rank,
     );
-    group.splice(index < 0 ? group.length : index, 0, {
-      kind: "thread",
-      key: active.key,
-      section: target.section,
-    });
+    group.splice(index < 0 ? group.length : index, 0, { ...active, section: target.section });
     const settledOrder = (
       input.settledOrder.length > 0 ? input.settledOrder : groups.settled.map((item) => item.key)
     ).filter((key) => key !== active.key || target.section === "settled");
@@ -205,30 +183,8 @@ export function createSidebarSortingStrategy(input: {
     marker("pinned-header");
     projected.push(...groups.pinned);
     marker("pinned-divider");
-    if (inboxHoldsPlaces) {
-      // Fork (grouped layout): the inbox has no order to preview, so its
-      // headers and rows hold their places. A row leaving closes its gap; an
-      // arriving row opens one under "Needs you".
-      const inbox: SidebarListItem[] = [];
-      for (const item of items) {
-        if (item.kind === "marker" ? isGroupedInboxMarker(item) : item.section === "active") {
-          if (item.kind === "thread" && item.key === active.key && target.section !== "active")
-            continue;
-          inbox.push(item);
-          if (
-            item.kind === "marker" &&
-            item.marker === "needs-you-header" &&
-            active.section !== "active" &&
-            target.section === "active"
-          )
-            inbox.push({ ...active, section: "active" });
-        }
-      }
-      if (!inbox.some((item) => item.kind === "thread")) marker("active-placeholder");
-      projected.push(...inbox);
-    } else {
-      section("active");
-    }
+    if (inboxHoldsPlaces) projected.push(...projectGroupedInbox(items, active, target));
+    else section("active");
     if (items.some((item) => item.kind === "marker" && item.marker === "working-header")) {
       marker("working-header");
       projected.push(...groups.working);
@@ -251,7 +207,6 @@ export function createSidebarSortingStrategy(input: {
         (item.section === "pinned" || item.section === "active" || item.section === "working")
           ? cardHeight
           : slimHeight;
-      // A grouped row that stays in the inbox keeps its own measured height.
       const moved =
         item.kind === "thread" &&
         item.key === active.key &&
