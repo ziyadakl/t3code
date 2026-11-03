@@ -56,7 +56,8 @@ import { MessageCopyButton } from "./MessageCopyButton";
 import { promptLinkFor } from "../promptLinks/copyPromptLink";
 import { PierreEntryIcon } from "./PierreEntryIcon";
 import { formatBytes } from "../../lib/formatBytes";
-import { isMessageRewindDisabled, shouldCollapseUserMessage } from "./MessagesTimeline.logic";
+import { shouldCollapseUserMessage } from "./MessagesTimeline.logic";
+import { isMessageRewindDisabled } from "./messageRewind.logic";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   asKnownContextRecord,
