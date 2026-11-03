@@ -81,4 +81,34 @@ fork_link_hits "$tmp/dist" ziyadakl/t3code >"$tmp/out"
 expect "fork_link_hits fails a build that names the fork" "1" "$?"
 expect "fork_link_hits names the file" "assets/bad.js" "$(sed 's|^.*dist/||' "$tmp/out" | head -1)"
 
+# --- footprint: Upstream files the fork edits (modified or deleted), not the fork's new files ---
+git init -q "$tmp/fp"
+(
+  cd "$tmp/fp"
+  git config user.email t@t && git config user.name t
+  printf 'a\nb\nc\n' >up1.ts
+  printf 'x\ny\n' >up2.ts
+  git add -A && git commit -qm base
+  git branch -M main
+  git checkout -qb upstream
+  echo 1 >up3.ts
+  git add -A && git commit -qm "upstream moves on"
+  git checkout -qb fork main
+  printf 'a\nB\nc\nd\n' >up1.ts
+  git rm -q up2.ts
+  echo 1 >fork.ts
+  git add -A && git commit -qm fork
+  git branch fork-edits
+  git mv up1.ts moved.ts
+  git commit -qm rename
+)
+expect "footprint counts modified and deleted Upstream files, not the fork's new ones" \
+  "2 files, +2 -3 lines" "$(cd "$tmp/fp" && footprint upstream fork-edits)"
+expect "footprint counts a rename as the deletion of the Upstream file" \
+  "2 files, +0 -5 lines" "$(cd "$tmp/fp" && footprint upstream fork)"
+expect "footprint is zero when the fork edits nothing" \
+  "0 files, +0 -0 lines" "$(cd "$tmp/fp" && footprint upstream upstream)"
+(cd "$tmp/fp" && footprint upstream no-such-ref >/dev/null 2>&1)
+expect "footprint fails on a bad ref instead of reporting zero" "1" "$((($? != 0) ? 1 : 0))"
+
 if [ "$fails" -eq 0 ]; then echo "all passed"; else echo "$fails failed"; exit 1; fi
