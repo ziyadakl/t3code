@@ -1,7 +1,7 @@
 import { isCompactCommand } from "@t3tools/shared/compactCommand";
 import { DEV_SERVER_TERMINAL_ID } from "~/devServer";
-import { RewindDialog } from "./chat/RewindDialog";
-import { RewindPicker } from "./chat/RewindPicker";
+import { MessageRewindOverlays } from "./chat/MessageRewindOverlays";
+import { useMessageRewind } from "./chat/useMessageRewind";
 import { ChildThreadApprovals } from "./chat/ChildThreadApprovals";
 import { workspaceAreaProps } from "../lib/workspaceFocus";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
@@ -2802,16 +2802,7 @@ export default function ChatView(props: ChatViewProps) {
                 : null;
   const openSideChatStable = useStableCallback(() => void sideChat.open());
   const sendSideChatStable = useStableCallback((prompt: string) => sideChat.open(prompt));
-  const {
-    rewindPickerProps,
-    rewindDialogOpen,
-    messageRewindMenu,
-    onCancelRewindDialog,
-    onChooseRewindDialog,
-    onConfirmRevertStable,
-    onForkFromRunStable,
-    onRevertTimelineTurnStable,
-  } = useTimelineRewind({
+  const timelineRewindInput = {
     environmentId,
     routeThreadRef,
     routeThreadKey,
@@ -2829,14 +2820,20 @@ export default function ChatView(props: ChatViewProps) {
     composerRef,
     composerDraftTarget,
     setThreadError,
-    supportsMessageRewind,
-    canInterruptRunningThread,
-    isWorking,
-    isServerThread,
-    timelineEntries,
-    turnDiffSummaries,
-    onInterrupt,
-  });
+  };
+  const { onForkFromRunStable } = useTimelineRewind(timelineRewindInput);
+  // The fork's rewind menu replaces the revert callbacks `useTimelineRewind` returns.
+  const { rewindOverlayProps, onConfirmRevertStable, onRevertTimelineTurnStable } =
+    useMessageRewind({
+      ...timelineRewindInput,
+      supportsMessageRewind,
+      canInterruptRunningThread,
+      isWorking,
+      isServerThread,
+      timelineEntries,
+      turnDiffSummaries,
+      onInterrupt,
+    });
   const onCompactContext = () => {
     if (compactDisabled) return;
     void sendStandaloneCommand("/compact", "Failed to compact context.");
@@ -4040,14 +4037,7 @@ export default function ChatView(props: ChatViewProps) {
         </ChatRightPanel>
       ) : null}
 
-      <RewindPicker {...rewindPickerProps} />
-      <RewindDialog
-        open={rewindDialogOpen}
-        rows={messageRewindMenu.rows}
-        note={messageRewindMenu.note}
-        onCancel={onCancelRewindDialog}
-        onChoose={onChooseRewindDialog}
-      />
+      <MessageRewindOverlays {...rewindOverlayProps} />
       <RevertConfirmHost threadKey={routeThreadKey} onConfirm={onConfirmRevertStable} />
       {embedded ? null : <LinkPullRequestDialogHost />}
       <ThreadVisitWatermark threadRef={routeThreadRef} />

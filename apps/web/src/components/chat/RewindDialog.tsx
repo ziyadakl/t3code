@@ -12,7 +12,7 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Textarea } from "../ui/textarea";
-import type { MessageRewindMenuRow } from "../ChatView.logic";
+import type { MessageRewindMenuRow } from "./messageRewind.logic";
 
 /** Claude Code's `/rewind` menu labels. */
 const REWIND_CHOICE_LABELS: Record<ThreadRewindChoice, string> = {

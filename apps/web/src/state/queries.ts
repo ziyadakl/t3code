@@ -17,7 +17,6 @@ import { messageSearchTokens } from "@t3tools/shared/paletteSearch";
 import { type VcsRefTarget } from "@t3tools/client-runtime/state/vcs";
 import type {
   EnvironmentId,
-  MessageId,
   OrchestrationV2GetTurnItemResult,
   ProjectContentMatch,
   ProjectEntry,
@@ -445,24 +444,6 @@ export function useCheckpointDiff(
     turnTarget === null ? null : orchestrationEnvironment.turnDiff(turnTarget),
   );
   return fullThreadTarget === null ? turn : fullThread;
-}
-
-/** What restoring code to before a sent message would change, while its rewind menu is open. */
-export function useThreadRewindPreview(
-  target: {
-    readonly environmentId: EnvironmentId;
-    readonly threadId: ThreadId;
-    readonly messageId: MessageId;
-  } | null,
-) {
-  return useEnvironmentQuery(
-    target === null
-      ? null
-      : orchestrationEnvironment.threadRewindPreview({
-          environmentId: target.environmentId,
-          input: { threadId: target.threadId, messageId: target.messageId },
-        }),
-  );
 }
 
 /** Reads one item's detail from somewhere other than the environment, as the guest page does. */

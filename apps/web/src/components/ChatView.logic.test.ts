@@ -32,7 +32,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { Atom, AsyncResult } from "effect/reactivity";
+import { Atom } from "effect/reactivity";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentThreadDetails } from "../state/threads";
 
@@ -53,15 +53,7 @@ import {
   deriveLockedProvider,
   hasServerAcknowledgedLocalDispatch,
   waitForRevertedMessage,
-  deriveMessageRewindMenu,
-  decideMessageRewindStart,
-  planMessageRewind,
-  messageRewindBlockedReason,
-  waitForThreadToStop,
-  loadThreadRewindPreview,
 } from "./ChatView.logic";
-import { orchestrationEnvironment } from "../state/orchestration";
-import * as Cause from "effect/Cause";
 
 const environmentId = EnvironmentId.make("environment-local");
 const projectId = ProjectId.make("project-1");
@@ -807,7 +799,7 @@ describe("waitForRevertedMessage", () => {
 
   it("rejects with the projected reason when the rollback fails for good", async () => {
     const { state, projection } = projectionAtom();
-    const waiting = waitForRevertedMessage(threadRef, messageId, requestId, async () => {});
+    const waiting = waitForRevertedMessage(threadRef, 1, requestId, async () => {});
     await Promise.resolve();
     appAtomRegistry.set(state, {
       data: Option.some({
@@ -822,112 +814,6 @@ describe("waitForRevertedMessage", () => {
     await expect(waiting).rejects.toThrow("The provider could not roll back.");
   });
 
-  it("resolves once the message's run is rolled back, whatever its ordinal", async () => {
-    const { state, projection } = projectionAtom();
-    // A turn T3 Code ran on a chat whose three imported prompts were numbered after it.
-    const waiting = waitForRevertedMessage(threadRef, messageId, requestId, async () => {});
-    await Promise.resolve();
-    appAtomRegistry.set(state, {
-      data: Option.some({
-        ...projection,
-        runs: [{ id: RunId.make("run-2"), ordinal: 1, status: "rolled_back" }],
-      } as never),
-    });
-
-    await expect(waiting).resolves.toBeNull();
-  });
-
-  it("resolves with the notice once a code restore finishes, though no turn was rewound", async () => {
-    const { state, projection } = projectionAtom();
-    const waiting = waitForRevertedMessage(threadRef, messageId, requestId, async () => {});
-    await Promise.resolve();
-    appAtomRegistry.set(state, {
-      data: Option.some({
-        ...projection,
-        thread: {
-          ...projection.thread,
-          rollbackCompletion: {
-            requestId,
-            notice: "Code restored, but 1 file was left as it is: a link made it unsafe to write.",
-          },
-        },
-      }),
-    });
-
-    await expect(waiting).resolves.toBe(
-      "Code restored, but 1 file was left as it is: a link made it unsafe to write.",
-    );
-  });
-
-  it("waits for a rewind's notice though its run is rolled back first", async () => {
-    const { state, projection } = projectionAtom();
-    const waiting = waitForRevertedMessage(threadRef, messageId, requestId, async () => {}, {
-      awaitsRecordedOutcome: true,
-    });
-    // The server accepted the command before its run rolled back.
-    await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
-    const rolledBack = {
-      ...projection,
-      thread: { ...projection.thread, rollbackRequestId: requestId },
-      runs: [{ id: RunId.make("run-2"), ordinal: 2, status: "rolled_back" }],
-    } as never as typeof projection;
-    appAtomRegistry.set(state, { data: Option.some(rolledBack) });
-    appAtomRegistry.set(state, {
-      data: Option.some({
-        ...rolledBack,
-        thread: {
-          ...rolledBack.thread,
-          rollbackCompletion: {
-            requestId,
-            notice: "Code restored, but 1 file was left as it is: a link made it unsafe to write.",
-          },
-        },
-      }),
-    });
-
-    await expect(waiting).resolves.toBe(
-      "Code restored, but 1 file was left as it is: a link made it unsafe to write.",
-    );
-  });
-
-  it("resolves a rewind that a later rewind of the same message overtook", async () => {
-    const { state, projection } = projectionAtom();
-    const waiting = waitForRevertedMessage(threadRef, messageId, requestId, async () => {}, {
-      awaitsRecordedOutcome: true,
-    });
-    // The server accepted the command before its run rolled back.
-    await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
-    appAtomRegistry.set(state, {
-      data: Option.some({
-        ...projection,
-        thread: { ...projection.thread, rollbackRequestId: CommandId.make("rollback-2") },
-        runs: [{ id: RunId.make("run-2"), ordinal: 2, status: "rolled_back" }],
-      } as never),
-    });
-
-    await expect(waiting).resolves.toBeNull();
-  });
-
-  it("ignores a failure recorded for an earlier rollback", async () => {
-    vi.useFakeTimers();
-    const { state, projection } = projectionAtom();
-    const waiting = waitForRevertedMessage(threadRef, messageId, requestId, async () => {}, {
-      timeoutMs: 50,
-    });
-    const settled = expect(waiting).rejects.toThrow("Timed out waiting for the thread to rewind.");
-    appAtomRegistry.set(state, {
-      data: Option.some({
-        ...projection,
-        thread: {
-          ...projection.thread,
-          rollbackFailure: { requestId: CommandId.make("rollback-0"), message: "Old failure." },
-        },
-      }),
-    });
-    await vi.advanceTimersByTimeAsync(50);
-    await settled;
-    vi.useRealTimers();
-  });
   it.each([
     ["same", "streamed"],
     ["replacement", "streamed"],
@@ -973,9 +859,7 @@ describe("waitForRevertedMessage", () => {
       };
       appAtomRegistry.set(state, { data: Option.some(bounded) });
       let outcome = "pending";
-      const waiting = waitForRevertedMessage(threadRef, messageId, requestId, async () => {}, {
-        turnCount: 0,
-      }).then(
+      const waiting = waitForRevertedMessage(threadRef, 0, requestId, async () => {}).then(
         () => {
           outcome = "reverted";
         },
@@ -1017,67 +901,60 @@ describe("waitForRevertedMessage", () => {
     },
   );
 
-  it.each(["by message id", "paged out"] as const)(
-    "waits for the requested target when another client finishes a shallower rewind (%s)",
-    async (targeting) => {
-      vi.useFakeTimers();
-      const { state, projection } = projectionAtom();
-      if (targeting === "paged out") {
-        appAtomRegistry.set(state, { data: Option.some({ ...projection, messages: [] }) });
-      }
-      let outcome = "pending";
-      const waiting = waitForRevertedMessage(threadRef, messageId, requestId, async () => {}, {
-        turnCount: 1,
-      }).then(
-        () => {
-          outcome = "reverted";
-        },
-        (error: Error) => {
-          outcome = error.message;
-        },
-      );
+  it("waits for the requested target when another client finishes a shallower rewind", async () => {
+    vi.useFakeTimers();
+    const { state, projection } = projectionAtom();
+    let outcome = "pending";
+    const waiting = waitForRevertedMessage(threadRef, 1, requestId, async () => {}).then(
+      () => {
+        outcome = "reverted";
+      },
+      (error: Error) => {
+        outcome = error.message;
+      },
+    );
 
-      try {
-        await vi.advanceTimersByTimeAsync(0);
-        expect(outcome).toBe("pending");
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(outcome).toBe("pending");
 
-        // Our command is accepted while the earlier target-3 effect is still running.
-        const shallowerRewind = {
-          ...projection,
-          thread: { ...projection.thread, rollbackRequestId: requestId, rollbackFailure: null },
-          providerThreads: projection.providerThreads.map((thread) => ({
+      // Our command is accepted while the earlier target-3 effect is still running.
+      const shallowerRewind = {
+        ...projection,
+        thread: { ...projection.thread, rollbackRequestId: requestId, rollbackFailure: null },
+        providerThreads: projection.providerThreads.map((thread) => ({
+          ...thread,
+          lastRunOrdinal: 3,
+        })),
+        runs: projection.runs.map((run) =>
+          run.ordinal > 3 ? { ...run, status: "rolled_back" as const } : run,
+        ),
+      };
+      appAtomRegistry.set(state, { data: Option.some(shallowerRewind) });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(outcome).toBe("pending");
+
+      appAtomRegistry.set(state, {
+        data: Option.some({
+          ...shallowerRewind,
+          providerThreads: shallowerRewind.providerThreads.map((thread) => ({
             ...thread,
-            lastRunOrdinal: 3,
+            lastRunOrdinal: 1,
           })),
-          runs: projection.runs.map((run) =>
-            run.ordinal > 3 ? { ...run, status: "rolled_back" as const } : run,
+          runs: shallowerRewind.runs.map((run) =>
+            run.ordinal > 1 ? { ...run, status: "rolled_back" as const } : run,
           ),
-        };
-        appAtomRegistry.set(state, { data: Option.some(shallowerRewind) });
-        await vi.advanceTimersByTimeAsync(0);
-        expect(outcome).toBe("pending");
+        }),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(outcome).toBe("reverted");
+      await waiting;
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
 
-        appAtomRegistry.set(state, {
-          data: Option.some({
-            ...shallowerRewind,
-            providerThreads: shallowerRewind.providerThreads.map((thread) => ({
-              ...thread,
-              lastRunOrdinal: 1,
-            })),
-            runs: shallowerRewind.runs.map((run) =>
-              run.ordinal > 1 ? { ...run, status: "rolled_back" as const } : run,
-            ),
-          }),
-        });
-        await vi.advanceTimersByTimeAsync(0);
-        expect(outcome).toBe("reverted");
-        await waiting;
-      } finally {
-        vi.clearAllTimers();
-        vi.useRealTimers();
-      }
-    },
-  );
   it("rejects a stale edit already rewound by another client during attachment preparation", async () => {
     vi.useFakeTimers();
     const { state, projection } = projectionAtom();
@@ -1097,9 +974,7 @@ describe("waitForRevertedMessage", () => {
     });
     const revert = vi.fn(async () => {});
     let outcome = "pending";
-    const waiting = waitForRevertedMessage(threadRef, messageId, requestId, revert, {
-      turnCount: 1,
-    }).then(
+    const waiting = waitForRevertedMessage(threadRef, 1, requestId, revert).then(
       () => {
         outcome = "reverted";
       },
@@ -1117,309 +992,6 @@ describe("waitForRevertedMessage", () => {
       vi.clearAllTimers();
       vi.useRealTimers();
     }
-  });
-  it("rejects an edit whose message was already rewound by another client", async () => {
-    const { state, projection } = projectionAtom();
-    appAtomRegistry.set(state, {
-      data: Option.some({
-        ...projection,
-        runs: projection.runs.map((run) =>
-          run.ordinal > 1 ? { ...run, status: "rolled_back" as const } : run,
-        ),
-      }),
-    });
-    const revert = vi.fn(async () => {});
-    await expect(waitForRevertedMessage(threadRef, messageId, requestId, revert)).rejects.toThrow(
-      "The thread has changed.",
-    );
-    expect(revert).not.toHaveBeenCalled();
-  });
-});
-
-describe("messageRewindBlockedReason", () => {
-  it("refuses while a message waits in the queue, even one Stop held", () => {
-    expect(
-      messageRewindBlockedReason([
-        { status: "interrupted" },
-        { status: "queued", queueHeld: true },
-      ]),
-    ).toBe("Send or remove your queued messages before rewinding.");
-  });
-
-  it("allows a rewind once nothing waits in the queue", () => {
-    expect(
-      messageRewindBlockedReason([{ status: "completed" }, { status: "rolled_back" }]),
-    ).toBeNull();
-  });
-});
-
-describe("deriveMessageRewindMenu", () => {
-  const rows = (available: { readonly code: boolean }) => [
-    { choice: "code-and-conversation", available: available.code },
-    { choice: "conversation", available: true },
-    { choice: "code", available: available.code },
-  ];
-
-  it("enables the code choices, in Claude Code's order, when restoring would change files", () => {
-    expect(
-      deriveMessageRewindMenu({
-        preview: { filesChanged: ["/w/a.ts", "/w/b.ts"], insertions: 3, deletions: 1 },
-        error: null,
-      }),
-    ).toEqual({
-      rows: rows({ code: true }),
-      note: "Restoring code changes 2 files (+3 -1).",
-    });
-  });
-
-  it("keeps every choice in place from the first paint, so no button moves under a tap", () => {
-    const checking = deriveMessageRewindMenu({ preview: null, error: null });
-    const checked = deriveMessageRewindMenu({
-      preview: { filesChanged: ["/w/a.ts"], insertions: 1, deletions: 0 },
-      error: null,
-    });
-
-    expect(checking.rows.map((row) => row.choice)).toEqual(checked.rows.map((row) => row.choice));
-    expect(checking).toEqual({ rows: rows({ code: false }), note: "Checking for code changes..." });
-  });
-
-  it("disables the code choices when Claude changed no files after the message", () => {
-    expect(
-      deriveMessageRewindMenu({
-        preview: { filesChanged: [], insertions: 0, deletions: 0 },
-        error: null,
-      }),
-    ).toEqual({ rows: rows({ code: false }), note: "Claude changed no files after this message." });
-  });
-
-  it("says why there is no code to restore when Claude kept no snapshots", () => {
-    expect(
-      deriveMessageRewindMenu({
-        preview: {
-          filesChanged: [],
-          insertions: 0,
-          deletions: 0,
-          unavailableReason: "Claude kept no file snapshots for this message.",
-        },
-        error: null,
-      }),
-    ).toEqual({
-      rows: rows({ code: false }),
-      note: "Claude kept no file snapshots for this message.",
-    });
-  });
-
-  it("says when the check failed", () => {
-    expect(deriveMessageRewindMenu({ preview: null, error: "Connection lost." })).toEqual({
-      rows: rows({ code: false }),
-      note: "Could not check for code changes: Connection lost.",
-    });
-  });
-});
-
-describe("planMessageRewind", () => {
-  const idle = {
-    canInterrupt: false,
-    isWorking: false,
-    supportsMessageRewind: true,
-    afterStop: false,
-    runs: [{ status: "completed", queueHeld: false }],
-  } as const;
-  const queued = [
-    { status: "running", queueHeld: false },
-    { status: "queued", queueHeld: false },
-  ] as const;
-
-  it("refuses a Claude rewind while a message waits in the queue, before stopping anything", () => {
-    expect(
-      planMessageRewind({ ...idle, canInterrupt: true, isWorking: true, runs: queued }),
-    ).toEqual({
-      kind: "refuse",
-      reason: "Send or remove your queued messages before rewinding.",
-    });
-  });
-
-  it("stops a running turn first", () => {
-    expect(
-      planMessageRewind({
-        ...idle,
-        canInterrupt: true,
-        isWorking: true,
-        runs: [{ status: "running", queueHeld: false }],
-      }),
-    ).toEqual({ kind: "stop-first" });
-  });
-
-  it("refuses when Stop held a queued message while the turn stopped", () => {
-    expect(
-      planMessageRewind({
-        ...idle,
-        afterStop: true,
-        runs: [
-          { status: "interrupted", queueHeld: false },
-          { status: "queued", queueHeld: true },
-        ],
-      }),
-    ).toEqual({
-      kind: "refuse",
-      reason: "Send or remove your queued messages before rewinding.",
-    });
-  });
-
-  it("asks the user to wait for work that Stop cannot reach", () => {
-    expect(planMessageRewind({ ...idle, isWorking: true })).toEqual({
-      kind: "refuse",
-      reason: "Wait for the current work to finish before rewinding.",
-    });
-  });
-
-  it("checks with Claude which files a rewind would change", () => {
-    expect(planMessageRewind(idle)).toEqual({ kind: "check-files" });
-    expect(planMessageRewind({ ...idle, afterStop: true })).toEqual({ kind: "check-files" });
-  });
-
-  it("reverts at once for other providers when nothing was running", () => {
-    expect(planMessageRewind({ ...idle, supportsMessageRewind: false })).toEqual({
-      kind: "revert",
-    });
-  });
-
-  it("asks other providers' users after a stop, since the stopped turn's files may be unknown", () => {
-    expect(planMessageRewind({ ...idle, supportsMessageRewind: false, afterStop: true })).toEqual({
-      kind: "ask",
-    });
-  });
-
-  it("leaves a queue to other providers, whose rollback does not refuse it", () => {
-    expect(
-      planMessageRewind({
-        ...idle,
-        supportsMessageRewind: false,
-        canInterrupt: true,
-        isWorking: true,
-        runs: queued,
-      }),
-    ).toEqual({ kind: "stop-first" });
-  });
-});
-
-describe("decideMessageRewindStart", () => {
-  it("rewinds the conversation at once when Claude changed no files after the message", () => {
-    expect(
-      decideMessageRewindStart({ preview: { filesChanged: [], insertions: 0, deletions: 0 } }),
-    ).toEqual({ kind: "rewind-now" });
-  });
-
-  it("asks when restoring code would change files", () => {
-    expect(
-      decideMessageRewindStart({
-        preview: { filesChanged: ["/w/a.ts"], insertions: 2, deletions: 1 },
-      }),
-    ).toEqual({ kind: "ask" });
-  });
-
-  it("asks when the dry run gave no answer, never skipping on an unknown one", () => {
-    expect(decideMessageRewindStart({ preview: null })).toEqual({ kind: "ask" });
-  });
-
-  it("rewinds at once when Claude kept no snapshots, since no code choice is possible", () => {
-    expect(
-      decideMessageRewindStart({
-        preview: {
-          filesChanged: [],
-          insertions: 0,
-          deletions: 0,
-          unavailableReason: "Claude kept no file snapshots for this message.",
-        },
-      }),
-    ).toEqual({ kind: "rewind-now" });
-  });
-});
-
-describe("waitForThreadToStop", () => {
-  const threadRef = { environmentId: EnvironmentId.make("env-1"), threadId: ThreadId.make("t") };
-
-  function projectionWithRun(status: string) {
-    const base = makeThreadProjectionFixture();
-    return {
-      ...base,
-      runs: [{ id: RunId.make("run-1"), status, queueHeld: false }],
-    } as unknown as ReturnType<typeof makeThreadProjectionFixture>;
-  }
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-  });
-
-  it("resolves once the stopped run is no longer live", async () => {
-    const state = Atom.make({ data: Option.some(projectionWithRun("running")) });
-    vi.spyOn(environmentThreadDetails, "stateAtom").mockReturnValue(state as never);
-    let stopped = false;
-    const waiting = waitForThreadToStop(threadRef).then(() => {
-      stopped = true;
-    });
-    await Promise.resolve();
-    expect(stopped).toBe(false);
-
-    appAtomRegistry.set(state, { data: Option.some(projectionWithRun("interrupted")) });
-
-    await waiting;
-    expect(stopped).toBe(true);
-  });
-
-  it("fails with a reason the user can act on when the run does not stop in time", async () => {
-    vi.useFakeTimers();
-    const state = Atom.make({ data: Option.some(projectionWithRun("running")) });
-    vi.spyOn(environmentThreadDetails, "stateAtom").mockReturnValue(state as never);
-    const waiting = waitForThreadToStop(threadRef, 15_000);
-    const outcome = expect(waiting).rejects.toThrow(
-      "The current turn did not stop. Press Stop, then rewind again.",
-    );
-
-    await vi.advanceTimersByTimeAsync(15_000);
-
-    await outcome;
-  });
-});
-
-describe("loadThreadRewindPreview", () => {
-  const target = {
-    environmentId: EnvironmentId.make("env-1"),
-    threadId: ThreadId.make("t"),
-    messageId: MessageId.make("message-2"),
-  };
-
-  afterEach(() => vi.restoreAllMocks());
-
-  it("returns Claude's dry run, read from the query the rewind menu shows", async () => {
-    const preview = { filesChanged: ["/w/a.ts"], insertions: 2, deletions: 1 };
-    const query = Atom.make(AsyncResult.success(preview));
-    const family = vi
-      .spyOn(orchestrationEnvironment, "threadRewindPreview")
-      .mockReturnValue(query as never);
-
-    const loaded = await loadThreadRewindPreview(target);
-    loaded.release();
-
-    expect(family).toHaveBeenCalledWith({
-      environmentId: target.environmentId,
-      input: { threadId: target.threadId, messageId: target.messageId },
-    });
-    expect({ preview: loaded.preview, error: loaded.error }).toEqual({ preview, error: null });
-  });
-
-  it("returns the failure as an error when the dry run failed", async () => {
-    const query = Atom.make(AsyncResult.failure(Cause.fail(new Error("Connection lost."))));
-    vi.spyOn(orchestrationEnvironment, "threadRewindPreview").mockReturnValue(query as never);
-
-    const loaded = await loadThreadRewindPreview(target);
-    loaded.release();
-
-    expect({ preview: loaded.preview, error: loaded.error }).toEqual({
-      preview: null,
-      error: "Connection lost.",
-    });
   });
 });
 
