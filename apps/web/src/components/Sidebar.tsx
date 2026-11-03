@@ -555,7 +555,6 @@ function useSidebarThreads(input: {
   const visibleWorkingThreads = workingShelfExpanded
     ? workingThreads
     : routeThreadOnly(workingThreads, routeRowThreadKey);
-  // Fork (grouped layout): "Needs you" plus one foldable group per project.
   // Upstream's boring-mode folders take precedence when both are on.
   const projectGroupsLayout = useSidebarInboxGroups({
     activeThreads,
@@ -964,7 +963,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     projectGroupByScopeKey,
     projectScopeItems: lookupProjectScopeItems,
   } = useSidebarLookups();
-  // Fork (machine filter): New thread spans every machine, so it counts every machine's groups.
+  // New thread spans every machine, so it counts every machine's groups.
   const allOpenProjectGroupCount = pickableProjectGroups(allProjectGroups).length;
   const allProjectGroupCount = allProjectGroups.length;
   const delegatedUnderParent = useDelegatedUnderParent();
@@ -2194,7 +2193,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       assignedKeys: new Map(assignments.map(({ id, orderKey }) => [id, orderKey])),
     };
     setOptimisticDrop(drop);
-    // Fork (grouped layout): a thread back from a shelf must not vanish into a folded group.
+    // A thread back from a shelf must not vanish into a folded group.
     if (target.section === "active" && (activeSection === "settled" || activeSection === "snoozed"))
       projectGroupsLayout.openGroupForDrop(
         applySidebarThreadDrop(activeThread, "active", drop.occurredAt),
@@ -3372,7 +3371,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         section: SidebarSection,
                         // The tree row of the project folder this row sits in.
                         folderRow?: string,
-                        // Fork (grouped layout): a one-line row under a project group header.
                         compact = false,
                       ) => {
                         const threadKey = scopedThreadKey(

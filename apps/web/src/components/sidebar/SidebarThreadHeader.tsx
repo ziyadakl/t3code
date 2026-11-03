@@ -15,10 +15,10 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 export interface SidebarThreadHeaderProps {
   searchFieldRef?: RefObject<HTMLDivElement | null>;
   hasProjects: boolean;
-  /** Fork (machine filter): gates only the scope picker; Add project stays. */
+  /** Gates only the scope picker; Add project stays. */
   hasVisibleProjects: boolean;
   projectScope: ReactNode;
-  /** Fork (machine filter): null with one machine. Outside the project gates. */
+  /** Null with one machine. Outside the project gates. */
   environmentFilter: ReactNode;
   onNewProject: () => void;
   onNewThread: (event: ReactMouseEvent) => void;
