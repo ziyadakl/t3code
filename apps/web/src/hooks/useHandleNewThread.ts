@@ -26,9 +26,9 @@ import {
   readProjects,
   readThreadShell,
   readThreadShells,
-  useUnarchivedProjectsAndThreads,
   useQuietThreadShell,
 } from "../state/entities";
+import { useUnarchivedProjectsAndThreads } from "../state/archivedProjects";
 import {
   hasExplicitComposerModelSelection,
   resolveNewDraftStartFromOrigin,

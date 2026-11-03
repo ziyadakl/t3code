@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { withoutArchivedProjects } from "./projects.ts";
+import { withoutArchivedProjects } from "./archivedProjects.ts";
 
 const project = (environmentId: string, id: string, archivedAt: string | null = null) => ({
   environmentId,

@@ -174,7 +174,8 @@ import {
   resolveThreadRouteTarget,
 } from "../threadRoutes";
 import type { SidebarThreadSummary } from "../types";
-import { isScratchProject, withoutArchivedProjects } from "@t3tools/client-runtime/state/projects";
+import { isScratchProject } from "@t3tools/client-runtime/state/projects";
+import { withoutArchivedProjects } from "@t3tools/client-runtime/state/archived-projects";
 import { cn } from "~/lib/utils";
 import { ProjectEnvironmentBadge } from "./ProjectEnvironmentBadge";
 import {
