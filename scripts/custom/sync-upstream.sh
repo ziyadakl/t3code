@@ -7,7 +7,7 @@
 #   scripts/custom/sync-upstream.sh check   run CI's lint, typecheck and unused-code checks, build
 #                                           the web app (React Compiler on), run the test files the sync
 #                                           touched, and fail on release links that name the fork;
-#                                           it ends by printing the footprint before and after
+#                                           it starts by printing the footprint before and after
 #   scripts/custom/sync-upstream.sh footprint [ref]   print how many Upstream files <ref> (default
 #                                           HEAD) edits against upstream/main, and the lines changed
 set -euo pipefail
@@ -269,6 +269,11 @@ check() {
     return 1
   fi
 
+  # Printed first, so a failing check still shows it.
+  local before_ref
+  before_ref="${SYNC_BASE:-$(git merge-base HEAD origin/custom-v2)}"
+  echo "> footprint (Upstream files the fork edits): before $(footprint upstream/main "$before_ref"), after $(footprint upstream/main HEAD)"
+
   # CI runs the Node that package.json asks for; other versions fail tests that pass in CI
   # (for example `node:sea` is unknown to Vite on Node 22).
   local want have
@@ -311,10 +316,6 @@ check() {
 
   web_build_and_links
   touched_tests
-
-  local before_ref
-  before_ref="${SYNC_BASE:-$(git merge-base HEAD origin/custom-v2)}"
-  echo "> footprint (Upstream files the fork edits): before $(footprint upstream/main "$before_ref"), after $(footprint upstream/main HEAD)"
 
   local branch
   branch="$(git rev-parse --abbrev-ref HEAD)"
