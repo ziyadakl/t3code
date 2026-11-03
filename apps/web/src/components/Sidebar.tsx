@@ -860,6 +860,8 @@ function useSidebarLookups() {
   );
   const { allProjects, threads, environmentFilterId, projects, projectGroups, allProjectGroups } =
     useSidebarEnvironmentFilter({ environments, environmentLabelById });
+  // Lookups span every machine: the open thread or draft stays listed on any
+  // machine and still needs its project's icon and name.
   const projectByKey = new Map(
     allProjects.map((project) => [`${project.environmentId}:${project.id}`, project] as const),
   );
