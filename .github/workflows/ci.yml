@@ -1,3 +1,5 @@
+# PROTOTYPE (branch proto/sync-speed, never merge): times a sharded CI shape for
+# Upstream syncs. Test Web runs in 5 parts, Test in 5 groups, Test Server in 12.
 # This fork (ziyadakl/t3code) runs on GitHub-hosted runners because it has no
 # Blacksmith access; upstream blacksmith-* labels would queue forever here.
 name: CI
@@ -212,11 +214,15 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    name: Test
+    name: Test ${{ matrix.group }}
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.test != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [rest, oxlint, mobile-1, mobile-2, mobile-3]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -228,10 +234,12 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - uses: ./.github/actions/setup-apt-mirrors
+        if: matrix.group == 'rest'
 
       # The desktop tests compile the browser secret helper. The install runs in
       # the background while Vite+ installs; the step before the tests waits for it.
       - name: Start installing browser secret helper build libraries
+        if: matrix.group == 'rest'
         run: |
           sudo sed -i 's|http://|https://|g' /etc/apt/blacksmith-ubuntu-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources
           (
@@ -248,21 +256,26 @@ jobs:
       # electron's install.js (run by ensure:electron) reads this cache before it
       # downloads from GitHub. The key changes only with the Electron version.
       - name: Cache Electron download
+        if: matrix.group == 'rest'
         uses: actions/cache@v6
         with:
           path: ~/.cache/electron
           key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('node_modules/.pnpm/electron@*/node_modules/electron/package.json') }}
 
       - name: Ensure Electron runtime is installed
+        if: matrix.group == 'rest'
         run: vp run --filter @t3tools/desktop ensure:electron
 
       - name: Test preview artifact validation
+        if: matrix.group == 'rest'
         run: python3 -B .github/scripts/stage-preview-bundle.test.py
 
       - name: Test release checks
+        if: matrix.group == 'rest'
         run: node --test .github/scripts/check-nightly-release.test.cjs .github/scripts/vercel-deployment-output.test.cjs
 
       - name: Finish installing browser secret helper build libraries
+        if: matrix.group == 'rest'
         timeout-minutes: 5
         run: |
           until test -s "$RUNNER_TEMP/apt-status"; do sleep 1; done
@@ -272,14 +285,14 @@ jobs:
       # `changes` lists the affected packages, or nothing when all of them are.
       - name: Test
         env:
-          TEST_PACKAGES: ${{ needs.changes.outputs.test_packages }}
+          GROUP: ${{ matrix.group }}
         run: |
-          filters=(--filter '!t3' --filter '!@t3tools/monorepo' --filter '!@t3tools/web')
-          if [[ -n "$TEST_PACKAGES" ]]; then
-            filters=()
-            for package in $TEST_PACKAGES; do filters+=(--filter "$package"); done
-          fi
-          vp run --parallel --concurrency-limit 4 "${filters[@]}" test
+          # PROTOTYPE: a sync touches every package, so TEST_PACKAGES is ignored here.
+          case "$GROUP" in
+            rest) vp run --parallel --concurrency-limit 4 --filter '!t3' --filter '!@t3tools/monorepo' --filter '!@t3tools/web' --filter '!@t3tools/mobile' --filter '!@t3tools/oxlint-plugin-t3code' test ;;
+            oxlint) vp run --filter @t3tools/oxlint-plugin-t3code test ;;
+            mobile-*) vp run --filter @t3tools/mobile test --shard "${GROUP#mobile-}/3" ;;
+          esac
 
   # The web suite is the largest outside the server. In the shared Test job it
   # started last and ran alone for about 40s after everything else finished.
@@ -288,11 +301,15 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    name: Test Web
+    name: Test Web ${{ matrix.part }}
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.test_web != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        part: ["1", "2", "3", "4", attach-boot]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -339,13 +356,16 @@ jobs:
       # files share the CPU. That one file runs alone in its own step; every
       # other file runs in parallel, as upstream runs them.
       - name: Test
-        run: vp run --filter @t3tools/web test --exclude '**/AttachmentFilePreview.browser.test.tsx'
+        if: matrix.part != 'attach-boot'
+        run: vp run --filter @t3tools/web test --exclude '**/AttachmentFilePreview.browser.test.tsx' --shard ${{ matrix.part }}/4
 
       - name: Test attachment previews alone
+        if: matrix.part == 'attach-boot'
         run: vp run --filter @t3tools/web test AttachmentFilePreview.browser.test.tsx
 
       # Browser tests run source modules; this boots the production chunk graph.
       - name: Boot the built web client
+        if: matrix.part == 'attach-boot'
         run: |
           vp run --filter @t3tools/web build
           node apps/web/scripts/verify-built-boot.ts
@@ -370,7 +390,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     steps:
       # Depth 2 brings the base commit the change is diffed against.
       - name: Checkout
