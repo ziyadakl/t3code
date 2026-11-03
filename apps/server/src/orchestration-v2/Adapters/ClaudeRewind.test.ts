@@ -1,4 +1,5 @@
 /** Claude message rewind: restoring files, and where a rewind resumes the conversation. */
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   ClaudeSettings,
@@ -19,7 +20,7 @@ import {
 } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
@@ -36,6 +37,7 @@ const ADAPTER_TEST_LAYER = Layer.mergeAll(
   IdAllocator.layer,
   McpProviderSessions.layer,
   NodeServices.layer,
+  NodeCrypto.layer,
 );
 
 const DEFAULT_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({});
@@ -139,7 +141,7 @@ describe("ClaudeAdapterV2 file restore", () => {
       attachmentsDir,
       fileSystem,
       path: yield* Path.Path,
-      crypto: yield* Crypto.Crypto,
+      random: yield* SecureRandom.SecureRandom,
       idAllocator: yield* IdAllocator.IdAllocatorV2,
       queryRunner: {
         allocateSessionId: Effect.succeed("native-thread-claude-rewind-files"),

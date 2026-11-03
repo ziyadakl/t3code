@@ -10,7 +10,7 @@ import {
   type ThreadRewindChoice,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 
 import { request } from "../rpc/client.ts";
@@ -27,8 +27,7 @@ export const rewindThread = Effect.fn("EnvironmentCommands.rewindThread")(functi
 ) {
   const instructions = input.instructions?.trim() ?? "";
   const commandId =
-    input.commandId ??
-    CommandId.make(yield* (yield* Crypto.Crypto).randomUUIDv4().pipe(Effect.orDie));
+    input.commandId ?? CommandId.make(yield* (yield* SecureRandom.SecureRandom).uuidV4());
   return yield* request(ORCHESTRATION_V2_WS_METHODS.dispatchCommand, {
     type: "thread.rewind",
     commandId,

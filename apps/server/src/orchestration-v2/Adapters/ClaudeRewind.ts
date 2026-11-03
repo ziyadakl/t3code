@@ -10,7 +10,7 @@ import type {
   RewindFilesResult,
   SDKMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
 
@@ -243,11 +243,11 @@ export const claudePromptResumeAt = Effect.fn("claudePromptResumeAt")(function* 
 // Legacy only: the prompt uuid builds before random prompt ids derived from
 // the run attempt. New turns record the uuid they actually send.
 const legacyClaudePromptUuid = Effect.fn("legacyClaudePromptUuid")(function* (attemptId: string) {
-  const crypto = yield* Crypto.Crypto;
-  const digest = yield* crypto
-    .digest("SHA-256", new TextEncoder().encode(`t3-claude-prompt:${attemptId}`))
-    .pipe(Effect.orDie);
+  const digest = yield* (yield* Digest.Digest).digest(
+    Digest.sha256,
+    new TextEncoder().encode(`t3-claude-prompt:${attemptId}`),
+  );
   const hex = Hex.encode(digest);
   const variant = ((Number.parseInt(hex[16]!, 16) & 0x3) | 0x8).toString(16);
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
-});
+}, Effect.provide(Digest.layerWebCrypto));

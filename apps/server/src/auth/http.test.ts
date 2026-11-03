@@ -1,6 +1,6 @@
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto has no generateKeyPairSync or sign.
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect has no generateKeyPairSync or sign.
 import * as NodeCrypto from "node:crypto";
-
+import * as NodeCryptoLayer from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   AuthTokenExchangeGrantType,
@@ -12,7 +12,7 @@ import {
 } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -84,11 +84,11 @@ const layerRoutes = Layer.merge(layerApiRoutes, layerClientsRoute).pipe(
   Layer.provide(layerConfig),
   Layer.provideMerge(
     HttpPlatform.layer.pipe(
-      Layer.provideMerge(NodeServices.layer),
+      Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCryptoLayer.layer)),
       Layer.provideMerge(Etag.layerWeak),
     ),
   ),
-  Layer.provide(NodeServices.layer),
+  Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCryptoLayer.layer)),
 );
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -101,7 +101,7 @@ const postJson = (path: string, body: unknown, headers?: Readonly<Record<string,
 
 it.effect("sets the selected browser session cookies through the HTTP route", () =>
   Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     const unusedSecretStore = ServerSecretStore.ServerSecretStore.of({
       get: () => Effect.succeedNone,
       set: () => Effect.void,
@@ -109,7 +109,7 @@ it.effect("sets the selected browser session cookies through the HTTP route", ()
       getOrCreateRandom: () => Effect.die("Not used by these routes."),
       remove: () => Effect.void,
     });
-    const requestContext = Context.make(Crypto.Crypto, crypto).pipe(
+    const requestContext = Context.make(SecureRandom.SecureRandom, random).pipe(
       Context.add(ServerSecretStore.ServerSecretStore, unusedSecretStore),
     );
     return yield* Effect.acquireUseRelease(
@@ -183,11 +183,11 @@ it.effect("sets the selected browser session cookies through the HTTP route", ()
       ([environmentA, environmentB]) =>
         Effect.promise(() => Promise.all([environmentA.dispose(), environmentB.dispose()])),
     );
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCryptoLayer.layer))),
 );
 it.effect("gives an allow-listed device a standard session instead of the pairing screen", () =>
   Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     const unusedSecretStore = ServerSecretStore.ServerSecretStore.of({
       get: () => Effect.succeedNone,
       set: () => Effect.void,
@@ -195,7 +195,7 @@ it.effect("gives an allow-listed device a standard session instead of the pairin
       getOrCreateRandom: () => Effect.die("Not used by these routes."),
       remove: () => Effect.void,
     });
-    const requestContext = Context.make(Crypto.Crypto, crypto).pipe(
+    const requestContext = Context.make(SecureRandom.SecureRandom, random).pipe(
       Context.add(ServerSecretStore.ServerSecretStore, unusedSecretStore),
     );
     return yield* Effect.acquireUseRelease(
@@ -236,7 +236,7 @@ it.effect("gives an allow-listed device a standard session instead of the pairin
         }),
       (environment) => Effect.promise(() => environment.dispose()),
     );
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCryptoLayer.layer))),
 );
 
 const tokenRequest = (
@@ -275,7 +275,7 @@ const withEnvironment = (
   }) => Promise<void>,
 ) =>
   Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     const unusedSecretStore = ServerSecretStore.ServerSecretStore.of({
       get: () => Effect.succeedNone,
       set: () => Effect.void,
@@ -283,7 +283,7 @@ const withEnvironment = (
       getOrCreateRandom: () => Effect.die("Not used by these routes."),
       remove: () => Effect.void,
     });
-    const requestContext = Context.make(Crypto.Crypto, crypto).pipe(
+    const requestContext = Context.make(SecureRandom.SecureRandom, random).pipe(
       Context.add(ServerSecretStore.ServerSecretStore, unusedSecretStore),
     );
     return yield* Effect.acquireUseRelease(
@@ -310,7 +310,7 @@ const withEnvironment = (
         }),
       (environment) => Effect.promise(() => environment.dispose()),
     );
-  }).pipe(Effect.provide(NodeServices.layer));
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCryptoLayer.layer)));
 
 it.effect("pairs an allow-listed device's app with any code", () =>
   withEnvironment(async ({ send, clients }) => {
@@ -366,7 +366,9 @@ it.effect("leaves a real code unused when an allow-listed device pairs with it",
 );
 
 const signDpopProof = (url: string) => {
-  const { privateKey, publicKey } = NodeCrypto.generateKeyPairSync("ec", { namedCurve: "P-256" });
+  const { privateKey, publicKey } = NodeCrypto.generateKeyPairSync("ec", {
+    namedCurve: "P-256",
+  });
   const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
   const header = encode({
     typ: "dpop+jwt",

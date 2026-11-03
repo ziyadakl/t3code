@@ -4,7 +4,7 @@
  * `threadCommands.ts` and `orchestration.ts` each spread one builder.
  */
 import { ORCHESTRATION_V2_WS_METHODS, type EnvironmentId } from "@t3tools/contracts";
-import type * as Crypto from "effect/Crypto";
+import type * as SecureRandom from "effect/crypto/SecureRandom";
 import type { Atom } from "effect/reactivity";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
@@ -17,7 +17,7 @@ import {
 } from "./runtime.ts";
 
 export function threadRewindCommandAtoms<R, E>(
-  runtime: Atom.AtomRuntime<EnvironmentRegistry | Crypto.Crypto | R, E>,
+  runtime: Atom.AtomRuntime<EnvironmentRegistry | SecureRandom.SecureRandom | R, E>,
   options: {
     readonly scheduler: AtomCommandScheduler;
     readonly concurrency: AtomCommandConcurrency<{

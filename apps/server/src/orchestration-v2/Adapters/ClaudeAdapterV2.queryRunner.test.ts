@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ProviderSessionId, ThreadId } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
@@ -82,6 +83,7 @@ const runnerLayer = layerQueryRunner.pipe(
     ),
   ),
   Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(NodeCrypto.layer),
 );
 
 describe("ClaudeAgentSdkQueryRunner provider Claude home", () => {
