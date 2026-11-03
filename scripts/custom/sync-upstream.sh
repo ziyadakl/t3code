@@ -6,7 +6,10 @@
 #   scripts/custom/sync-upstream.sh start   merge upstream/main into a new sync branch
 #   scripts/custom/sync-upstream.sh check   run CI's lint, typecheck and unused-code checks, build
 #                                           the web app (React Compiler on), run the test files the sync
-#                                           touched, and fail on release links that name the fork
+#                                           touched, and fail on release links that name the fork;
+#                                           it ends by printing the footprint before and after
+#   scripts/custom/sync-upstream.sh footprint [ref]   print how many Upstream files <ref> (default
+#                                           HEAD) edits against upstream/main, and the lines changed
 set -euo pipefail
 
 repo="$(git rev-parse --path-format=absolute --git-common-dir)/.."
@@ -53,6 +56,18 @@ fork_link_hits() {
   [ -z "$hits" ] && return 0
   echo "$hits"
   return 1
+}
+
+# Upstream files the fork edits: files present where <fork> last met <upstream> that differ on <fork>
+# (modified or deleted; a rename counts as a deletion plus a new file), and the lines changed in them.
+footprint() { # footprint <upstream-ref> <fork-ref> -> "<n> files, +<a> -<d> lines"
+  local base stat
+  # Capture git's output first: inside a pipe its failure (a bad ref) would read as "0 files".
+  base="$(git merge-base "$1" "$2")" || return $?
+  stat="$(git diff --no-renames --numstat --diff-filter=MD "$base" "$2" --)" || return $?
+  # NF skips the empty line an empty here-string still yields; "-" columns are binary files.
+  awk 'NF { n++; if ($1 != "-") a += $1; if ($2 != "-") d += $2 }
+       END { printf "%d files, +%d -%d lines\n", n, a, d }' <<<"$stat"
 }
 
 # Runs the touched test files of one workspace package through that package's own `test` script
@@ -297,6 +312,10 @@ check() {
   web_build_and_links
   touched_tests
 
+  local before_ref
+  before_ref="${SYNC_BASE:-$(git merge-base HEAD origin/custom-v2)}"
+  echo "> footprint (Upstream files the fork edits): before $(footprint upstream/main "$before_ref"), after $(footprint upstream/main HEAD)"
+
   local branch
   branch="$(git rev-parse --abbrev-ref HEAD)"
   echo
@@ -314,6 +333,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   case "${1:-}" in
     start) start ;;
     check) check ;;
-    *) echo "usage: $0 start|check" >&2; exit 64 ;;
+    footprint) footprint upstream/main "${2:-HEAD}" ;;
+    *) echo "usage: $0 start|check|footprint [ref]" >&2; exit 64 ;;
   esac
 fi
