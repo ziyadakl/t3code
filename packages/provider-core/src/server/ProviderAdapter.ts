@@ -40,10 +40,17 @@ import type * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
 import type * as Stream from "effect/Stream";
 
+import {
+  ProviderAdapterRewindFilesError,
+  type ProviderAdapterV2RewindFilesInput,
+  type ProviderAdapterV2RewindFilesResult,
+} from "./ProviderRewind.ts";
 import type {
   ProviderSelectionTransitionInput,
   ProviderSelectionTransitionPlan,
 } from "./selectionTransition.ts";
+
+export * from "./ProviderRewind.ts";
 
 export const ProviderAdapterV2RuntimePolicy = Schema.Struct({
   runtimeMode: RuntimeMode,
@@ -270,19 +277,6 @@ export class ProviderAdapterRollbackThreadError extends Schema.TaggedError<Provi
 ) {
   override get message(): string {
     return `Failed to roll back ${this.driver} provider thread ${this.providerThreadId}.`;
-  }
-}
-
-export class ProviderAdapterRewindFilesError extends Schema.TaggedError<ProviderAdapterRewindFilesError>()(
-  "ProviderAdapterRewindFilesError",
-  {
-    driver: ProviderDriverKind,
-    providerThreadId: ProviderThreadId,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return `Failed to restore files of ${this.driver} provider thread ${this.providerThreadId}.`;
   }
 }
 
@@ -533,28 +527,6 @@ export interface ProviderAdapterV2RollbackThreadInput {
   readonly providerThread: OrchestrationV2ProviderThread;
   readonly target: ProviderAdapterV2RollbackTarget;
   readonly providerThreadTurns: ReadonlyArray<OrchestrationV2ProviderTurn>;
-}
-
-export interface ProviderAdapterV2RewindFilesInput {
-  readonly providerThread: OrchestrationV2ProviderThread;
-  /** The provider's id for the user message whose pre-turn file state is restored. */
-  readonly nativeUserMessageId: string;
-  /** Reports what a restore would change without touching any file. */
-  readonly dryRun: boolean;
-  readonly modelSelection: ModelSelection;
-  readonly runtimePolicy: ProviderAdapterV2RuntimePolicy;
-}
-
-export interface ProviderAdapterV2RewindFilesResult {
-  readonly canRewind: boolean;
-  /** Why the provider cannot restore, when `canRewind` is false. */
-  readonly error?: string;
-  /** Files a dry run would change; a real restore leaves it empty. */
-  readonly filesChanged: ReadonlyArray<string>;
-  readonly insertions: number;
-  readonly deletions: number;
-  /** Files a real restore left alone because a link made them unsafe to write. */
-  readonly skippedLinks: number;
 }
 
 export interface ProviderAdapterV2ForkThreadInput {
