@@ -1,11 +1,29 @@
-import type {
-  OrchestrationV2ProviderTurn,
-  OrchestrationV2Run,
+import {
+  type MessageId,
+  type OrchestrationV2ProviderTurn,
+  type OrchestrationV2Run,
   ProviderThreadId,
   RunId,
+  type ThreadId,
+  ThreadRewindChoice,
 } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+import type * as SqlClient from "effect/sql/SqlClient";
 
 import type { ProjectionRecords } from "./ProjectionStore.ts";
+
+/**
+ * The outbox request that rewinds to just before the user message that started
+ * `runId`. It lives here, not in `ThreadRewindService`, so `EffectOutbox` can
+ * name it without importing the orchestrator.
+ */
+export const ProviderThreadRewindRequest = Schema.Struct({
+  type: Schema.Literal("provider-thread.rewind"),
+  providerThreadId: ProviderThreadId,
+  runId: RunId,
+  choice: ThreadRewindChoice,
+});
 
 export const NO_FILE_SNAPSHOTS_MESSAGE = "Claude kept no file snapshots for this message.";
 
@@ -86,3 +104,56 @@ export function runFileCheckpointTurn(
     )
     .toSorted((left, right) => left.ordinal - right.ordinal)[0];
 }
+
+/**
+ * The ordinals of the runs after run `targetOrdinal` in conversation order, and
+ * the settled ones among them. "After the target" follows conversation order, not
+ * ordinals: imported prompts come first but are numbered after the turns T3 Code
+ * ran. Only ids are read here, so an obsolete payload cannot fail this read.
+ */
+export const rollbackAfterOrdinals = Effect.fn("ThreadRewindTargets.rollbackAfterOrdinals")(
+  function* (sql: SqlClient.SqlClient, threadId: ThreadId, targetOrdinal: number) {
+    const targetRunRows = yield* sql<{ readonly userMessageId: MessageId | null }>`
+            SELECT json_extract(payload_json, '$.userMessageId') AS "userMessageId"
+            FROM orchestration_v2_projection_runs
+            WHERE thread_id = ${threadId} AND ordinal = ${targetOrdinal}`;
+    const targetRun =
+      targetRunRows[0]?.userMessageId == null
+        ? undefined
+        : {
+            threadId,
+            userMessageId: targetRunRows[0].userMessageId,
+            ordinal: targetOrdinal,
+          };
+    // An imported target has the turns T3 Code ran, numbered lower, after it.
+    const candidateRows = yield* sql<{
+      readonly ordinal: number;
+      readonly status: string;
+      readonly userMessageId: MessageId | null;
+    }>`SELECT ordinal, status, json_extract(payload_json, '$.userMessageId') AS "userMessageId"
+            FROM orchestration_v2_projection_runs
+            WHERE thread_id = ${threadId}
+              AND (ordinal > ${targetOrdinal}
+                OR (${targetRun !== undefined && isImportedTranscriptRun(targetRun) ? 1 : 0} = 1))`;
+    const afterRuns = candidateRows.filter((candidate) =>
+      targetRun === undefined
+        ? candidate.ordinal > targetOrdinal
+        : compareConversationOrder(
+            {
+              threadId,
+              userMessageId: candidate.userMessageId ?? ("" as MessageId),
+              ordinal: candidate.ordinal,
+            },
+            targetRun,
+          ) > 0,
+    );
+    return {
+      afterOrdinals: afterRuns.map((candidate) => candidate.ordinal),
+      settledAfterOrdinals: afterRuns
+        .filter((candidate) =>
+          ["completed", "interrupted", "failed", "cancelled"].includes(candidate.status),
+        )
+        .map((candidate) => candidate.ordinal),
+    };
+  },
+);

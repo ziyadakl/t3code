@@ -26,6 +26,7 @@ import * as ProviderTurnStartService from "./ProviderTurnStartService.ts";
 import * as RuntimeRequestService from "./RuntimeRequestService.ts";
 import * as ThreadTitleRegenerationService from "./ThreadTitleRegenerationService.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
+import * as ThreadRewindService from "./ThreadRewindService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { continueRestartedRun } from "./RestartContinuation.ts";
 
@@ -74,6 +75,7 @@ export const layerExecutor: Layer.Layer<
   | ProviderSessionManager.ProviderSessionManagerV2
   | RunFinalizationService.RunFinalizationService
   | CheckpointRollbackService.CheckpointRollbackServiceV2
+  | ThreadRewindService.ThreadRewindServiceV2
   | ProviderTurnControlService.ProviderTurnControlServiceV2
   | ProviderTurnStartService.ProviderTurnStartServiceV2
   | RuntimeRequestService.RuntimeRequestServiceV2
@@ -86,6 +88,7 @@ export const layerExecutor: Layer.Layer<
     const runFinalization = yield* RunFinalizationService.RunFinalizationService;
     const resourceCleanup = yield* ResourceCleanupService.ResourceCleanupService;
     const checkpointRollback = yield* CheckpointRollbackService.CheckpointRollbackServiceV2;
+    const rewind = yield* ThreadRewindService.ThreadRewindServiceV2;
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const providerTurnControl = yield* ProviderTurnControlService.ProviderTurnControlServiceV2;
     const providerTurnStart = yield* ProviderTurnStartService.ProviderTurnStartServiceV2;
@@ -433,88 +436,55 @@ export const layerExecutor: Layer.Layer<
               );
           }
           case "provider-thread.rollback":
-          case "provider-thread.rewind":
-            return (
-              effect.request.type === "provider-thread.rewind"
-                ? checkpointRollback
-                    .rewind({
-                      threadId: effect.threadId,
-                      providerThreadId: effect.request.providerThreadId,
-                      runId: effect.request.runId,
-                      choice: effect.request.choice,
-                    })
-                    .pipe(
-                      // Waiting clients learn how the rewind ended: a code
-                      // restore changes no run, so only this tells them.
-                      Effect.flatMap((outcome) =>
-                        threads
-                          .dispatch(
-                            outcome.type === "refused"
-                              ? {
-                                  type: "checkpoint.rollback.fail",
-                                  commandId: CommandId.make(`${effect.commandId}:rollback-failed`),
-                                  threadId: effect.threadId,
-                                  requestId: effect.commandId,
-                                  message: outcome.message,
-                                }
-                              : {
-                                  type: "checkpoint.rollback.complete",
-                                  commandId: CommandId.make(
-                                    `${effect.commandId}:rollback-completed`,
-                                  ),
-                                  threadId: effect.threadId,
-                                  requestId: effect.commandId,
-                                  ...(outcome.notice === undefined
-                                    ? {}
-                                    : { notice: outcome.notice }),
-                                },
-                          )
-                          .pipe(
-                            Effect.catchCause((recordCause) =>
-                              Effect.logWarning("Failed to record rewind outcome", {
-                                effectId: effect.id,
-                                cause: recordCause,
-                              }),
-                            ),
-                          ),
-                      ),
-                    )
-                : checkpointRollback.execute({
-                    threadId: effect.threadId,
-                    providerThreadId: effect.request.providerThreadId,
-                    checkpointId: effect.request.checkpointId,
-                    scopeId: effect.request.scopeId,
-                    ...(effect.request.restoreFiles === undefined
-                      ? {}
-                      : { restoreFiles: effect.request.restoreFiles }),
-                  })
-            ).pipe(
-              // The last failed attempt tells waiting clients it failed,
-              // instead of leaving them to time out. Clients get a fixed
-              // message; the worker logs the full cause for each attempt.
-              Effect.tapCause((cause) =>
-                willRetry || Cause.hasInterruptsOnly(cause)
-                  ? Effect.void
-                  : threads
-                      .dispatch({
-                        type: "checkpoint.rollback.fail",
-                        commandId: CommandId.make(`${effect.commandId}:rollback-failed`),
-                        threadId: effect.threadId,
-                        requestId: effect.commandId,
-                        message: Option.match(Cause.findErrorOption(cause), {
-                          onNone: () => CheckpointRollbackService.ROLLBACK_FAILED_MESSAGE,
-                          onSome: CheckpointRollbackService.rollbackFailureClientMessage,
-                        }),
-                      })
-                      .pipe(
-                        Effect.catchCause((recordCause) =>
-                          Effect.logWarning("Failed to record rollback failure", {
-                            effectId: effect.id,
-                            cause: recordCause,
+            return checkpointRollback
+              .execute({
+                threadId: effect.threadId,
+                providerThreadId: effect.request.providerThreadId,
+                checkpointId: effect.request.checkpointId,
+                scopeId: effect.request.scopeId,
+                ...(effect.request.restoreFiles === undefined
+                  ? {}
+                  : { restoreFiles: effect.request.restoreFiles }),
+              })
+              .pipe(
+                Effect.tapCause((cause) =>
+                  willRetry || Cause.hasInterruptsOnly(cause)
+                    ? Effect.void
+                    : threads
+                        .dispatch({
+                          type: "checkpoint.rollback.fail",
+                          commandId: CommandId.make(`${effect.commandId}:rollback-failed`),
+                          threadId: effect.threadId,
+                          requestId: effect.commandId,
+                          message: Option.match(Cause.findErrorOption(cause), {
+                            onNone: () => CheckpointRollbackService.ROLLBACK_FAILED_MESSAGE,
+                            onSome: CheckpointRollbackService.rollbackFailureClientMessage,
                           }),
+                        })
+                        .pipe(
+                          Effect.catchCause((recordCause) =>
+                            Effect.logWarning("Failed to record rollback failure", {
+                              effectId: effect.id,
+                              cause: recordCause,
+                            }),
+                          ),
                         ),
-                      ),
-              ),
+                ),
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationEffectExecutionError({
+                      effectId: effect.id,
+                      effectType: effect.request.type,
+                      cause,
+                    }),
+                ),
+              );
+          case "provider-thread.rewind":
+            return ThreadRewindService.runRewindEffect(effect, effect.request, {
+              rewind,
+              threads,
+              willRetry,
+            }).pipe(
               Effect.mapError(
                 (cause) =>
                   new OrchestrationEffectExecutionError({

@@ -61,7 +61,6 @@ import {
   latestProviderTurnForAttempt,
   parseGoalCommand,
   orchestrationV2RunWorkStartedAt,
-  threadRewindRestores,
   orchestrationV2WorktreePending,
   ProviderInstanceId,
   ProviderInteractionMode,
@@ -103,11 +102,7 @@ import {
   isCheckpointRestoreIsolated,
   SHARED_WORKSPACE_RESTORE_MESSAGE,
 } from "./CheckpointRestoreSafety.ts";
-import {
-  NO_FILE_SNAPSHOTS_MESSAGE,
-  previousConversationRun,
-  runFileCheckpointTurn,
-} from "./ThreadRewindTargets.ts";
+import { makeThreadRewindCommands } from "./ThreadRewindCommands.ts";
 import { CheckpointServiceV2 } from "./CheckpointService.ts";
 import {
   CommandPolicyV2,
@@ -702,21 +697,6 @@ function isLiveRun(run: OrchestrationV2Run): boolean {
 
 function hasLiveRun(projection: Pick<OrchestrationV2ThreadProjection, "runs">): boolean {
   return projection.runs.some(isLiveRun);
-}
-
-/**
- * An imported chat holds its native history before T3 Code opens a session
- * for it; its first turn, or a rewind, opens one.
- */
-function holdsUnboundImportedSession(
-  thread: Pick<OrchestrationV2AppThread, "historyOrigin">,
-  providerThread: OrchestrationV2ProviderThread,
-): boolean {
-  return (
-    providerThread.providerSessionId === null &&
-    thread.historyOrigin === "v1_import" &&
-    providerThread.nativeThreadRef?.nativeId != null
-  );
 }
 
 /** The link with its watch replaced, or removed when `watch` is undefined. */
@@ -12088,206 +12068,20 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
-  /** Records a new provider session for an imported chat that has none yet. */
-  const bindImportedSession = Effect.fn("Orchestrator.bindImportedSession")(function* (
-    command: Extract<
-      OrchestrationV2ServerCommand,
-      { readonly type: "thread.rewind" | "provider-thread.imported-session.bind" }
-    >,
-    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
-    input: {
-      readonly adapter: ProviderAdapter.ProviderAdapterV2["Service"];
-      readonly providerThread: OrchestrationV2ProviderThread;
-      readonly now: DateTime.Utc;
+  const rewindCommands = makeThreadRewindCommands({
+    projectionStore,
+    providerAdapters,
+    mapDispatchError,
+    providerSessionIdFor,
+    emit,
+    loadProjectionForCommand,
+    hasLiveRun,
+    providerTurnForRun,
+    errors: {
+      OrchestratorDispatchError,
+      OrchestratorProjectionError,
+      OrchestratorProviderAdapterError,
     },
-  ) {
-    const providerSessionId = yield* mapDispatchError(command)(
-      providerSessionIdFor({
-        adapter: input.adapter,
-        providerInstanceId: input.providerThread.providerInstanceId,
-        threadId: command.threadId,
-      }),
-    );
-    yield* emit(
-      events,
-      command,
-    )({
-      type: "provider-thread.updated",
-      threadId: command.threadId,
-      driver: input.providerThread.driver,
-      providerInstanceId: input.providerThread.providerInstanceId,
-      occurredAt: input.now,
-      payload: { ...input.providerThread, providerSessionId, updatedAt: input.now },
-    });
-  });
-
-  const dispatchImportedSessionBind = Effect.fn("Orchestrator.dispatchImportedSessionBind")(
-    function* (
-      command: Extract<
-        OrchestrationV2InternalCommand,
-        { readonly type: "provider-thread.imported-session.bind" }
-      >,
-      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
-    ) {
-      const projection = yield* projectionStore
-        .getThreadRecords(command.threadId, ["providerThreads"])
-        .pipe(
-          Effect.mapError(() => new OrchestratorProjectionError({ threadId: command.threadId })),
-        );
-      const providerThread = projection.providerThreads.find(
-        (candidate) => candidate.id === projection.thread.activeProviderThreadId,
-      );
-      if (
-        providerThread === undefined ||
-        !holdsUnboundImportedSession(projection.thread, providerThread)
-      ) {
-        return;
-      }
-      const adapter = yield* providerAdapters.get(providerThread.providerInstanceId).pipe(
-        Effect.mapError(
-          (cause) =>
-            new OrchestratorProviderAdapterError({
-              commandId: command.commandId,
-              providerInstanceId: providerThread.providerInstanceId,
-              cause,
-            }),
-        ),
-      );
-      yield* bindImportedSession(command, events, {
-        adapter,
-        providerThread,
-        now: yield* DateTime.now,
-      });
-    },
-  );
-
-  /**
-   * Claude Code style rewind to just before a sent user message. Refused unless
-   * the thread runs on Claude, is idle, and the message started a run still in
-   * the conversation. Its failure is recorded like a rollback's.
-   */
-  const dispatchThreadRewind = Effect.fn("Orchestrator.dispatchThreadRewind")(function* (
-    command: Extract<OrchestrationV2Command, { readonly type: "thread.rewind" }>,
-    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
-    effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
-  ) {
-    const refuse = (cause: string) =>
-      new OrchestratorDispatchError({
-        commandId: command.commandId,
-        commandType: command.type,
-        cause,
-      });
-    const projection = yield* loadProjectionForCommand(
-      command,
-      ["providerThreads", "runs", "providerTurns", "attempts", "messages"],
-      { turnItemTypes: [], messageRoles: ["user"] },
-    );
-    if (hasLiveRun(projection)) {
-      return yield* refuse("Stop the current turn before rewinding.");
-    }
-    // A queued message, held or not, would be sent into the rewound chat.
-    if (projection.runs.some((run) => run.status === "queued")) {
-      return yield* refuse("Send or remove your queued messages before rewinding.");
-    }
-    const providerThread = projection.providerThreads.find(
-      (candidate) => candidate.id === projection.thread.activeProviderThreadId,
-    );
-    if (providerThread === undefined) {
-      return yield* refuse("This thread has no Claude session to rewind yet.");
-    }
-    const adapter = yield* providerAdapters.get(providerThread.providerInstanceId).pipe(
-      Effect.mapError(
-        (cause) =>
-          new OrchestratorProviderAdapterError({
-            commandId: command.commandId,
-            providerInstanceId: providerThread.providerInstanceId,
-            cause,
-          }),
-      ),
-    );
-    const capabilities = yield* adapter.getCapabilities().pipe(mapDispatchError(command));
-    if (capabilities.threads.canRewindToMessage !== true) {
-      return yield* refuse("This provider cannot rewind to a message.");
-    }
-    // Rewinding an imported chat opens its session, as its first turn would.
-    const bindsImportedSession = holdsUnboundImportedSession(projection.thread, providerThread);
-    if (providerThread.providerSessionId === null && !bindsImportedSession) {
-      return yield* refuse("This thread has no Claude session to rewind yet.");
-    }
-    const restores = threadRewindRestores(command.choice);
-    if (restores === null) {
-      return yield* refuse("This rewind choice is not available yet.");
-    }
-    const message = projection.messages.find((candidate) => candidate.id === command.messageId);
-    const run =
-      message?.runId == null
-        ? undefined
-        : projection.runs.find((candidate) => candidate.id === message.runId);
-    if (message?.role !== "user" || run === undefined || run.userMessageId !== message.id) {
-      return yield* refuse("Only a message you sent that started a turn can be rewound.");
-    }
-    if (run.status === "rolled_back") {
-      return yield* refuse("This message was already rewound.");
-    }
-    if (
-      run.status !== "completed" &&
-      run.status !== "interrupted" &&
-      run.status !== "failed" &&
-      run.status !== "cancelled"
-    ) {
-      return yield* refuse("This message's turn has not finished yet.");
-    }
-    if (restores.code && runFileCheckpointTurn(projection, run.id) === undefined) {
-      return yield* refuse(NO_FILE_SNAPSHOTS_MESSAGE);
-    }
-    const previousRun = previousConversationRun(projection.runs, run);
-    const previousTurn =
-      previousRun === undefined ? undefined : providerTurnForRun(projection, previousRun);
-    if (
-      restores.conversation &&
-      previousRun !== undefined &&
-      (previousTurn === undefined || previousTurn.providerThreadId !== providerThread.id)
-    ) {
-      return yield* refuse(
-        "Cannot rewind to this message: the turn before it is not part of the current Claude session.",
-      );
-    }
-
-    const now = yield* DateTime.now;
-    if (bindsImportedSession) {
-      yield* bindImportedSession(command, events, { adapter, providerThread, now });
-    }
-    // This rewind becomes the only one whose failure the thread records.
-    yield* emit(
-      events,
-      command,
-    )({
-      type: "thread.metadata-updated",
-      threadId: command.threadId,
-      providerInstanceId: projection.thread.providerInstanceId,
-      occurredAt: now,
-      payload: {
-        ...projection.thread,
-        rollbackRequestId: command.commandId,
-        rollbackFailure: null,
-        rollbackCompletion: null,
-        updatedAt: now,
-      },
-    });
-    yield* Ref.update(effects, (existing) => [
-      ...existing,
-      {
-        id: `effect:${command.commandId}:provider-thread.rewind:${providerThread.id}:${run.id}`,
-        commandId: command.commandId,
-        threadId: command.threadId,
-        request: {
-          type: "provider-thread.rewind",
-          providerThreadId: providerThread.id,
-          runId: run.id,
-          choice: command.choice,
-        },
-      } satisfies PendingOrchestrationEffectV2,
-    ]);
   });
 
   /**
@@ -12331,47 +12125,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       });
     },
   );
-
-  /** Records that the current rewind finished, so clients waiting on it stop. */
-  const dispatchCheckpointRollbackComplete = Effect.fn(
-    "Orchestrator.dispatchCheckpointRollbackComplete",
-  )(function* (
-    command: Extract<
-      OrchestrationV2InternalCommand,
-      { readonly type: "checkpoint.rollback.complete" }
-    >,
-    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
-  ) {
-    const thread = yield* projectionStore
-      .getThread(command.threadId)
-      .pipe(mapDispatchError(command));
-    if (thread.deletedAt !== null) return;
-    if (thread.rollbackRequestId !== command.requestId) {
-      return yield* new OrchestratorDispatchError({
-        commandId: command.commandId,
-        commandType: command.type,
-        cause: `Rollback ${command.requestId} is no longer the thread's current rollback.`,
-      });
-    }
-    const now = yield* DateTime.now;
-    yield* emit(
-      events,
-      command,
-    )({
-      type: "thread.metadata-updated",
-      threadId: command.threadId,
-      providerInstanceId: thread.providerInstanceId,
-      occurredAt: now,
-      payload: {
-        ...thread,
-        rollbackCompletion: {
-          requestId: command.requestId,
-          ...(command.notice === undefined ? {} : { notice: command.notice }),
-        },
-        updatedAt: now,
-      },
-    });
-  });
 
   /**
    * Thread lineage and fork origin are immutable, so this
@@ -13605,13 +13358,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         yield* dispatchRuntimeRequestDeliveryFail(command, events);
         break;
       case "checkpoint.rollback.complete":
-        yield* dispatchCheckpointRollbackComplete(command, events);
+        yield* rewindCommands.dispatchCheckpointRollbackComplete(command, events);
         break;
       case "thread.rewind":
-        yield* dispatchThreadRewind(command, events, effects);
+        yield* rewindCommands.dispatchThreadRewind(command, events, effects);
         break;
       case "provider-thread.imported-session.bind":
-        yield* dispatchImportedSessionBind(command, events);
+        yield* rewindCommands.dispatchImportedSessionBind(command, events);
         break;
       case "thread.background-work.settle":
         yield* dispatchBackgroundWorkSettle(command, events, effects);

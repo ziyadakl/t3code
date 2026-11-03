@@ -13,7 +13,6 @@ import {
   RunId,
   RuntimeRequestId,
   ThreadId,
-  ThreadRewindChoice,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
@@ -29,6 +28,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import { forkParked } from "../serverActivation.ts";
+import { ProviderThreadRewindRequest } from "./ThreadRewindTargets.ts";
 
 export const OrchestrationEffectRequestV2 = Schema.Union([
   Schema.Struct({
@@ -91,13 +91,7 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
     checkpointId: CheckpointId,
     scopeId: CheckpointScopeId,
   }),
-  /** Rewinds to just before the user message that started `runId`. */
-  Schema.Struct({
-    type: Schema.Literal("provider-thread.rewind"),
-    providerThreadId: ProviderThreadId,
-    runId: RunId,
-    choice: ThreadRewindChoice,
-  }),
+  ProviderThreadRewindRequest,
   Schema.Struct({
     type: Schema.Literal("checkpoint.capture"),
     runId: RunId,

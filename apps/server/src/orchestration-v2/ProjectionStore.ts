@@ -4,7 +4,7 @@ import { projectTurnItemForWire } from "./WireProjection.ts";
 import * as Stream from "effect/Stream";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { makeThreadFind } from "./ThreadFind.ts";
-import { compareConversationOrder, isImportedTranscriptRun } from "./ThreadRewindTargets.ts";
+import { rollbackAfterOrdinals } from "./ThreadRewindTargets.ts";
 import type {
   OrchestrationV2SearchThreadInput,
   OrchestrationV2SearchThreadResult,
@@ -5237,51 +5237,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               return context;
 
             const targetOrdinal = checkpoint.appRunOrdinal ?? 0;
-            // "After the target" follows conversation order, not ordinals: imported
-            // prompts come first but are numbered after the turns T3 Code ran. Only
-            // ids are read here, so an obsolete payload cannot fail this read.
-            const [targetRunRows] = yield* Effect.all([
-              sql<{ readonly userMessageId: MessageId | null }>`
-            SELECT json_extract(payload_json, '$.userMessageId') AS "userMessageId"
-            FROM orchestration_v2_projection_runs
-            WHERE thread_id = ${threadId} AND ordinal = ${targetOrdinal}`,
-            ]);
-            const targetRun =
-              targetRunRows[0]?.userMessageId == null
-                ? undefined
-                : {
-                    threadId,
-                    userMessageId: targetRunRows[0].userMessageId,
-                    ordinal: targetOrdinal,
-                  };
-            // An imported target has the turns T3 Code ran, numbered lower, after it.
-            const candidateRows = yield* sql<{
-              readonly ordinal: number;
-              readonly status: string;
-              readonly userMessageId: MessageId | null;
-            }>`SELECT ordinal, status, json_extract(payload_json, '$.userMessageId') AS "userMessageId"
-            FROM orchestration_v2_projection_runs
-            WHERE thread_id = ${threadId}
-              AND (ordinal > ${targetOrdinal}
-                OR (${targetRun !== undefined && isImportedTranscriptRun(targetRun) ? 1 : 0} = 1))`;
-            const afterRuns = candidateRows.filter((candidate) =>
-              targetRun === undefined
-                ? candidate.ordinal > targetOrdinal
-                : compareConversationOrder(
-                    {
-                      threadId,
-                      userMessageId: candidate.userMessageId ?? ("" as MessageId),
-                      ordinal: candidate.ordinal,
-                    },
-                    targetRun,
-                  ) > 0,
+            const { afterOrdinals, settledAfterOrdinals } = yield* rollbackAfterOrdinals(
+              sql,
+              threadId,
+              targetOrdinal,
             );
-            const afterOrdinals = afterRuns.map((candidate) => candidate.ordinal);
-            const settledAfterOrdinals = afterRuns
-              .filter((candidate) =>
-                ["completed", "interrupted", "failed", "cancelled"].includes(candidate.status),
-              )
-              .map((candidate) => candidate.ordinal);
             const [attemptRows, runRows, sessionRows, rolledBackAttempts, staleRows] =
               yield* Effect.all([
                 sql`SELECT attempt.attempt_id AS id, attempt.provider_turn_id AS "providerTurnId"

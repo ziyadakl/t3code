@@ -5,10 +5,7 @@ import {
   type OrchestrationV2DomainEvent,
   type ProviderSessionId,
   ProviderThreadId,
-  type RunId,
   ThreadId,
-  type ThreadRewindChoice,
-  threadRewindRestores,
   VcsProcessExitError,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -39,16 +36,8 @@ import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAda
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { RuntimePolicyAboveCeilingError, RuntimePolicyV2 } from "./RuntimePolicy.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
-import {
-  openProviderThreadSession,
-  skippedFilesMessage,
-  ThreadCodeRewindServiceV2,
-} from "./ThreadCodeRewindService.ts";
-import {
-  compareConversationOrder,
-  previousConversationRun,
-  threadStartResumeAt,
-} from "./ThreadRewindTargets.ts";
+import { openProviderThreadSession } from "./ThreadCodeRewindService.ts";
+import { threadStartResumeAt } from "./ThreadRewindTargets.ts";
 
 export const ROLLBACK_FAILED_MESSAGE =
   "The provider could not roll back this conversation. Try again; if it keeps failing, check the provider and server logs.";
@@ -105,18 +94,64 @@ export function rollbackFailureClientMessage(error: CheckpointRollbackExecutionE
     : ROLLBACK_FAILED_MESSAGE;
 }
 
-const ALREADY_REWOUND_MESSAGE = "This message was already rewound.";
+/** Maps any failure to a `CheckpointRollbackExecutionError`, keeping one that already is. */
+export const asExecutionError =
+  (input: {
+    readonly threadId: ThreadId;
+    readonly providerThreadId: ProviderThreadId;
+    readonly checkpointId?: CheckpointId;
+  }) =>
+  (cause: unknown) =>
+    isCheckpointRollbackExecutionError(cause)
+      ? cause
+      : new CheckpointRollbackExecutionError({
+          reason: "unexpected-failure",
+          threadId: input.threadId,
+          providerThreadId: input.providerThreadId,
+          ...(input.checkpointId === undefined ? {} : { checkpointId: input.checkpointId }),
+          cause,
+        });
 
-const CODE_ONLY_RESTORED_MESSAGE =
-  "Your code was restored, but the conversation could not be rewound. Choose Restore conversation to try again.";
+export const rollbackProjectionFields = [
+  "providerThreads",
+  "providerSessions",
+  "checkpoints",
+  "checkpointScopes",
+  "runs",
+  "attempts",
+  "nodes",
+  "providerTurns",
+] as const;
+export type RollbackProjection = ProjectionRecords<(typeof rollbackProjectionFields)[number]>;
 
 /**
- * How a rewind ended. `refused`: the provider declined (for example Claude kept
- * no file snapshot) and nothing changed; retrying cannot help.
+ * What a rollback reads about its thread. `execute` fills it from the narrow
+ * checkpoint rollback query, so unrelated rows cannot fail the read; a rewind
+ * to a message fills it from the whole projection.
  */
-export type ThreadRewindOutcome =
-  | { readonly type: "completed"; readonly notice?: string }
-  | { readonly type: "refused"; readonly message: string };
+export type RollbackSource = {
+  readonly thread: RollbackProjection["thread"];
+  readonly providerSessions: RollbackProjection["providerSessions"];
+  readonly providerTurns: RollbackProjection["providerTurns"];
+  readonly targetAttempt:
+    | Pick<RollbackProjection["attempts"][number], "id" | "providerTurnId">
+    | undefined;
+  readonly rolledBackAttemptIds: ReadonlySet<RollbackProjection["attempts"][number]["id"]>;
+  readonly runsToRollback: RollbackProjection["runs"];
+  readonly rootNodes: RollbackProjection["nodes"];
+  readonly staleCheckpoints: RollbackProjection["checkpoints"];
+  readonly scopes: RollbackProjection["checkpointScopes"];
+};
+
+export interface RollbackConversationInput {
+  readonly threadId: ThreadId;
+  readonly source: RollbackSource;
+  readonly providerThread: RollbackProjection["providerThreads"][number];
+  readonly providerSessionId: ProviderSessionId;
+  readonly targetOrdinal: number;
+  readonly checkpointId: CheckpointId | undefined;
+  readonly restoreFiles: Effect.Effect<void, unknown>;
+}
 
 export interface CheckpointRollbackServiceV2Shape {
   readonly execute: (input: {
@@ -126,13 +161,11 @@ export interface CheckpointRollbackServiceV2Shape {
     readonly scopeId: CheckpointScopeId;
     readonly restoreFiles?: boolean;
   }) => Effect.Effect<void, CheckpointRollbackExecutionError>;
-  /** Carries out a `thread.rewind` choice for the user message that started `runId`. */
-  readonly rewind: (input: {
-    readonly threadId: ThreadId;
-    readonly providerThreadId: ProviderThreadId;
-    readonly runId: RunId;
-    readonly choice: ThreadRewindChoice;
-  }) => Effect.Effect<ThreadRewindOutcome, CheckpointRollbackExecutionError>;
+  /**
+   * The conversation step of `execute`, shared with a rewind to a message
+   * (`ThreadRewindService`). Callers map its failures to `CheckpointRollbackExecutionError`.
+   */
+  readonly rollbackConversation: (input: RollbackConversationInput) => Effect.Effect<void, unknown>;
 }
 
 export class CheckpointRollbackServiceV2 extends Context.Service<
@@ -156,7 +189,6 @@ export const layer: Layer.Layer<
   | ServerConfig.ServerConfig
   | ServerSettings.ServerSettingsService
   | ThreadCommandExecutor.ThreadCommandExecutor
-  | ThreadCodeRewindServiceV2
 > = Layer.effect(
   CheckpointRollbackServiceV2,
   Effect.gen(function* () {
@@ -172,91 +204,6 @@ export const layer: Layer.Layer<
     const path = yield* Path.Path;
     const threadCommands = yield* ThreadCommandExecutor.ThreadCommandExecutor;
     const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
-    const codeRewind = yield* ThreadCodeRewindServiceV2;
-
-    const projectionFields = [
-      "providerThreads",
-      "providerSessions",
-      "checkpoints",
-      "checkpointScopes",
-      "runs",
-      "attempts",
-      "nodes",
-      "providerTurns",
-    ] as const;
-    type RollbackProjection = ProjectionRecords<(typeof projectionFields)[number]>;
-
-    /**
-     * What a rollback reads about its thread. `execute` fills it from the narrow
-     * checkpoint rollback query, so unrelated rows cannot fail the read; a rewind
-     * to a message fills it from the whole projection.
-     */
-    type RollbackSource = {
-      readonly thread: RollbackProjection["thread"];
-      readonly providerSessions: RollbackProjection["providerSessions"];
-      readonly providerTurns: RollbackProjection["providerTurns"];
-      readonly targetAttempt:
-        | Pick<RollbackProjection["attempts"][number], "id" | "providerTurnId">
-        | undefined;
-      readonly rolledBackAttemptIds: ReadonlySet<RollbackProjection["attempts"][number]["id"]>;
-      readonly runsToRollback: RollbackProjection["runs"];
-      readonly rootNodes: RollbackProjection["nodes"];
-      readonly staleCheckpoints: RollbackProjection["checkpoints"];
-      readonly scopes: RollbackProjection["checkpointScopes"];
-    };
-
-    const rollbackSourceFromProjection = (
-      projection: RollbackProjection,
-      target: { readonly ordinal: number; readonly scopeId: CheckpointScopeId | undefined },
-    ): RollbackSource => {
-      // Imported runs can carry higher ordinals than turns that came after
-      // them, so "after the target" follows conversation order.
-      const targetRun = projection.runs.find((run) => run.ordinal === target.ordinal);
-      const isAfterTarget = (ordinal: number) => {
-        const run = projection.runs.find((candidate) => candidate.ordinal === ordinal);
-        return targetRun === undefined || run === undefined
-          ? ordinal > target.ordinal
-          : compareConversationOrder(run, targetRun) > 0;
-      };
-      // Stopped and failed runs after the target leave the provider
-      // conversation too, so they must not stay visible.
-      const runsToRollback = projection.runs.filter(
-        (run) =>
-          isAfterTarget(run.ordinal) &&
-          (run.status === "completed" ||
-            run.status === "interrupted" ||
-            run.status === "failed" ||
-            run.status === "cancelled"),
-      );
-      // Rolled-back turns stay in the audit history, but no longer exist in
-      // the provider conversation and must not be counted by a later rewind.
-      const rolledBackRunIds = new Set(
-        projection.runs.filter((run) => run.status === "rolled_back").map((run) => run.id),
-      );
-      return {
-        thread: projection.thread,
-        providerSessions: projection.providerSessions,
-        providerTurns: projection.providerTurns,
-        targetAttempt: projection.attempts.find(
-          (attempt) => attempt.id === targetRun?.activeAttemptId,
-        ),
-        rolledBackAttemptIds: new Set(
-          projection.attempts
-            .filter((attempt) => rolledBackRunIds.has(attempt.runId))
-            .map((attempt) => attempt.id),
-        ),
-        runsToRollback,
-        rootNodes: projection.nodes,
-        staleCheckpoints: projection.checkpoints.filter(
-          (candidate) =>
-            (target.scopeId === undefined || candidate.scopeId === target.scopeId) &&
-            candidate.appRunOrdinal !== null &&
-            isAfterTarget(candidate.appRunOrdinal) &&
-            candidate.status === "ready",
-        ),
-        scopes: projection.checkpointScopes,
-      };
-    };
 
     /**
      * Rewinds the provider conversation to just after run `targetOrdinal` (0: the thread
@@ -265,15 +212,7 @@ export const layer: Layer.Layer<
      * once the provider rewound.
      */
     const rollbackConversation = Effect.fn("orchestrationV2.checkpointRollback.conversation")(
-      function* (input: {
-        readonly threadId: ThreadId;
-        readonly source: RollbackSource;
-        readonly providerThread: RollbackProjection["providerThreads"][number];
-        readonly providerSessionId: ProviderSessionId;
-        readonly targetOrdinal: number;
-        readonly checkpointId: CheckpointId | undefined;
-        readonly restoreFiles: Effect.Effect<void, unknown>;
-      }) {
+      function* (input: RollbackConversationInput) {
         const { source, providerThread, targetOrdinal } = input;
         const { runsToRollback } = source;
         const failure = (reason: CheckpointRollbackExecutionError["reason"]) =>
@@ -548,101 +487,6 @@ export const layer: Layer.Layer<
       });
     });
 
-    const rewind = Effect.fn("orchestrationV2.checkpointRollback.rewind")(function* (input: {
-      readonly threadId: ThreadId;
-      readonly providerThreadId: ProviderThreadId;
-      readonly runId: RunId;
-      readonly choice: ThreadRewindChoice;
-    }) {
-      const projection = yield* projections.getThreadRecords(input.threadId, projectionFields);
-      const providerThread = projection.providerThreads.find(
-        (candidate) => candidate.id === input.providerThreadId,
-      );
-      const run = projection.runs.find((candidate) => candidate.id === input.runId);
-      const restores = threadRewindRestores(input.choice);
-      if (
-        providerThread === undefined ||
-        providerThread.providerSessionId === null ||
-        run === undefined ||
-        restores === null
-      ) {
-        return yield* new CheckpointRollbackExecutionError({
-          reason: "rollback-target-invalid",
-          threadId: input.threadId,
-          providerThreadId: input.providerThreadId,
-        });
-      }
-      if (
-        providerThread.id !== projection.thread.activeProviderThreadId ||
-        providerThread.providerInstanceId !== projection.thread.modelSelection.instanceId
-      ) {
-        return yield* new CheckpointRollbackExecutionError({
-          reason: "active-provider-changed",
-          threadId: input.threadId,
-          providerThreadId: input.providerThreadId,
-        });
-      }
-      // Two clients can rewind the same message at once; the later rewind
-      // finds it done and changes nothing.
-      if (run.status === "rolled_back") {
-        return { type: "completed" as const, notice: ALREADY_REWOUND_MESSAGE };
-      }
-      const targetOrdinal = previousConversationRun(projection.runs, run)?.ordinal ?? 0;
-      const rewindConversation = rollbackConversation({
-        threadId: input.threadId,
-        source: rollbackSourceFromProjection(projection, {
-          ordinal: targetOrdinal,
-          scopeId: undefined,
-        }),
-        providerThread,
-        providerSessionId: providerThread.providerSessionId,
-        targetOrdinal,
-        checkpointId: undefined,
-        restoreFiles: Effect.void,
-      });
-      if (!restores.code) {
-        yield* rewindConversation;
-        return { type: "completed" as const };
-      }
-      // Files go back first, from the live session that knows the later
-      // turns; a refusal leaves the conversation as it was.
-      const restored = yield* codeRewind.restore({ threadId: input.threadId, runId: run.id });
-      if (!restored.restored) {
-        return { type: "refused" as const, message: restored.reason };
-      }
-      const notice = skippedFilesMessage(restored.skippedLinks);
-      const completed =
-        notice === null ? { type: "completed" as const } : { type: "completed" as const, notice };
-      if (!restores.conversation) return completed;
-      // Retrying the whole rewind would find the files already back and
-      // refuse, so a failure here ends the rewind and says what changed.
-      return yield* rewindConversation.pipe(
-        Effect.as(completed),
-        Effect.catch((cause) =>
-          Effect.logWarning("Rewind restored code but not the conversation", { cause }).pipe(
-            Effect.as({ type: "refused" as const, message: CODE_ONLY_RESTORED_MESSAGE }),
-          ),
-        ),
-      );
-    });
-
-    const asExecutionError =
-      (input: {
-        readonly threadId: ThreadId;
-        readonly providerThreadId: ProviderThreadId;
-        readonly checkpointId?: CheckpointId;
-      }) =>
-      (cause: unknown) =>
-        isCheckpointRollbackExecutionError(cause)
-          ? cause
-          : new CheckpointRollbackExecutionError({
-              reason: "unexpected-failure",
-              threadId: input.threadId,
-              providerThreadId: input.providerThreadId,
-              ...(input.checkpointId === undefined ? {} : { checkpointId: input.checkpointId }),
-              cause,
-            });
-
     // Storage cleanup removes worktrees under the same lease.
     const withThreadWorkspaceLease = Effect.fn(
       "CheckpointRollbackService.withThreadWorkspaceLease",
@@ -659,11 +503,7 @@ export const layer: Layer.Layer<
           withThreadWorkspaceLease(input.threadId, execute(input)),
         (effect, input) => effect.pipe(Effect.mapError(asExecutionError(input))),
       ),
-      rewind: Effect.fn("CheckpointRollbackServiceV2.rewind")(
-        (input: Parameters<CheckpointRollbackServiceV2["Service"]["rewind"]>[0]) =>
-          withThreadWorkspaceLease(input.threadId, rewind(input)),
-        (effect, input) => effect.pipe(Effect.mapError(asExecutionError(input))),
-      ),
+      rollbackConversation,
     });
   }),
 );

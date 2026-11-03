@@ -53,7 +53,6 @@ import {
   OrchestrationSearchThreadsError,
   OrchestrationV2SearchThreadError,
   OrchestrationGetTurnDiffError,
-  OrchestrationPreviewThreadRewindError,
   ORCHESTRATION_V2_WS_METHODS,
   ORCHESTRATION_PROTOCOL_QUERY_PARAM,
   ORCHESTRATION_PROTOCOL_VERSION,
@@ -2013,15 +2012,8 @@ export const layerWsRpc = (
                 }),
             ),
           ),
-        [ORCHESTRATION_V2_WS_METHODS.previewThreadRewind]: (input) =>
-          threadCodeRewind
-            .preview(input)
-            .pipe(
-              Effect.mapError(
-                (cause) =>
-                  new OrchestrationPreviewThreadRewindError({ message: cause.message, cause }),
-              ),
-            ),
+        [ORCHESTRATION_V2_WS_METHODS.previewThreadRewind]:
+          ThreadCodeRewindService.previewThreadRewindHandler(threadCodeRewind),
         [ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff]: (input) =>
           checkpointDiffQuery.getFullThreadDiff(input).pipe(
             Effect.mapError(
