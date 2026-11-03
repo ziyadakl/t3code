@@ -214,14 +214,14 @@ export const layer: Layer.Layer<
     });
 
     // Storage cleanup removes worktrees under the same lease.
-    const withThreadWorkspaceLease = Effect.fn("ThreadRewindService.withThreadWorkspaceLease")(
-      function* <A, E, R>(threadId: ThreadId, effect: Effect.Effect<A, E, R>) {
-        const thread = yield* projections.getThread(threadId);
-        return yield* thread.worktreePath == null
-          ? effect
-          : withWorkspaceLease(path.resolve(thread.worktreePath), effect);
-      },
-    );
+    const withThreadWorkspaceLease = Effect.fn(
+      "CheckpointRollbackService.withThreadWorkspaceLease",
+    )(function* <A, E, R>(threadId: ThreadId, effect: Effect.Effect<A, E, R>) {
+      const thread = yield* projections.getThread(threadId);
+      return yield* thread.worktreePath == null
+        ? effect
+        : withWorkspaceLease(path.resolve(thread.worktreePath), effect);
+    });
 
     return ThreadRewindServiceV2.of({
       rewind: Effect.fn("CheckpointRollbackServiceV2.rewind")(
