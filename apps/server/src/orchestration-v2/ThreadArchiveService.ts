@@ -2,7 +2,7 @@ import { CommandId, type OrchestrationV2DomainEvent, type ThreadId } from "@t3to
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -66,13 +66,13 @@ const make = Effect.gen(function* () {
   const projections = yield* ThreadArchiveQueries.ThreadArchiveQueries;
   const eventStore = yield* EventStore.EventStoreV2;
   const settingsService = yield* ServerSettings.ServerSettingsService;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
 
   // Archive and unarchive go through the normal commands, so provider
   // sessions detach and terminals clean up exactly as for a user's archive.
   const dispatch = Effect.fn("ThreadArchiveServiceV2.dispatch")(
     function* (type: "thread.archive" | "thread.unarchive", threadId: ThreadId, reason: string) {
-      const uuid = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+      const uuid = yield* random.uuidV4();
       yield* orchestrator.dispatch({
         type,
         commandId: CommandId.make(`server:${reason}:${threadId}:${uuid}`),

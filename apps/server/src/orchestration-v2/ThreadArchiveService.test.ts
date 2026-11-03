@@ -12,7 +12,7 @@ import {
   type ServerSettingsPatch,
 } from "@t3tools/contracts";
 import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -108,10 +108,7 @@ type ArchiveCommand = Extract<
   { readonly type: "thread.archive" | "thread.unarchive" }
 >;
 
-const testCrypto = Crypto.make({
-  randomBytes: (size) => new Uint8Array(size).fill(1),
-  digest: (_algorithm, data) => Effect.succeed(data),
-});
+const testRandom = SecureRandom.make((size) => new Uint8Array(size).fill(1));
 
 interface HarnessOptions {
   readonly candidates?: ReadonlyArray<ThreadArchiveQueries.ProjectionAutoArchiveCandidate>;
@@ -190,7 +187,7 @@ const makeHarness = Effect.fn("makeThreadArchiveHarness")(function* (options: Ha
       }),
     ),
     Layer.succeed(ServerActivation.ServerActivation, Deferred.await(activation)),
-    Layer.succeed(Crypto.Crypto, testCrypto),
+    Layer.succeed(SecureRandom.SecureRandom, testRandom),
   );
 
   const start = Effect.gen(function* () {

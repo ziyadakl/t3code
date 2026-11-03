@@ -9,7 +9,7 @@ import * as NodeOS from "node:os";
 import { CommandId, ProjectId, ThreadId, type DesktopMirrorSettings } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -129,7 +129,7 @@ const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const platform = yield* HostProcess.Platform;
   const caseInsensitive = platform === "darwin";
   const homeDir = NodeOS.homedir();
@@ -193,12 +193,13 @@ const make = Effect.gen(function* () {
   `;
 
   const commandId = (operation: string, sessionId: string) =>
-    crypto.randomUUIDv4().pipe(
-      Effect.orDie,
-      Effect.map((uuid) =>
-        CommandId.make(`server:desktop-mirror:${operation}:${sessionId}:${uuid}`),
-      ),
-    );
+    random
+      .uuidV4()
+      .pipe(
+        Effect.map((uuid) =>
+          CommandId.make(`server:desktop-mirror:${operation}:${sessionId}:${uuid}`),
+        ),
+      );
 
   const toResumable = (
     session: ClaudeSessionSources.DesktopSession,
@@ -228,7 +229,7 @@ const make = Effect.gen(function* () {
     if (existing !== undefined) return existing;
     const { project } = yield* projects.bootstrap({
       commandId: yield* commandId("project", folder),
-      projectId: ProjectId.make(yield* crypto.randomUUIDv4().pipe(Effect.orDie)),
+      projectId: ProjectId.make(yield* random.uuidV4()),
       title: path.basename(folder) || folder,
       workspaceRoot: folder,
     });
