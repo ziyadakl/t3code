@@ -26,6 +26,7 @@ import * as ProjectionStore from "./ProjectionStore.ts";
 import type { ProviderAdapterV2 } from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
+import * as ThreadArchiveQueries from "./ThreadArchiveQueries.ts";
 import * as ThreadArchiveService from "./ThreadArchiveService.ts";
 
 const instanceId = ProviderInstanceId.make("codex");
@@ -52,6 +53,7 @@ const layerTest = Layer.mergeAll(
       Layer.mergeAll(
         layerProjections,
         layerOrchestration,
+        ThreadArchiveQueries.layer.pipe(Layer.provide(layerDatabase)),
         EventStore.layer.pipe(Layer.provide(layerDatabase)),
         ServerSettings.layerTest().pipe(Layer.orDie),
         NodeCrypto.layer,
