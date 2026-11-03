@@ -67,7 +67,8 @@ expect "run_parallel shows a failure's output" "1" "$(grep -c '^  two$' <<<"$out
 logs="$(sed -n 's/^Full logs: //p' <<<"$out")"
 expect "run_parallel keeps the logs of a failed run" "two" "$(cat "$logs/1.log" 2>/dev/null)"
 rm -rf "$logs"
-strict="$(bash -c 'set -euo pipefail; source "$1"; run_parallel "false" "exit 4" || true' _ "$here/sync-upstream.sh" 2>&1)"
+# No || inside: a call that set -e still covers is the case the status file must survive.
+strict="$(bash -c 'set -euo pipefail; source "$1"; run_parallel "false" "exit 4"' _ "$here/sync-upstream.sh" 2>&1)"
 expect "run_parallel keeps each exit code under set -e" "> false: FAILED (exit 1)|> exit 4: FAILED (exit 4)" \
   "$(grep '^>' <<<"$strict" | sed -E 's/ after [0-9]+s$//' | paste -sd'|' -)"
 rm -rf "$(sed -n 's/^Full logs: //p' <<<"$strict")"
