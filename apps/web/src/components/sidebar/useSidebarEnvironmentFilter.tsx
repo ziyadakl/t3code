@@ -14,6 +14,7 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import { useEffect, useRef, type ReactNode } from "react";
 
 import { useClientSettings } from "../../hooks/useSettings";
+import { useSidebarProjectGroups } from "../../hooks/useSidebarProjectGroups";
 import type { SidebarProjectSnapshot } from "../../sidebarProjectGrouping";
 import {
   useEnvironmentIdentities,
@@ -26,6 +27,7 @@ import { useUiStateStore } from "../../uiStateStore";
 import {
   buildEnvironmentProjectGroups,
   filterToEnvironment,
+  isDraftSessionInSidebarScope,
   resolveSidebarEnvironmentFilter,
   sidebarProjectScopeTriggerLabel,
   sidebarSearchEnvironmentIds,
@@ -36,27 +38,26 @@ import { SidebarEnvironmentFilter } from "./SidebarEnvironmentFilter";
 type EnvironmentIdentities = ReturnType<typeof useEnvironmentIdentities>;
 
 /**
- * Called in the sidebar's lookups. Reads the projects and threads, drops archived
- * projects and their threads, then narrows to the filtered machine, in that order.
- * Returns every machine's projects and threads too (the open thread or draft stays
- * listed on any machine and still needs its project's icon and name).
+ * Called in the sidebar's lookups, after dropping archived projects. `projects` and
+ * `projectGroups` are the filtered machine's; `threads`, `allProjects` and
+ * `allProjectGroups` span every machine (the open thread stays listed, New thread counts all).
  */
 export function useSidebarEnvironmentFilter(input: {
-  /** Every machine's project groups. */
-  allProjectGroups: ReadonlyArray<SidebarProjectSnapshot>;
   environments: EnvironmentIdentities;
   environmentLabelById: ReadonlyMap<EnvironmentId, string>;
 }): {
   allProjects: ReadonlyArray<EnvironmentProject>;
-  allThreads: ReadonlyArray<EnvironmentThreadShell>;
+  threads: ReadonlyArray<EnvironmentThreadShell>;
   /** The machine the sidebar is filtered to; null means all machines. */
   environmentFilterId: EnvironmentId | null;
   projects: ReadonlyArray<EnvironmentProject>;
   projectGroups: ReadonlyArray<SidebarProjectSnapshot>;
+  allProjectGroups: ReadonlyArray<SidebarProjectSnapshot>;
 } {
-  const { allProjectGroups, environments, environmentLabelById } = input;
+  const { environments, environmentLabelById } = input;
+  const allProjectGroups = useSidebarProjectGroups();
   // Quiet threads: see useSidebarProjectGroups.
-  const { projects: allProjects, threads: allThreads } = withoutArchivedProjects(
+  const { projects: allProjects, threads } = withoutArchivedProjects(
     useProjects(),
     useQuietThreadShells(),
   );
@@ -79,7 +80,7 @@ export function useSidebarEnvironmentFilter(input: {
       ? allProjectGroups
       : buildEnvironmentProjectGroups({
           projects,
-          threads: filterToEnvironment(allThreads, environmentFilterId),
+          threads: filterToEnvironment(threads, environmentFilterId),
           projectOrder,
           sortOrder,
           groupingSettings,
@@ -87,7 +88,7 @@ export function useSidebarEnvironmentFilter(input: {
           environmentLabelById,
           delegatedUnderParent,
         });
-  return { allProjects, allThreads, environmentFilterId, projects, projectGroups };
+  return { allProjects, threads, environmentFilterId, projects, projectGroups, allProjectGroups };
 }
 
 // Outlined call to action under a sidebar empty-state message.
@@ -153,15 +154,27 @@ export function useSidebarEnvironmentFilterUi(input: {
       ) : null,
     /** The open thread stays listed on any machine so the filter never hides what the user is looking at. */
     visibleThreads(
-      allThreads: ReadonlyArray<EnvironmentThreadShell>,
-      route: { threadKey: string | null; rowThreadKey: string | null },
+      threads: ReadonlyArray<EnvironmentThreadShell>,
+      routeThreadKey: string | null,
+      routeRowThreadKey: string | null,
     ): ReadonlyArray<EnvironmentThreadShell> {
-      return filterToEnvironment(allThreads, environmentFilterId, (thread) => {
-        if (route.threadKey === null) return false;
+      return filterToEnvironment(threads, environmentFilterId, (thread) => {
+        if (routeThreadKey === null) return false;
         const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-        return key === route.threadKey || key === route.rowThreadKey;
+        return key === routeThreadKey || key === routeRowThreadKey;
       });
     },
+    /** Whether a draft session gets a sidebar row under the project scope and the machine filter. */
+    showsDraft: (
+      session: { readonly environmentId: EnvironmentId; readonly projectId: string },
+      scopedProjectKeys: ReadonlySet<string> | null,
+      isRouteDraft: boolean,
+    ) =>
+      isDraftSessionInSidebarScope(session, {
+        scopedProjectKeys,
+        environmentFilterId,
+        isRouteDraft,
+      }),
     /** Filtered to one machine, only that machine's server is asked, and only while it is connected. */
     searchEnvironmentIds: (connectedEnvironmentIds: ReadonlyArray<EnvironmentId>) =>
       sidebarSearchEnvironmentIds(connectedEnvironmentIds, environmentFilterId),

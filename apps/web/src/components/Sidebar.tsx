@@ -127,7 +127,6 @@ import {
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useOrderWhileOpen } from "../hooks/useOrderWhileOpen";
 import { useProjectPin } from "../hooks/useProjectGroupUpdate";
-import { useSidebarProjectGroups } from "../hooks/useSidebarProjectGroups";
 import { useTerminalFocus } from "../hooks/useTerminalFocus";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { registerSettleAndAdvance } from "../settleAndAdvance";
@@ -250,7 +249,6 @@ import {
 } from "./ui/combobox";
 import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
-import { isDraftSessionInSidebarScope } from "./sidebar/environmentFilter.logic";
 import { useSidebarBulkArchive } from "./sidebar/useSidebarBulkArchive";
 import {
   useSidebarEnvironmentFilter,
@@ -430,9 +428,9 @@ function useSidebarThreads(input: {
   readonly connectedEnvironmentIds: readonly EnvironmentId[];
   readonly optimisticDrop: SidebarOptimisticDrop | null;
   readonly threads: readonly EnvironmentThreadShell[];
-  // Every thread, not the filtered ones: a thread hidden by the machine filter
+  // The machine filter's threads: `threads` stays every thread so a hidden one
   // still reserves its order key and keeps its return stamp.
-  readonly allThreads: readonly EnvironmentThreadShell[];
+  readonly visibleThreads: readonly EnvironmentThreadShell[];
   readonly delegatedUnderParent: ReadonlySet<string>;
   readonly routeThreadKey: string | null;
   readonly routeRowThreadKey: string | null;
@@ -451,7 +449,7 @@ function useSidebarThreads(input: {
     connectedEnvironmentIds,
     optimisticDrop,
     threads,
-    allThreads,
+    visibleThreads,
     delegatedUnderParent,
     routeThreadKey,
     routeRowThreadKey,
@@ -480,7 +478,7 @@ function useSidebarThreads(input: {
   );
   const nowMinute = useNowMinute();
   // Minute-quantized clocks would delay second-precise snooze wakes by up to a minute.
-  const snoozeWakeClock = useSnoozeWakeClock(threads);
+  const snoozeWakeClock = useSnoozeWakeClock(visibleThreads);
   const [settledShelfExpanded, setSettledShelfExpanded] = useLocalStorage(
     SETTLED_SHELF_EXPANDED_KEY,
     false,
@@ -510,8 +508,8 @@ function useSidebarThreads(input: {
     settledTail.scopeKey === projectScopeKey ? settledTail.count : SETTLED_TAIL_INITIAL_COUNT;
 
   const partition = partitionSidebarThreads({
-    threads,
-    observedThreads: allThreads,
+    threads: visibleThreads,
+    observedThreads: threads,
     scopedProjectKeys,
     delegatedUnderParent,
     serverConfigs,
@@ -610,7 +608,6 @@ function useSidebarThreads(input: {
   return {
     ...partition,
     threads,
-    allThreads,
     projectGroupsLayout,
     workingShelfEnabled,
     searchableThreads: [
@@ -650,13 +647,11 @@ function useSidebarThreads(input: {
     sectionByThreadKey,
     pinnedKeys: pinnedThreads.map(threadShellKey),
     activeKeys: activeThreads.map(threadShellKey),
-    // Hidden and filtered threads keep their keys. Reserve those slots without
-    // including the rows in the visible drop order or writing to them.
     pinnedKeysById: new Map(
-      allThreads.map((thread) => [threadShellKey(thread), thread.pinOrderKey ?? null] as const),
+      threads.map((thread) => [threadShellKey(thread), thread.pinOrderKey ?? null] as const),
     ),
     activeKeysById: new Map(
-      allThreads.map((thread) => [threadShellKey(thread), thread.activeOrderKey ?? null] as const),
+      threads.map((thread) => [threadShellKey(thread), thread.activeOrderKey ?? null] as const),
     ),
   };
 }
@@ -861,24 +856,11 @@ function useSidebarLookups() {
   const environments = useEnvironmentIdentities();
   const serverConfigs = useServerConfigs();
   const providerEntriesByEnvironment = useAtomValue(sidebarProviderEntriesAtom);
-  // Every machine's project groups. New thread is not filter-aware (the palette
-  // picker and the default project span every machine), so its
-  // create-directly-or-pick decision counts these; rows kept visible from
-  // another machine and a paused project scope read names here.
-  const allProjectGroups = useSidebarProjectGroups();
   const environmentLabelById = new Map(
     environments.map((environment) => [environment.environmentId, environment.label] as const),
   );
-  // Fork (machine filter): `allProjects` and `allThreads` span every machine, without
-  // archived projects; `projects` and `projectGroups` are one machine's.
-  const { allProjects, allThreads, environmentFilterId, projects, projectGroups } =
-    useSidebarEnvironmentFilter({
-      allProjectGroups,
-      environments,
-      environmentLabelById,
-    });
-  // Lookups span every machine: the open thread or draft stays listed on any
-  // machine and still needs its project's icon and name.
+  const { allProjects, threads, environmentFilterId, projects, projectGroups, allProjectGroups } =
+    useSidebarEnvironmentFilter({ environments, environmentLabelById });
   const projectByKey = new Map(
     allProjects.map((project) => [`${project.environmentId}:${project.id}`, project] as const),
   );
@@ -901,7 +883,7 @@ function useSidebarLookups() {
   ];
   return {
     allProjects,
-    allThreads,
+    threads,
     projects,
     environmentFilterId,
     serverConfigs,
@@ -969,7 +951,7 @@ function readRouteThreadKey(router: AnyRouter): string | null {
 export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReveal }) {
   const {
     allProjects,
-    allThreads,
+    threads,
     projects,
     environmentFilterId,
     serverConfigs,
@@ -1188,7 +1170,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             resolveSidebarRowThreadId(
               routeThreadRef.threadId,
               routeThreadRef.environmentId,
-              allThreads,
+              threads,
             ),
           ),
         );
@@ -1204,20 +1186,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     isSearching: isSearchingThreads,
     scopedProjectKeys: chosenScopeProjectKeys,
     delegatedUnderParent,
-    findThread: (key) => allThreads.find((candidate) => threadShellKey(candidate) === key),
+    findThread: (key) => threads.find((candidate) => threadShellKey(candidate) === key),
   });
   const projectScopeKeys = revealWidensScope ? [] : chosenProjectScopeKeys;
   const projectScopeKey = projectScopeKeys.length === 0 ? null : projectScopeKeys.join("\n");
-  // Fork (machine filter): `threads` is one machine's, plus the open thread.
   const environmentFilter = useSidebarEnvironmentFilterUi({
     environmentFilterId,
     environmentLabelById,
     allProjectGroups,
     projectScopeKeys,
-  });
-  const threads = environmentFilter.visibleThreads(allThreads, {
-    threadKey: routeThreadKey,
-    rowThreadKey: routeRowThreadKey,
   });
   const toggleProjectScopeKey = (key: string) =>
     setProjectScopeKeys(
@@ -1288,11 +1265,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         continue;
       }
       if (
-        !isDraftSessionInSidebarScope(session, {
-          scopedProjectKeys,
-          environmentFilterId,
-          isRouteDraft: draftKey === routeDraftIdForRows,
-        })
+        !environmentFilter.showsDraft(session, scopedProjectKeys, draftKey === routeDraftIdForRows)
       ) {
         continue;
       }
@@ -1425,7 +1398,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     connectedEnvironmentIds,
     optimisticDrop,
     threads,
-    allThreads,
+    visibleThreads: environmentFilter.visibleThreads(threads, routeThreadKey, routeRowThreadKey),
     delegatedUnderParent,
     routeThreadKey,
     routeRowThreadKey,
@@ -1938,7 +1911,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     optimisticDrop !== null &&
     isOptimisticDropReleased({
       optimisticDrop,
-      threads: allThreads,
+      threads,
       pinnedKeys,
       activeKeys,
       now: snoozeNow,
