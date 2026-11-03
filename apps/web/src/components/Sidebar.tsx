@@ -256,7 +256,7 @@ import {
 } from "./sidebar/useSidebarEnvironmentFilter";
 import {
   renderProjectGroupMarker,
-  useSidebarProjectGroups as useSidebarInboxGroups,
+  useSidebarInboxGroups,
 } from "./sidebar/projectGroups/SidebarProjectGroups";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
 import { TooltipProvider } from "./ui/tooltip";

@@ -51,7 +51,7 @@ type GroupedProject = Parameters<typeof buildSidebarGroupedActiveModel>[0]["proj
  * `projects` must span every machine, so a thread kept visible from a
  * filtered-out machine still finds its project.
  */
-export function useSidebarProjectGroups<TProject extends GroupedProject>(input: {
+export function useSidebarInboxGroups<TProject extends GroupedProject>(input: {
   readonly activeThreads: readonly EnvironmentThreadShell[];
   readonly projects: readonly TProject[];
   readonly routeThreadKey: string | null;
@@ -127,7 +127,7 @@ export function useSidebarProjectGroups<TProject extends GroupedProject>(input: 
   };
 }
 
-type SidebarProjectGroupsLayout = ReturnType<typeof useSidebarProjectGroups>;
+type SidebarProjectGroupsLayout = ReturnType<typeof useSidebarInboxGroups>;
 
 /** A group marker's place in the sortable list; it never drags. */
 function SortableGroupMarker(props: { id: string; children: ReactNode }) {
