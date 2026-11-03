@@ -35,7 +35,10 @@ jobs:
       test_server: ${{ steps.detect.outputs.test_server }}
       rust: ${{ steps.detect.outputs.rust }}
       release_smoke: ${{ steps.detect.outputs.release_smoke }}
-      mobile_native: ${{ steps.detect.outputs.mobile_native }}
+      # Fork: an Upstream sync (sync/upstream-* branch) skips the macOS lint. The fork edits no
+      # native mobile file (sync-upstream.sh check fails if it does), so a sync's native changes
+      # are Upstream's own, already linted by Upstream's CI; a macos-26 runner can queue 10+ min.
+      mobile_native: ${{ startsWith(github.head_ref, 'sync/upstream-') && 'false' || steps.detect.outputs.mobile_native }}
     steps:
       # Only the package manifests the script reads to build the dependency graph.
       # Depth 2 brings the base commit the change is diffed against.
@@ -288,11 +291,17 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    name: Test Web
+    name: Test Web ${{ matrix.shard }}
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.test_web != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    # Fork: split over 4 runners. On one 4 vCPU runner this job took 8-11 minutes and held up
+    # every pull request; split, each part takes about 3. Shard 1 also runs the two steps below.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -339,13 +348,15 @@ jobs:
       # files share the CPU. That one file runs alone in its own step; every
       # other file runs in parallel, as upstream runs them.
       - name: Test
-        run: vp run --filter @t3tools/web test --exclude '**/AttachmentFilePreview.browser.test.tsx'
+        run: vp run --filter @t3tools/web test --exclude '**/AttachmentFilePreview.browser.test.tsx' --shard ${{ matrix.shard }}/4
 
       - name: Test attachment previews alone
+        if: matrix.shard == 1
         run: vp run --filter @t3tools/web test AttachmentFilePreview.browser.test.tsx
 
       # Browser tests run source modules; this boots the production chunk graph.
       - name: Boot the built web client
+        if: matrix.shard == 1
         run: |
           vp run --filter @t3tools/web build
           node apps/web/scripts/verify-built-boot.ts

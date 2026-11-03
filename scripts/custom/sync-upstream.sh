@@ -4,10 +4,11 @@
 # CUSTOM.md lists every feature that is ours and the rule for dropping it.
 #
 #   scripts/custom/sync-upstream.sh start   merge upstream/main into a new sync branch
-#   scripts/custom/sync-upstream.sh check   run CI's lint, typecheck and unused-code checks, build
-#                                           the web app (React Compiler on), run the test files the sync
-#                                           touched, and fail on release links that name the fork;
-#                                           it starts by printing the footprint before and after
+#   scripts/custom/sync-upstream.sh check   run CI's lint, typecheck and unused-code checks side by
+#                                           side, build the web app (React Compiler on), and fail on
+#                                           release links that name the fork or on fork-edited native
+#                                           mobile files; about 40 seconds. CI runs every test. It
+#                                           starts by printing the footprint before and after
 #   scripts/custom/sync-upstream.sh footprint [ref]   print how many Upstream files <ref> (default
 #                                           HEAD) edits against upstream/main, and the lines changed
 set -euo pipefail
@@ -24,28 +25,47 @@ indent() { sed 's/^/  /'; }
 # owner/name of a GitHub remote URL (https or ssh).
 fork_slug() { sed -E 's#^.*github\.com[:/]##; s#\.git$##' <<<"$1"; }
 
-# Test files the sync added or changed since <base>, one path per line. Deleted files are skipped.
-touched_test_files() {
-  local changed
-  # Capture git's output first: inside a pipe its failure (a bad base) would read as "no files".
-  changed="$(git diff --name-only --diff-filter=ACMR "$1" HEAD --)" || return $?
-  grep -E '\.(test|spec)\.[cm]?[jt]sx?$' <<<"$changed" || true
+# Native mobile files the fork edits or adds against <upstream-ref>, one per line. CI skips the
+# macOS lint on sync/upstream-* branches (ci.yml, changes job): a sync's native changes are then
+# Upstream's own, already linted by Upstream. That holds only while this list is empty.
+fork_native_files() { # fork_native_files <upstream-ref> <fork-ref>
+  local base changed
+  # Capture git's output first: inside a pipe its failure (a bad ref) would read as "no files".
+  base="$(git merge-base "$1" "$2")" || return $?
+  changed="$(git diff --name-only --no-renames --diff-filter=AM "$base" "$2" --)" || return $?
+  grep -E '^apps/mobile/.*\.(swift|kt|kts)$|^apps/mobile/(\.swiftlint\.yml|detekt\.yml|\.editorconfig|Brewfile)$|^scripts/mobile-native-static-check\.ts$' <<<"$changed" || true
 }
 
-# True when <dir>/package.json exists and defines scripts.test.
-has_test_script() {
-  [ -f "$1/package.json" ] || return 1
-  node -e 'process.exit(require(require("path").resolve(process.argv[1], "package.json")).scripts?.test ? 0 : 1)' "$1"
-}
-
-# Root-level test files in <files> (one per line), for one runner: "node" = the .github/scripts
-# *.test.cjs files (CI runs them with `node --test`), "vp" = everything else.
-split_root_tests() {
-  if [ "$1" = node ]; then
-    grep -E '^\.github/scripts/[^/]*\.test\.cjs$' <<<"$2" || true
-  else
-    grep -vE '^\.github/scripts/[^/]*\.test\.cjs$' <<<"$2" || true
-  fi
+# Runs each command line at once, each into its own log under <logdir>. Prints every result with
+# its time, and the last 40 lines of each failure. Returns 1 when any failed.
+run_parallel() { # run_parallel <logdir> <command line>...
+  local dir="$1" i=0 cmd rc secs status=0
+  shift
+  for cmd in "$@"; do
+    (
+      s=$SECONDS
+      # Its own shell, so a command that calls exit still has its status written.
+      (eval "$cmd") >"$dir/$i.log" 2>&1
+      echo "$? $((SECONDS - s))" >"$dir/$i.rc"
+    ) &
+    i=$((i + 1))
+  done
+  wait
+  i=0
+  for cmd in "$@"; do
+    # No status file means the command never finished: count it as failed.
+    rc=1 secs="?"
+    [ -f "$dir/$i.rc" ] && read -r rc secs <"$dir/$i.rc"
+    if [ "$rc" -eq 0 ]; then
+      echo "> $cmd: passed in ${secs}s"
+    else
+      echo "> $cmd: FAILED (exit $rc) after ${secs}s" >&2
+      tail -40 "$dir/$i.log" | indent >&2
+      status=1
+    fi
+    i=$((i + 1))
+  done
+  return "$status"
 }
 
 # Lists built files under <dist> that name <slug>; returns 1 when there are any. A fork has no
@@ -68,16 +88,6 @@ footprint() { # footprint <upstream-ref> <fork-ref> -> "<n> files, +<a> -<d> lin
   # NF skips the empty line an empty here-string still yields; "-" columns are binary files.
   awk 'NF { n++; if ($1 != "-") a += $1; if ($2 != "-") d += $2 }
        END { printf "%d files, +%d -%d lines\n", n, a, d }' <<<"$stat"
-}
-
-# Runs the touched test files of one workspace package through that package's own `test` script
-# (its projects and config), narrowed to the files. $1 = package dir (apps/web), the rest = test
-# paths relative to the repo root.
-run_touched_tests() {
-  local dir="$1" files=() f
-  shift
-  for f in "$@"; do files+=("${f#"$dir"/}"); done
-  (cd "$dir" && pnpm run test "${files[@]}")
 }
 
 # Production web build, as the fork's CI and release builds run it: the web app's own `build`
@@ -130,68 +140,6 @@ web_build_and_links() {
   if ! hits="$(fork_link_hits apps/web/dist "$slug")"; then
     echo "These built files name $slug, which has no releases. Set T3CODE_DESKTOP_UPDATE_REPOSITORY to pingdotgg/t3code in $workflow:" >&2
     indent <<<"$hits" >&2
-    return 1
-  fi
-}
-
-# Test files the sync touched (against the pre-sync custom-v2), run package by package.
-# SYNC_BASE overrides the base commit, to check a sync whose pull request already merged.
-touched_tests() {
-  local base files pkgs pkg failed=()
-  base="${SYNC_BASE:-$(git merge-base HEAD origin/custom-v2)}"
-  files="$(touched_test_files "$base")" || return $?
-  if [ "$(uname)" = Darwin ]; then
-    # Files named *Linux* test Linux-only behaviour (the Mac's file system ignores case, so they fail here).
-    files="$(grep -v 'Linux[^/]*$' <<<"$files" || true)"
-  fi
-  if [ -z "$files" ]; then
-    echo "> touched tests: none"
-    return 0
-  fi
-  # macOS temp dirs sit behind a symlink (/var -> /private/var); tests that compare a temp path
-  # with its real path fail there and pass on Linux CI. Hand them the real path.
-  TMPDIR="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
-  export TMPDIR
-  # The package is the first two path segments (apps/web); files elsewhere run from the repo root.
-  pkgs="$(awk -F/ '{ if ($1 == "apps" || $1 == "packages" || $1 == "infra") print $1 "/" $2; else print "." }' <<<"$files" | sort -u)"
-  # Browser tests need the Chromium build each package's Playwright pins, and a sync can bump it.
-  # Same install as ci.yml; a build already in ~/.cache is not downloaded again.
-  local cli
-  for cli in apps/web/node_modules/playwright/cli.js apps/server/node_modules/playwright-core/cli.js; do
-    if grep -qx "${cli%%/node_modules/*}" <<<"$pkgs" && [ -f "$cli" ]; then
-      echo "> test browser for ${cli%%/node_modules/*}"
-      node "$cli" install --only-shell chromium | indent
-    fi
-  done
-  for pkg in $pkgs; do
-    echo "> touched tests in $pkg"
-    if [ "$pkg" = . ]; then
-      local root node_files vp_files
-      root="$(grep -vE '^(apps|packages|infra)/' <<<"$files")"
-      node_files="$(split_root_tests node "$root")"
-      vp_files="$(split_root_tests vp "$root")"
-      if [ -n "$node_files" ]; then
-        # CI runs these with node's own runner (ci.yml, "Test release checks").
-        # shellcheck disable=SC2086 # one path per line, none with spaces
-        node --test $node_files || failed+=("$pkg (node --test)")
-      fi
-      if [ -n "$vp_files" ]; then
-        # shellcheck disable=SC2086
-        pnpm exec vp test run --passWithNoTests $vp_files || failed+=("$pkg")
-      fi
-    elif [ ! -f "$pkg/package.json" ]; then
-      echo "  skipped: $pkg has no package.json, so these files did not run:"
-      grep "^$pkg/" <<<"$files" | indent
-    elif ! has_test_script "$pkg"; then
-      echo "  skipped: $pkg/package.json has no scripts.test, so these files did not run:"
-      grep "^$pkg/" <<<"$files" | indent
-    else
-      # shellcheck disable=SC2046
-      run_touched_tests "$pkg" $(grep "^$pkg/" <<<"$files") || failed+=("$pkg")
-    fi
-  done
-  if [ "${#failed[@]}" -gt 0 ]; then
-    echo "Touched tests failed in: ${failed[*]}" >&2
     return 1
   fi
 }
@@ -302,28 +250,49 @@ check() {
     fi
   done
 
+  local native
+  native="$(fork_native_files upstream/main HEAD)" || return $?
+  if [ -n "$native" ]; then
+    echo "The fork edits these native mobile files, but CI skips the macOS lint on sync branches:" >&2
+    indent <<<"$native" >&2
+    echo "Remove the sync/upstream-* skip from mobile_native in $ci (changes job) first." >&2
+    return 1
+  fi
+
   pnpm install --frozen-lockfile
-  for cmd in "${cmds[@]}"; do
+  # Electron's runtime first, as the Lint job installs it before knip; the rest side by side.
+  echo "> ${cmds[0]}"
+  # shellcheck disable=SC2086 # a command line to split
+  pnpm exec ${cmds[0]}
+  local parallel=() logs
+  for cmd in "${cmds[@]:1}"; do
     # Upstream's mobile lint now fails when ktlint or detekt is missing; CI has them, this machine may not.
     if [ "$cmd" = "vp run lint:mobile" ] && ! { command -v ktlint >/dev/null && command -v detekt >/dev/null; }; then
       echo "> $cmd skipped: ktlint or detekt is not installed here. CI runs it on the pull request."
       continue
     fi
-    echo "> $cmd"
-    # shellcheck disable=SC2086 # each entry is a command line to split
-    pnpm exec $cmd
+    parallel+=("pnpm exec $cmd")
   done
-
+  logs="$(mktemp -d)"
+  if ! run_parallel "$logs" "${parallel[@]}"; then
+    rm -rf "$logs"
+    return 1
+  fi
+  rm -rf "$logs"
+  # After the others: its probe config file would show up in knip and vp check.
   web_build_and_links
-  touched_tests
 
   local branch
   branch="$(git rev-parse --abbrev-ref HEAD)"
   echo
-  echo "Lint, typecheck, unused-code, web build, touched-test and release-link checks passed on $branch."
-  echo "The full tests run in CI on the pull request; CI must be green before merging."
-  echo "Next: git push -u origin $branch, open a pull request into custom-v2, merge it when green."
-  echo "GitHub then builds the new version. Install it everywhere with t3-switch-build.sh on the Mac."
+  echo "Lint, typecheck, unused-code, web build, release-link and native-file checks passed on $branch."
+  echo "Every test runs in CI on the pull request; CI must be green before merging."
+  echo "Next: git push -u origin $branch (GitHub starts the Mac and Linux builds at once),"
+  echo "open a pull request into custom-v2, and when CI is green merge it by fast-forward:"
+  echo "  git push origin $branch:custom-v2"
+  echo "The commit stays the same, so the build already made is the new version, and GitHub marks"
+  echo "the pull request merged. If the push is refused, custom-v2 moved: merge origin/custom-v2 into"
+  echo "$branch, push, and wait for CI again. Install the build with t3-switch-build.sh on the Mac."
   echo "Afterwards clean up:"
   echo "  git worktree remove $worktree"
   echo "  git branch -D $branch"

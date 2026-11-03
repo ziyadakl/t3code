@@ -30,7 +30,10 @@ on:
         description: Version string baked into the archive
         required: false
   push:
-    branches: [custom-v2]
+    # An Upstream sync branch builds while its CI runs. The sync merges into custom-v2 by
+    # fast-forward, so the commit and the version stay the same, and switch-build.sh
+    # (ziyadakl/tokenmaxxing) installs a build whose commit is on custom-v2.
+    branches: [custom-v2, "sync/upstream-*"]
   # A change to this file builds both archives before it merges.
   pull_request:
     branches: [custom-v2]
