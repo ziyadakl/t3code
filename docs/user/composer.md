@@ -166,8 +166,9 @@ This removes the selected message and later conversation from the active thread
 and provider history. It does not undo external actions or separate provider
 memory. The action is available only when the provider supports rewind.
 
-In Claude threads, **Edit from here** opens a rewind menu, and `Escape` stops a turn
-or opens a picker of earlier messages. See [Rewind](./rewind.md).
+`Escape` stops a running turn, and pressed twice opens a picker of earlier
+messages. In Claude threads, **Edit from here** opens a rewind menu. See
+[Rewind](./rewind.md).
 
 ## Prompt stash
 
