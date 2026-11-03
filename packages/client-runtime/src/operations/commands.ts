@@ -26,8 +26,6 @@ import {
   type RuntimeRequestId,
   type ThreadId,
   type ThreadEnvMode,
-  type ThreadRewindChoice,
-  TrimmedNonEmptyString,
   type UploadChatAttachment,
   type GuestMessageId,
 } from "@t3tools/contracts";
@@ -38,6 +36,8 @@ import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 
 import { getInitialServerConfig, request } from "../rpc/client.ts";
+
+export * from "./threadRewind.ts";
 
 interface CommandMetadata {
   readonly commandId?: CommandId;
@@ -216,12 +216,6 @@ export interface RevertThreadCheckpointInput extends ThreadCommandInput {
   readonly checkpointId?: string;
   readonly scopeId?: string;
   readonly turnCount?: number;
-}
-
-export interface RewindThreadInput extends ThreadCommandInput {
-  readonly messageId: MessageId;
-  readonly choice: ThreadRewindChoice;
-  readonly instructions?: string;
 }
 
 export type StopThreadSessionInput = ThreadCommandInput;
@@ -979,22 +973,6 @@ export const revertThreadCheckpoint = Effect.fn("EnvironmentCommands.revertThrea
     });
   },
 );
-
-export const rewindThread = Effect.fn("EnvironmentCommands.rewindThread")(function* (
-  input: RewindThreadInput,
-) {
-  const instructions = input.instructions?.trim() ?? "";
-  return yield* dispatch({
-    type: "thread.rewind",
-    commandId: yield* allocateCommandId(input),
-    threadId: input.threadId,
-    messageId: input.messageId,
-    choice: input.choice,
-    ...(instructions.length === 0
-      ? {}
-      : { instructions: TrimmedNonEmptyString.make(instructions) }),
-  });
-});
 
 export const stopThreadSession = Effect.fn("EnvironmentCommands.stopThreadSession")(function* (
   input: StopThreadSessionInput,
