@@ -1,5 +1,6 @@
 # PROTOTYPE (branch proto/sync-speed, never merge): times a sharded CI shape for
-# Upstream syncs. Test Web runs in 5 parts, Test in 5 groups, Test Server in 12.
+# Upstream syncs. v2: Test Web in 5 parts, Test in 5 groups, Test Server in 10,
+# each server shard one test runner (vp test run --shard) instead of one per file.
 # This fork (ziyadakl/t3code) runs on GitHub-hosted runners because it has no
 # Blacksmith access; upstream blacksmith-* labels would queue forever here.
 name: CI
@@ -222,7 +223,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        group: [rest, oxlint, mobile-1, mobile-2, mobile-3]
+        group: [apps, packages, misc, mobile-1, mobile-2]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -234,12 +235,12 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - uses: ./.github/actions/setup-apt-mirrors
-        if: matrix.group == 'rest'
+        if: matrix.group == 'apps' || matrix.group == 'misc'
 
       # The desktop tests compile the browser secret helper. The install runs in
       # the background while Vite+ installs; the step before the tests waits for it.
       - name: Start installing browser secret helper build libraries
-        if: matrix.group == 'rest'
+        if: matrix.group == 'apps' || matrix.group == 'misc'
         run: |
           sudo sed -i 's|http://|https://|g' /etc/apt/blacksmith-ubuntu-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources
           (
@@ -256,26 +257,26 @@ jobs:
       # electron's install.js (run by ensure:electron) reads this cache before it
       # downloads from GitHub. The key changes only with the Electron version.
       - name: Cache Electron download
-        if: matrix.group == 'rest'
+        if: matrix.group == 'apps' || matrix.group == 'misc'
         uses: actions/cache@v6
         with:
           path: ~/.cache/electron
           key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('node_modules/.pnpm/electron@*/node_modules/electron/package.json') }}
 
       - name: Ensure Electron runtime is installed
-        if: matrix.group == 'rest'
+        if: matrix.group == 'apps' || matrix.group == 'misc'
         run: vp run --filter @t3tools/desktop ensure:electron
 
       - name: Test preview artifact validation
-        if: matrix.group == 'rest'
+        if: matrix.group == 'apps' || matrix.group == 'misc'
         run: python3 -B .github/scripts/stage-preview-bundle.test.py
 
       - name: Test release checks
-        if: matrix.group == 'rest'
+        if: matrix.group == 'apps' || matrix.group == 'misc'
         run: node --test .github/scripts/check-nightly-release.test.cjs .github/scripts/vercel-deployment-output.test.cjs
 
       - name: Finish installing browser secret helper build libraries
-        if: matrix.group == 'rest'
+        if: matrix.group == 'apps' || matrix.group == 'misc'
         timeout-minutes: 5
         run: |
           until test -s "$RUNNER_TEMP/apt-status"; do sleep 1; done
@@ -289,9 +290,10 @@ jobs:
         run: |
           # PROTOTYPE: a sync touches every package, so TEST_PACKAGES is ignored here.
           case "$GROUP" in
-            rest) vp run --parallel --concurrency-limit 4 --filter '!t3' --filter '!@t3tools/monorepo' --filter '!@t3tools/web' --filter '!@t3tools/mobile' --filter '!@t3tools/oxlint-plugin-t3code' test ;;
-            oxlint) vp run --filter @t3tools/oxlint-plugin-t3code test ;;
-            mobile-*) vp run --filter @t3tools/mobile test --shard "${GROUP#mobile-}/3" ;;
+            apps) vp run --parallel --concurrency-limit 4 --filter './apps/*' --filter '!t3' --filter '!@t3tools/web' --filter '!@t3tools/mobile' test ;;
+            packages) vp run --parallel --concurrency-limit 4 --filter './packages/*' test ;;
+            misc) vp run --parallel --concurrency-limit 4 --filter '!./apps/*' --filter '!./packages/*' --filter '!@t3tools/monorepo' test ;;
+            mobile-*) vp run --filter @t3tools/mobile test --shard "${GROUP#mobile-}/2" ;;
           esac
 
   # The web suite is the largest outside the server. In the shared Test job it
@@ -390,7 +392,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     steps:
       # Depth 2 brings the base commit the change is diffed against.
       - name: Checkout
@@ -448,13 +450,13 @@ jobs:
         env:
           T3CODE_TRANSFER_BUDGET_REPORT_PATH: ${{ runner.temp }}/t3code-transfer-budget.md
           T3CODE_TRANSFER_BUDGET_RESULT_PATH: ${{ runner.temp }}/thread-transfer-result.json
-        run: >-
-          vp run test:cached -- --shard ${{ matrix.shard }}/${{ strategy.job-total }}
-          --uncached apps/server/integration/transferBudgetV2.integration.test.ts
-          --verify-hits 1 --report "${{ runner.temp }}/test-cache-${{ matrix.shard }}.json" apps/server
+        # PROTOTYPE v2: the Fork cannot read Upstream's task cache, so every file missed it and
+        # paid its own test-runner start. One runner per shard keeps fileParallelism: false.
+        working-directory: apps/server
+        run: vp test run --shard ${{ matrix.shard }}/${{ strategy.job-total }}
 
       - name: Upload test cache measurements
-        if: always() && steps.changes.outputs.test_server != 'false'
+        if: false
         uses: actions/upload-artifact@v7
         with:
           name: test-cache-${{ matrix.shard }}
