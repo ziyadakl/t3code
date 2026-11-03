@@ -128,9 +128,9 @@ const browserTestProject = {
     include: ["src/**/*.browser.test.{ts,tsx}"],
     hookTimeout: 15_000,
     testTimeout: 15_000,
-    // Fork (CUSTOM.md, CI row): on the fork's 4-way split of these tests, one browser test in a
-    // few runs timed out or raced on GitHub's runners and passed when rerun. CI retries a failed
-    // test once; local runs never do.
+    // Fork (CUSTOM.md, CI row): CI retries a failed browser test once; local runs never do.
+    // AGENTS.md says flaky tests are fixed, not retried; Ziyad signed off on this exception for
+    // the fork's 4-runner split on 2026-11-03.
     retry: process.env.CI ? 1 : 0,
     setupFiles: ["./test/browserSetup.ts"],
     api: { port: browserTestApiPort, strictPort: false },

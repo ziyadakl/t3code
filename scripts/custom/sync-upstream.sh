@@ -25,6 +25,19 @@ indent() { sed 's/^/  /'; }
 # owner/name of a GitHub remote URL (https or ssh).
 fork_slug() { sed -E 's#^.*github\.com[:/]##; s#\.git$##' <<<"$1"; }
 
+# The native mobile paths of MOBILE_NATIVE in .github/scripts/ci-changes.cjs, the files the macOS
+# lint checks; the rest of that rule is the files that configure the lint itself.
+native_pattern='^apps/mobile/.*\.(swift|kt|kts)$|^apps/mobile/(\.swiftlint\.yml|detekt\.yml|\.editorconfig|Brewfile)$|^scripts/mobile-native-static-check\.ts$'
+native_rest='|^package\.json$|^\.github/workflows/ci\.yml$|^\.github/scripts/ci-changes\.cjs$|^\.github/actions/ci-changes/'
+
+# True while MOBILE_NATIVE in <ci-changes.cjs> is exactly native_pattern plus native_rest, so a
+# change Upstream makes to it fails the check instead of leaving native_pattern stale.
+native_rule_matches() { # native_rule_matches <ci-changes.cjs>
+  local js
+  js="$(sed -n '/^const MOBILE_NATIVE =$/{n;p;}' "$1" | sed -E 's#^[[:space:]]*/##; s#/;[[:space:]]*$##; s#\\/#/#g')"
+  [ "$js" = "$native_pattern$native_rest" ]
+}
+
 # Native mobile files the fork edits or adds against <upstream-ref>, one per line. CI skips the
 # macOS lint on sync/upstream-* branches (ci.yml, changes job): a sync's native changes are then
 # Upstream's own, already linted by Upstream. That holds only while this list is empty.
@@ -33,20 +46,21 @@ fork_native_files() { # fork_native_files <upstream-ref> <fork-ref>
   # Capture git's output first: inside a pipe its failure (a bad ref) would read as "no files".
   base="$(git merge-base "$1" "$2")" || return $?
   changed="$(git diff --name-only --no-renames --diff-filter=AM "$base" "$2" --)" || return $?
-  grep -E '^apps/mobile/.*\.(swift|kt|kts)$|^apps/mobile/(\.swiftlint\.yml|detekt\.yml|\.editorconfig|Brewfile)$|^scripts/mobile-native-static-check\.ts$' <<<"$changed" || true
+  grep -E "$native_pattern" <<<"$changed" || true
 }
 
-# Runs each command line at once, each into its own log under <logdir>. Prints every result with
-# its time, and the last 40 lines of each failure. Returns 1 when any failed.
-run_parallel() { # run_parallel <logdir> <command line>...
-  local dir="$1" i=0 cmd rc secs status=0
-  shift
+# Runs each command line at once, each into its own log. Prints every result with its time, and
+# the last 40 lines of each failure. Returns 1 when any failed, and then keeps the logs.
+run_parallel() { # run_parallel <command line>...
+  local dir i=0 cmd rc secs status=0
+  dir="$(mktemp -d)"
   for cmd in "$@"; do
     (
       s=$SECONDS
-      # Its own shell, so a command that calls exit still has its status written.
-      (eval "$cmd") >"$dir/$i.log" 2>&1
-      echo "$? $((SECONDS - s))" >"$dir/$i.rc"
+      # In an if, so set -e cannot stop this shell before the status is written; in its own
+      # shell, so a command that calls exit cannot either.
+      if (eval "$cmd") >"$dir/$i.log" 2>&1; then rc=0; else rc=$?; fi
+      echo "$rc $((SECONDS - s))" >"$dir/$i.rc"
     ) &
     i=$((i + 1))
   done
@@ -65,6 +79,11 @@ run_parallel() { # run_parallel <logdir> <command line>...
     fi
     i=$((i + 1))
   done
+  if [ "$status" -eq 0 ]; then
+    rm -rf "$dir"
+  else
+    echo "Full logs: $dir" >&2
+  fi
   return "$status"
 }
 
@@ -250,7 +269,11 @@ check() {
     fi
   done
 
-  local native
+  local native rules=.github/scripts/ci-changes.cjs
+  if ! native_rule_matches "$rules"; then
+    echo "MOBILE_NATIVE in $rules changed. Update native_pattern and native_rest in $0 to match it." >&2
+    return 1
+  fi
   native="$(fork_native_files upstream/main HEAD)" || return $?
   if [ -n "$native" ]; then
     echo "The fork edits these native mobile files, but CI skips the macOS lint on sync branches:" >&2
@@ -264,7 +287,7 @@ check() {
   echo "> ${cmds[0]}"
   # shellcheck disable=SC2086 # a command line to split
   pnpm exec ${cmds[0]}
-  local parallel=() logs
+  local parallel=()
   for cmd in "${cmds[@]:1}"; do
     # Upstream's mobile lint now fails when ktlint or detekt is missing; CI has them, this machine may not.
     if [ "$cmd" = "vp run lint:mobile" ] && ! { command -v ktlint >/dev/null && command -v detekt >/dev/null; }; then
@@ -273,12 +296,7 @@ check() {
     fi
     parallel+=("pnpm exec $cmd")
   done
-  logs="$(mktemp -d)"
-  if ! run_parallel "$logs" "${parallel[@]}"; then
-    rm -rf "$logs"
-    return 1
-  fi
-  rm -rf "$logs"
+  run_parallel "${parallel[@]}" || return 1
   # After the others: its probe config file would show up in knip and vp check.
   web_build_and_links
 

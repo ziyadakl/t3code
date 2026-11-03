@@ -296,8 +296,8 @@ jobs:
     if: ${{ !cancelled() && needs.changes.outputs.test_web != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    # Fork: split over 4 runners. On one 4 vCPU runner this job took 8-11 minutes and held up
-    # every pull request; split, each part takes about 3. Shard 1 also runs the two steps below.
+    # Fork: split over 4 runners, so this job is not the longest one in the run. Shard 1 also
+    # runs the two steps below.
     strategy:
       fail-fast: false
       matrix:
@@ -348,7 +348,7 @@ jobs:
       # files share the CPU. That one file runs alone in its own step; every
       # other file runs in parallel, as upstream runs them.
       - name: Test
-        run: vp run --filter @t3tools/web test --exclude '**/AttachmentFilePreview.browser.test.tsx' --shard ${{ matrix.shard }}/4
+        run: vp run --filter @t3tools/web test --exclude '**/AttachmentFilePreview.browser.test.tsx' --shard ${{ matrix.shard }}/${{ strategy.job-total }}
 
       - name: Test attachment previews alone
         if: matrix.shard == 1

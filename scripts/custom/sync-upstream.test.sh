@@ -40,6 +40,10 @@ git init -q "$tmp/nat"
   echo 2 >apps/web/a.ts
   git add -A && git commit -qm "fork edits web only"
   git branch fork-web
+  git checkout -qb fork-edits-upstream
+  echo 3 >apps/mobile/ios/App.swift
+  git add -A && git commit -qm "fork edits Upstream's native file"
+  git checkout -q fork
   echo 1 >apps/mobile/ios/Ours.swift
   echo 1 >apps/mobile/Brewfile
   git add -A && git commit -qm "fork adds native files"
@@ -48,21 +52,34 @@ expect "fork_native_files is empty when only Upstream edits native files" \
   "" "$(cd "$tmp/nat" && fork_native_files upstream fork-web)"
 expect "fork_native_files lists the fork's own native files" \
   "apps/mobile/Brewfile apps/mobile/ios/Ours.swift " "$(cd "$tmp/nat" && fork_native_files upstream fork | tr '\n' ' ')"
+expect "fork_native_files lists an Upstream native file the fork edits" \
+  "apps/mobile/ios/App.swift" "$(cd "$tmp/nat" && fork_native_files upstream fork-edits-upstream)"
 (cd "$tmp/nat" && fork_native_files upstream no-such-ref >/dev/null 2>&1)
 expect "fork_native_files fails on a bad ref instead of reporting none" "1" "$((($? != 0) ? 1 : 0))"
 
 # --- run_parallel: every command runs, every result prints, any failure fails the whole ---
-mkdir -p "$tmp/par"
-out="$(run_parallel "$tmp/par" "sleep 1; echo one" "echo two; exit 3" "echo three" 2>&1)"
+out="$(run_parallel "sleep 1; echo one" "echo two; exit 3" "echo three" 2>&1)"
 expect "run_parallel fails when one command fails" "1" "$?"
 expect "run_parallel reports each command in order" \
   "> sleep 1; echo one: passed|> echo two; exit 3: FAILED (exit 3)|> echo three: passed" \
   "$(grep '^>' <<<"$out" | sed -E 's/ (in|after) [0-9]+s$//' | paste -sd'|' -)"
 expect "run_parallel shows a failure's output" "1" "$(grep -c '^  two$' <<<"$out")"
+logs="$(sed -n 's/^Full logs: //p' <<<"$out")"
+expect "run_parallel keeps the logs of a failed run" "two" "$(cat "$logs/1.log" 2>/dev/null)"
+rm -rf "$logs"
+strict="$(bash -c 'set -euo pipefail; source "$1"; run_parallel "false" "exit 4" || true' _ "$here/sync-upstream.sh" 2>&1)"
+expect "run_parallel keeps each exit code under set -e" "> false: FAILED (exit 1)|> exit 4: FAILED (exit 4)" \
+  "$(grep '^>' <<<"$strict" | sed -E 's/ after [0-9]+s$//' | paste -sd'|' -)"
+rm -rf "$(sed -n 's/^Full logs: //p' <<<"$strict")"
 s=$SECONDS
-run_parallel "$tmp/par" "sleep 2" "sleep 2" "sleep 2" >/dev/null 2>&1
+run_parallel "sleep 2" "sleep 2" "sleep 2" >/dev/null 2>&1
 expect "run_parallel passes when all pass" "0" "$?"
 expect "run_parallel runs the commands at the same time" "1" "$(((SECONDS - s) < 5 ? 1 : 0))"
+
+# --- native_rule_matches: the copy of MOBILE_NATIVE must match ci-changes.cjs exactly ---
+expect "native_rule_matches the repo's ci-changes.cjs" "0" "$(native_rule_matches "$here/../../.github/scripts/ci-changes.cjs"; echo $?)"
+sed 's#|\^package#|^apps\\/mobile\\/.*\\.m$|^package#' "$here/../../.github/scripts/ci-changes.cjs" >"$tmp/widened.cjs"
+expect "native_rule_matches fails when Upstream widens MOBILE_NATIVE" "1" "$(native_rule_matches "$tmp/widened.cjs"; echo $?)"
 
 # --- fork_slug: owner/name of origin, for https and ssh remotes ---
 expect "fork_slug from an https remote" "ziyadakl/t3code" "$(fork_slug https://github.com/ziyadakl/t3code.git)"
