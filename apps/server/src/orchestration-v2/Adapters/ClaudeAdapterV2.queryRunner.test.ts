@@ -28,6 +28,7 @@ const writeHomes = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const serverConfigDir = yield* fs.makeTempDirectory({ prefix: "t3-claude-server-" });
+  // @effect-diagnostics-next-line processEnvInEffect:off -- the SDK reads this variable from the real process environment.
   process.env.CLAUDE_CONFIG_DIR = serverConfigDir;
   const configDir = yield* fs.makeTempDirectory({ prefix: "t3-claude-provider-" });
   const projectDir = path.join(configDir, "projects", "-tmp-t3-claude-project");
