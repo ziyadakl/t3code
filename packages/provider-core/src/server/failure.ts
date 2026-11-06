@@ -115,6 +115,7 @@ function curatedCauseMessages(cause: unknown): {
         case "CursorModelUnavailableError":
         case "CodexGoalObjectiveTooLongError":
         case "ProviderSetupError":
+        case "ProviderAdapterThreadInUseError":
           return { known: stringField(cause, "message"), category: categoryMessage() };
         case "ClaudeAgentSdkQueryRunnerError": {
           // Claude's own error (exit code and stderr) says what went wrong;

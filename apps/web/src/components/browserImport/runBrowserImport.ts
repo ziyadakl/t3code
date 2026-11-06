@@ -6,6 +6,7 @@ import {
   type BrowserProfile,
   type EnvironmentId,
 } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 
 import { clearBrowserProfileData } from "~/browser/browserProfileData";
 import type { previewBridge } from "~/components/preview/previewBridge";
@@ -41,7 +42,11 @@ export interface BrowserImportChoice {
 }
 
 /** The cap was reached while the import ran; thrown from inside the settings updater. */
-class ProfileLimitReachedError extends Error {}
+class ProfileLimitReachedError extends Schema.TaggedError<ProfileLimitReachedError>()(
+  "ProfileLimitReachedError",
+  {},
+) {}
+const isProfileLimitReachedError = Schema.is(ProfileLimitReachedError);
 
 /**
  * Copies the chosen sites' cookies into the target profile and settles what the wizard shows.
@@ -131,7 +136,7 @@ async function registerNewProfile(
     // Not a read failure: the cookies came over and could not be kept.
     return {
       kind: "failed",
-      reason: cause instanceof ProfileLimitReachedError ? "profileLimitReached" : "profileNotSaved",
+      reason: isProfileLimitReachedError(cause) ? "profileLimitReached" : "profileNotSaved",
     };
   }
 }
