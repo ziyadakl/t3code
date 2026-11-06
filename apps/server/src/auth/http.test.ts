@@ -201,7 +201,7 @@ it.effect("gives an allow-listed device a standard session instead of the pairin
     return yield* Effect.acquireUseRelease(
       Effect.sync(() => HttpRouter.toWebHandler(layerRoutes, { disableLogger: true })),
       (environment) =>
-        Effect.tryPromise(async () => {
+        Effect.promise(async () => {
           const untrusted = await environment.handler(
             new Request("http://127.0.0.1/api/auth/session"),
             requestContext,
@@ -289,7 +289,7 @@ const withEnvironment = (
     return yield* Effect.acquireUseRelease(
       Effect.sync(() => HttpRouter.toWebHandler(layerRoutes, { disableLogger: true })),
       (environment) =>
-        Effect.tryPromise(() => {
+        Effect.promise(() => {
           const send = (request: Request) => environment.handler(request, requestContext);
           const admin = { authorization: `Bearer ${DEV_TOKEN}` };
           return run({
@@ -450,5 +450,5 @@ it.effect.each(["DPoP", "dpop"])("challenges a refused %s request with DPoP", (s
         }),
       (environment) => Effect.promise(() => environment.dispose()),
     );
-  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCryptoLayer.layer))),
 );
