@@ -409,6 +409,13 @@ import {
   SourceControlSignInResult,
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
+import {
+  StorageGetOverviewInput,
+  StorageOverview,
+  StorageOverviewError,
+  StorageRemoveWorktreeInput,
+  StorageRemoveWorktreeResult,
+} from "./storageOverview.ts";
 import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
 
 export const WS_METHODS = {
@@ -534,6 +541,8 @@ export const WS_METHODS = {
   serverDisableAcpRegistryProvider: "server.disableAcpRegistryProvider",
   serverLogoutAcpRegistry: "server.logoutAcpRegistry",
   serverGetTraceDiagnostics: "server.getTraceDiagnostics",
+  storageGetOverview: "storage.getOverview",
+  storageRemoveWorktree: "storage.removeWorktree",
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
   serverGetHostResources: "server.getHostResources",
   serverGetProcessResourceHistory: "server.getProcessResourceHistory",
@@ -919,6 +928,18 @@ const WsServerGetTraceDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetTraceDiagnos
   payload: Schema.Struct({}),
   success: ServerTraceDiagnosticsResult,
   error: EnvironmentAuthorizationError,
+});
+
+const WsStorageGetOverviewRpc = Rpc.make(WS_METHODS.storageGetOverview, {
+  payload: StorageGetOverviewInput,
+  success: StorageOverview,
+  error: Schema.Union([StorageOverviewError, EnvironmentAuthorizationError]),
+});
+
+const WsStorageRemoveWorktreeRpc = Rpc.make(WS_METHODS.storageRemoveWorktree, {
+  payload: StorageRemoveWorktreeInput,
+  success: StorageRemoveWorktreeResult,
+  error: Schema.Union([StorageOverviewError, EnvironmentAuthorizationError]),
 });
 
 const WsServerGetProcessDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetProcessDiagnostics, {
@@ -2063,6 +2084,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerDisableAcpRegistryProviderRpc,
   WsServerLogoutAcpRegistryRpc,
   WsServerGetTraceDiagnosticsRpc,
+  WsStorageGetOverviewRpc,
+  WsStorageRemoveWorktreeRpc,
   WsServerGetProcessDiagnosticsRpc,
   WsServerGetHostResourcesRpc,
   WsServerGetProcessResourceHistoryRpc,

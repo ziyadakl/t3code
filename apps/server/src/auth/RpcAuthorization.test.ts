@@ -415,3 +415,39 @@ it.effect("denies manual cleanup before the handler without settings permission"
     expect(handled).toBe(false);
   }).pipe(Effect.scoped),
 );
+
+it.effect("denies worktree removal before the handler without settings permission", () =>
+  Effect.gen(function* () {
+    const group = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (
+          tag,
+        ): tag is Exclude<
+          keyof typeof RPC_REQUIRED_SCOPES,
+          typeof WS_METHODS.storageRemoveWorktree
+        > => tag !== WS_METHODS.storageRemoveWorktree,
+      ),
+    );
+    let handled = false;
+    const client = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          group.toLayerHandler(WS_METHODS.storageRemoveWorktree, () =>
+            Effect.sync(() => {
+              handled = true;
+              return { bytesFreed: 0 };
+            }),
+          ),
+          RpcAuthorization.layer([AuthOrchestrationReadScope]),
+        ),
+      ),
+    );
+    expect(
+      yield* client[WS_METHODS.storageRemoveWorktree]({
+        path: "/tmp/worktree",
+        allowUncommittedFiles: 0,
+      }).pipe(Effect.flip),
+    ).toMatchObject({ requiredPermission: AuthSettingsWriteScope });
+    expect(handled).toBe(false);
+  }).pipe(Effect.scoped),
+);
