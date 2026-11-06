@@ -187,7 +187,9 @@ function DeleteWorktreeDialog({
         <AlertDialogHeader>
           <AlertDialogTitle>Delete worktree?</AlertDialogTitle>
           <AlertDialogDescription>
-            Its threads and branch stay; a thread rebuilds the folder when you message it.
+            {shown !== null && shown.threads.length === 0
+              ? "Its branch stays."
+              : "Its threads and branch stay; a thread rebuilds the folder when you message it."}
           </AlertDialogDescription>
           {uncommitted > 0 ? (
             <p className="text-sm text-destructive">
@@ -240,7 +242,7 @@ function MachineStorage({
     setDeleting(true);
     const result = await removeWorktree({
       environmentId,
-      input: { path: worktree.path, discardChanges: worktree.uncommittedFiles > 0 },
+      input: { path: worktree.path, allowUncommittedFiles: worktree.uncommittedFiles },
     });
     setDeleting(false);
     if (result._tag === "Success") {

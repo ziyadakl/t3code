@@ -11,6 +11,7 @@ import {
   type StorageOverviewWorktree,
   type StorageRemoveWorktreeInput,
   type StorageRemoveWorktreeResult,
+  type TerminalSummary,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
@@ -31,6 +32,7 @@ import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProviderSessionManager from "../orchestration-v2/ProviderSessionManager.ts";
 import * as Settings from "../serverSettings.ts";
+import * as TerminalManager from "../terminal/Manager.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { removeLinkedWorktree } from "../vcs/worktreeRemoval.ts";
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
@@ -142,6 +144,7 @@ const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const gitManager = yield* GitManager.GitManager;
+  const terminals = yield* TerminalManager.TerminalManager;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const isWindows = yield* HostProcess.isWindows;
@@ -160,6 +163,42 @@ const make = Effect.gen(function* () {
       !path.isAbsolute(relative)
     );
   };
+
+  // Same view of open terminals that storage cleanup keeps.
+  const liveTerminals = new Map<string, Map<string, TerminalSummary>>();
+  const noteTerminal = (terminal: TerminalSummary) => {
+    const entries = liveTerminals.get(terminal.threadId) ?? new Map<string, TerminalSummary>();
+    entries.set(terminal.terminalId, terminal);
+    liveTerminals.set(terminal.threadId, entries);
+  };
+  const unsubscribeTerminals = yield* terminals.subscribeMetadata((event) =>
+    Effect.sync(() => {
+      if (event.type === "snapshot") {
+        liveTerminals.clear();
+        for (const terminal of event.terminals) noteTerminal(terminal);
+      } else if (event.type === "upsert") {
+        noteTerminal(event.terminal);
+      } else {
+        const entries = liveTerminals.get(event.threadId);
+        entries?.delete(event.terminalId);
+        if (entries?.size === 0) liveTerminals.delete(event.threadId);
+      }
+    }),
+  );
+  yield* Effect.addFinalizer(() => Effect.sync(unsubscribeTerminals));
+  const hasTerminal = (worktreePath: string) =>
+    [...liveTerminals.values()]
+      .flatMap((entries) => [...entries.values()])
+      .some((terminal) => {
+        if (terminal.status !== "starting" && terminal.status !== "running") return false;
+        const cwd = path.resolve(terminal.cwd);
+        return (
+          (terminal.worktreePath !== null &&
+            pathKey(terminal.worktreePath) === pathKey(worktreePath)) ||
+          pathKey(cwd) === pathKey(worktreePath) ||
+          inside(worktreePath, cwd)
+        );
+      });
 
   const lstat = (target: string) =>
     Effect.tryPromise({ try: () => NodeFSP.lstat(target), catch: toOverviewError }).pipe(
@@ -281,6 +320,8 @@ const make = Effect.gen(function* () {
 
   let cache: { readonly at: number; readonly value: StorageOverviewResult } | null = null;
   const measuring = Semaphore.makeUnsafe(1);
+  // Bumped by every delete, so a measurement that began earlier is never cached.
+  let generation = 0;
 
   const measure = Effect.gen(function* () {
     const roots = yield* managedRoots;
@@ -393,8 +434,9 @@ const make = Effect.gen(function* () {
           (cache.at >= requestedAt || (input.refresh !== true && now - cache.at < CACHE_TTL_MS))
         )
           return cache.value;
+        const startedIn = generation;
         const value = yield* measure;
-        cache = { at: yield* Clock.currentTimeMillis, value };
+        if (startedIn === generation) cache = { at: yield* Clock.currentTimeMillis, value };
         return value;
       }),
     );
@@ -455,17 +497,31 @@ const make = Effect.gen(function* () {
     const roots = yield* managedRoots;
     if (!roots.some((root) => inside(root, worktreePath)))
       return yield* fail("That folder is outside the managed worktree folders.");
-    if (!(yield* isLinkedWorktreeDirectory(worktreePath)))
+    // Only a folder the overview would list can be removed.
+    const listed = yield* discoverWorktrees(roots);
+    if (!listed.some((entry) => pathKey(entry.path) === pathKey(worktreePath)))
       return yield* fail("That folder is not a linked git worktree.");
 
+    // Turn start, terminals and cleanup lock the path as written, not its real path.
     return yield* withWorkspaceLease(
-      worktreePath,
+      requested,
       Effect.gen(function* () {
         const allProjects = yield* projectStore.list({ includeDeleted: true });
         if (yield* containsProjectRoot(worktreePath, allProjects))
           return yield* fail("A project lives inside this folder.");
         if (yield* liveSessionInside(worktreePath))
           return yield* fail("A provider session is still open in this worktree.");
+        if (hasTerminal(worktreePath)) return yield* fail("A terminal is open in this worktree.");
+
+        const status = yield* gitLines(worktreePath, [
+          "-c",
+          "status.showUntrackedFiles=normal",
+          "status",
+          "--porcelain",
+        ]);
+        if (status === null) return yield* fail("Could not read the worktree status.");
+        if (status.length > input.allowUncommittedFiles)
+          return yield* fail("Files changed since the list loaded. Refresh and try again.");
 
         const { projects, threads } = yield* readContext;
         let repository: string | null = null;
@@ -508,7 +564,7 @@ const make = Effect.gen(function* () {
           operation: "StorageOverview.removeWorktree",
           cwd: repositoryCwd,
           worktreePath,
-          force: input.discardChanges,
+          force: status.length > 0,
           execute: git.execute,
           run: Effect.fn("StorageOverview.gitWorktreeRemove")(function* (
             args: ReadonlyArray<string>,
@@ -531,8 +587,13 @@ const make = Effect.gen(function* () {
         }).pipe(
           Effect.provideService(FileSystem.FileSystem, fs),
           Effect.provideService(Path.Path, path),
+          Effect.ensuring(
+            Effect.sync(() => {
+              generation++;
+              cache = null;
+            }),
+          ),
         );
-        cache = null;
         yield* gitManager.invalidateStatus(repositoryCwd);
         // Thread rows keep their branch and path so the next message rebuilds the checkout.
         yield* Effect.logInfo("storage overview removed worktree", { worktreePath });

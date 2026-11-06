@@ -1,7 +1,12 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
-import { DEFAULT_SERVER_SETTINGS, ProjectId, ThreadId } from "@t3tools/contracts";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  ProjectId,
+  ThreadId,
+  type TerminalMetadataStreamEvent,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -16,6 +21,7 @@ import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProviderSessionManager from "../orchestration-v2/ProviderSessionManager.ts";
 import * as Settings from "../serverSettings.ts";
+import * as TerminalManager from "../terminal/Manager.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as StorageOverview from "./StorageOverview.ts";
 
@@ -55,6 +61,7 @@ const fixture = Effect.gen(function* () {
 
   const projectId = ProjectId.make("project-1");
   const threadId = ThreadId.make("thread-1");
+  let terminalListener: ((event: TerminalMetadataStreamEvent) => Effect.Effect<void>) | undefined;
   const context = yield* Layer.build(StorageOverview.layer).pipe(
     Effect.provideService(GitVcsDriver.GitVcsDriver, git),
     Effect.provideService(Settings.ServerSettingsService, {
@@ -77,6 +84,13 @@ const fixture = Effect.gen(function* () {
     } as unknown as ProviderSessionManager.ProviderSessionManagerV2["Service"]),
     Effect.provideService(SqlClient.SqlClient, (() =>
       Effect.succeed([])) as unknown as SqlClient.SqlClient),
+    Effect.provideService(TerminalManager.TerminalManager, {
+      subscribeMetadata: (listener: (event: TerminalMetadataStreamEvent) => Effect.Effect<void>) =>
+        Effect.sync(() => {
+          terminalListener = listener;
+          return () => {};
+        }),
+    } as unknown as TerminalManager.TerminalManager["Service"]),
     Effect.provideService(GitManager.GitManager, {
       invalidateStatus: () => Effect.void,
     } as unknown as GitManager.GitManager["Service"]),
@@ -88,6 +102,23 @@ const fixture = Effect.gen(function* () {
     worktree,
     threadId,
     command,
+    openTerminal: (cwd: string) =>
+      terminalListener?.({
+        type: "upsert",
+        terminal: {
+          threadId: "thread-1",
+          terminalId: "terminal-1",
+          status: "running",
+          pid: 1,
+          exitCode: null,
+          exitSignal: null,
+          hasRunningSubprocess: false,
+          label: "Terminal",
+          updatedAt: "2026-06-10T12:00:00.000Z",
+          cwd,
+          worktreePath: null,
+        },
+      }) ?? Effect.void,
   };
 });
 
@@ -120,7 +151,7 @@ describe("StorageOverview", () => {
       Effect.gen(function* () {
         const { service, fs, repo } = yield* fixture;
         const error = yield* service
-          .removeWorktree({ path: repo, discardChanges: true })
+          .removeWorktree({ path: repo, allowUncommittedFiles: 0 })
           .pipe(Effect.flip);
         expect(error.message).toContain("outside the managed worktree folders");
         expect(yield* fs.exists(`${repo}/tracked.txt`)).toBe(true);
@@ -128,26 +159,61 @@ describe("StorageOverview", () => {
     ),
   );
 
-  it.live("refuses a dirty worktree without discardChanges, then removes it with it", () =>
+  it.live(
+    "refuses when more files changed than the user was told, then removes with the right count",
+    () =>
+      run(
+        Effect.gen(function* () {
+          const { service, fs, worktree, command, repo } = yield* fixture;
+          yield* fs.writeFileString(`${worktree}/scratch.txt`, "unsaved\n");
+          const dirty = yield* service.get({ refresh: true });
+          expect(dirty.worktrees[0]?.uncommittedFiles).toBe(1);
+
+          const error = yield* service
+            .removeWorktree({ path: worktree, allowUncommittedFiles: 0 })
+            .pipe(Effect.flip);
+          expect(error.message).toContain("Files changed since the list loaded");
+          expect(yield* fs.exists(worktree)).toBe(true);
+
+          const removed = yield* service.removeWorktree({
+            path: worktree,
+            allowUncommittedFiles: 1,
+          });
+          expect(removed.bytesFreed).toBeGreaterThan(0);
+          expect(yield* fs.exists(worktree)).toBe(false);
+          // The branch stays so a thread can rebuild the folder.
+          expect((yield* command(repo, ["rev-parse", "--verify", "feature"])).exitCode).toBe(0);
+          expect((yield* service.get({})).worktrees).toEqual([]);
+        }),
+      ),
+  );
+
+  it.live("refuses while a terminal is open in the worktree", () =>
     run(
       Effect.gen(function* () {
-        const { service, fs, worktree, command, repo } = yield* fixture;
-        yield* fs.writeFileString(`${worktree}/scratch.txt`, "unsaved\n");
-        const dirty = yield* service.get({ refresh: true });
-        expect(dirty.worktrees[0]?.uncommittedFiles).toBe(1);
-
+        const { service, fs, worktree, openTerminal } = yield* fixture;
+        yield* openTerminal(worktree);
         const error = yield* service
-          .removeWorktree({ path: worktree, discardChanges: false })
+          .removeWorktree({ path: worktree, allowUncommittedFiles: 0 })
           .pipe(Effect.flip);
-        expect(error.message).toContain("modified or untracked files");
+        expect(error.message).toBe("A terminal is open in this worktree.");
         expect(yield* fs.exists(worktree)).toBe(true);
+      }),
+    ),
+  );
 
-        const removed = yield* service.removeWorktree({ path: worktree, discardChanges: true });
-        expect(removed.bytesFreed).toBeGreaterThan(0);
-        expect(yield* fs.exists(worktree)).toBe(false);
-        // The branch stays so a thread can rebuild the folder.
-        expect((yield* command(repo, ["rev-parse", "--verify", "feature"])).exitCode).toBe(0);
-        expect((yield* service.get({})).worktrees).toEqual([]);
+  it.live("refuses a linked worktree deeper than the listed layout", () =>
+    run(
+      Effect.gen(function* () {
+        const { service, fs, repo, command, worktree } = yield* fixture;
+        const deep = `${worktree}/nested/deep`;
+        yield* fs.makeDirectory(`${worktree}/nested`, { recursive: true });
+        yield* command(repo, ["worktree", "add", "-b", "deep", deep]);
+        const error = yield* service
+          .removeWorktree({ path: deep, allowUncommittedFiles: 0 })
+          .pipe(Effect.flip);
+        expect(error.message).toContain("not a linked git worktree");
+        expect(yield* fs.exists(deep)).toBe(true);
       }),
     ),
   );

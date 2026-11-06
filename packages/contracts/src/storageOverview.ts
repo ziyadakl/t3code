@@ -51,7 +51,8 @@ export type StorageGetOverviewInput = typeof StorageGetOverviewInput.Type;
 
 export const StorageRemoveWorktreeInput = Schema.Struct({
   path: Schema.String,
-  discardChanges: Schema.Boolean,
+  /** Files the user was told would be lost; the server refuses if more are uncommitted now. */
+  allowUncommittedFiles: NonNegativeInt,
 });
 export type StorageRemoveWorktreeInput = typeof StorageRemoveWorktreeInput.Type;
 
