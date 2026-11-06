@@ -208,6 +208,46 @@ describe("StorageOverview", () => {
     ),
   );
 
+  it.live("saves changes on the branch, then removes the worktree", () =>
+    run(
+      Effect.gen(function* () {
+        const { service, fs, worktree, command, repo } = yield* fixture;
+        yield* fs.writeFileString(`${worktree}/tracked.txt`, "edited\n");
+        yield* fs.makeDirectory(`${worktree}/generated`);
+        yield* fs.writeFileString(`${worktree}/generated/a.txt`, "alpha\n");
+        yield* fs.writeFileString(`${worktree}/generated/b.txt`, "beta\n");
+
+        const removed = yield* service.removeWorktree({
+          path: worktree,
+          allowUncommittedFiles: 3,
+          saveChanges: true,
+        });
+        expect(removed.savedCommit).not.toBeNull();
+        expect(yield* fs.exists(worktree)).toBe(false);
+        expect((yield* command(repo, ["log", "-1", "--format=%s", "feature"])).stdout.trim()).toBe(
+          "Saved before deleting the worktree",
+        );
+        expect((yield* command(repo, ["show", "feature:generated/a.txt"])).stdout).toBe("alpha\n");
+        expect((yield* command(repo, ["show", "feature:tracked.txt"])).stdout).toBe("edited\n");
+      }),
+    ),
+  );
+
+  it.live("refuses to save changes in a detached worktree and keeps the folder", () =>
+    run(
+      Effect.gen(function* () {
+        const { service, fs, worktree, command } = yield* fixture;
+        yield* command(worktree, ["checkout", "--detach"]);
+        yield* fs.writeFileString(`${worktree}/scratch.txt`, "unsaved\n");
+        const error = yield* service
+          .removeWorktree({ path: worktree, allowUncommittedFiles: 1, saveChanges: true })
+          .pipe(Effect.flip);
+        expect(error.message).toContain("no branch to save to");
+        expect(yield* fs.exists(worktree)).toBe(true);
+      }),
+    ),
+  );
+
   it.live("refuses while a terminal is open in the worktree", () =>
     run(
       Effect.gen(function* () {

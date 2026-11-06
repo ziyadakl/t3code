@@ -435,7 +435,7 @@ it.effect("denies worktree removal before the handler without settings permissio
           group.toLayerHandler(WS_METHODS.storageRemoveWorktree, () =>
             Effect.sync(() => {
               handled = true;
-              return { bytesFreed: 0 };
+              return { bytesFreed: 0, savedCommit: null };
             }),
           ),
           RpcAuthorization.layer([AuthOrchestrationReadScope]),

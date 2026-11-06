@@ -177,6 +177,8 @@ function WhatStays({ worktree }: { worktree: StorageOverviewWorktree }) {
   );
 }
 
+type DeleteAction = "delete" | "save";
+
 function DeleteWorktreeDialog({
   worktree,
   pending,
@@ -184,19 +186,20 @@ function DeleteWorktreeDialog({
   onConfirm,
 }: {
   worktree: StorageOverviewWorktree | null;
-  pending: boolean;
+  pending: DeleteAction | null;
   onCancel: () => void;
-  onConfirm: (worktree: StorageOverviewWorktree) => void;
+  onConfirm: (worktree: StorageOverviewWorktree, action: DeleteAction) => void;
 }) {
   // Keep the last worktree so the dialog does not change while it fades out.
   const [shown, setShown] = useState(worktree);
   if (worktree !== null && worktree !== shown) setShown(worktree);
   const uncommitted = shown?.uncommittedFiles ?? 0;
+  const canSave = uncommitted > 0 && shown?.branch != null;
   return (
     <AlertDialog
       open={worktree !== null}
       onOpenChange={(open) => {
-        if (!open && !pending) onCancel();
+        if (!open && pending === null) onCancel();
       }}
     >
       <AlertDialogPopup>
@@ -205,22 +208,33 @@ function DeleteWorktreeDialog({
           {shown === null ? null : <WhatStays worktree={shown} />}
           {uncommitted > 0 ? (
             <p className="text-sm text-destructive">
-              {uncommitted} uncommitted {uncommitted === 1 ? "file" : "files"} will be lost.
+              {canSave
+                ? `Delete loses ${uncommitted} uncommitted ${uncommitted === 1 ? "file" : "files"}.`
+                : `${uncommitted} uncommitted ${uncommitted === 1 ? "file" : "files"} will be lost.`}
             </p>
           ) : null}
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogClose render={<Button variant="outline" disabled={pending} />}>
+          <AlertDialogClose render={<Button variant="outline" disabled={pending !== null} />}>
             Cancel
           </AlertDialogClose>
           <Button
             variant="destructive"
-            disabled={pending || shown === null}
-            onClick={() => shown !== null && onConfirm(shown)}
+            disabled={pending !== null || shown === null}
+            onClick={() => shown !== null && onConfirm(shown, "delete")}
           >
-            {pending ? <Spinner /> : null}
+            {pending === "delete" ? <Spinner /> : null}
             Delete
           </Button>
+          {canSave ? (
+            <Button
+              disabled={pending !== null || shown === null}
+              onClick={() => shown !== null && onConfirm(shown, "save")}
+            >
+              {pending === "save" ? <Spinner /> : null}
+              Save changes and delete
+            </Button>
+          ) : null}
         </AlertDialogFooter>
       </AlertDialogPopup>
     </AlertDialog>
@@ -240,7 +254,7 @@ function MachineStorage({
     serverEnvironment.storageOverview({ environmentId, input: forced ? { refresh: true } : {} }),
   );
   const [target, setTarget] = useState<StorageOverviewWorktree | null>(null);
-  const [deleting, setDeleting] = useState(false);
+  const [deleting, setDeleting] = useState<DeleteAction | null>(null);
   const removeWorktree = useAtomCommand(serverEnvironment.removeStorageWorktree, {
     reportFailure: false,
   });
@@ -250,13 +264,17 @@ function MachineStorage({
     else setForced(true);
   };
 
-  const confirmDelete = async (worktree: StorageOverviewWorktree) => {
-    setDeleting(true);
+  const confirmDelete = async (worktree: StorageOverviewWorktree, action: DeleteAction) => {
+    setDeleting(action);
     const result = await removeWorktree({
       environmentId,
-      input: { path: worktree.path, allowUncommittedFiles: worktree.uncommittedFiles },
+      input: {
+        path: worktree.path,
+        allowUncommittedFiles: worktree.uncommittedFiles,
+        ...(action === "save" ? { saveChanges: true } : {}),
+      },
     });
-    setDeleting(false);
+    setDeleting(null);
     if (result._tag === "Success") {
       setTarget(null);
       refresh();
@@ -335,7 +353,7 @@ function MachineStorage({
         worktree={target}
         pending={deleting}
         onCancel={() => setTarget(null)}
-        onConfirm={(worktree) => void confirmDelete(worktree)}
+        onConfirm={(worktree, action) => void confirmDelete(worktree, action)}
       />
     </div>
   );

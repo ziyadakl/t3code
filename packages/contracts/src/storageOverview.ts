@@ -53,11 +53,15 @@ export const StorageRemoveWorktreeInput = Schema.Struct({
   path: Schema.String,
   /** Files the user was told would be lost; the server refuses if more are uncommitted now. */
   allowUncommittedFiles: NonNegativeInt,
+  /** Commit every change on the worktree's own branch (local only) before removing it. */
+  saveChanges: Schema.optionalKey(Schema.Boolean),
 });
 export type StorageRemoveWorktreeInput = typeof StorageRemoveWorktreeInput.Type;
 
 export const StorageRemoveWorktreeResult = Schema.Struct({
   bytesFreed: Schema.NullOr(NonNegativeInt),
+  /** Short sha of the commit that saved the changes; null when nothing was saved. */
+  savedCommit: Schema.NullOr(Schema.String),
 });
 export type StorageRemoveWorktreeResult = typeof StorageRemoveWorktreeResult.Type;
 
