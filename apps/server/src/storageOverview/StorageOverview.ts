@@ -343,12 +343,27 @@ const make = Effect.gen(function* () {
     if (branch === undefined || branch === "" || branch === "HEAD")
       return yield* fail("This worktree has no branch to save to.");
 
-    const email = (yield* gitLines(worktreePath, ["config", "user.email"]))?.[0]?.trim();
-    const identity =
-      email === undefined || email === ""
-        ? ["-c", "user.name=T3 Code", "-c", "user.email=t3code@localhost"]
-        : [];
+    const configured = (key: string) =>
+      gitLines(worktreePath, ["config", key]).pipe(
+        Effect.map((lines) => (lines?.[0]?.trim() ?? "") !== ""),
+      );
+    const identity = [
+      ...((yield* configured("user.name")) ? [] : ["-c", "user.name=T3 Code"]),
+      ...((yield* configured("user.email")) ? [] : ["-c", "user.email=t3code@localhost"]),
+    ];
     yield* runGit(["add", "-A"]);
+    const staged = (yield* gitLines(worktreePath, ["diff", "--cached", "--name-only"])) ?? [];
+    if (
+      staged.some((file) => {
+        const name = file.split("/").pop() ?? file;
+        return /^\.env(\..+)?$/.test(name) && name !== ".env.example";
+      })
+    ) {
+      yield* runGit(["reset", "-q"]);
+      return yield* fail(
+        "A .env file isn't ignored by git, so it was not saved. Nothing was deleted.",
+      );
+    }
     yield* runGit([
       ...identity,
       "commit",
@@ -471,6 +486,7 @@ const make = Effect.gen(function* () {
       totalBytes: categories.reduce((sum, category) => sum + category.bytes, 0),
       categories,
       worktrees,
+      canSaveChanges: true,
     } satisfies StorageOverviewResult;
   });
 

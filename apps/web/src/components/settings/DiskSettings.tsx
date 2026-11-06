@@ -181,11 +181,13 @@ type DeleteAction = "delete" | "save";
 
 function DeleteWorktreeDialog({
   worktree,
+  canSaveChanges,
   pending,
   onCancel,
   onConfirm,
 }: {
   worktree: StorageOverviewWorktree | null;
+  canSaveChanges: boolean;
   pending: DeleteAction | null;
   onCancel: () => void;
   onConfirm: (worktree: StorageOverviewWorktree, action: DeleteAction) => void;
@@ -194,7 +196,7 @@ function DeleteWorktreeDialog({
   const [shown, setShown] = useState(worktree);
   if (worktree !== null && worktree !== shown) setShown(worktree);
   const uncommitted = shown?.uncommittedFiles ?? 0;
-  const canSave = uncommitted > 0 && shown?.branch != null;
+  const canSave = canSaveChanges && uncommitted > 0 && shown?.branch != null;
   return (
     <AlertDialog
       open={worktree !== null}
@@ -351,6 +353,7 @@ function MachineStorage({
       )}
       <DeleteWorktreeDialog
         worktree={target}
+        canSaveChanges={data?.canSaveChanges === true}
         pending={deleting}
         onCancel={() => setTarget(null)}
         onConfirm={(worktree, action) => void confirmDelete(worktree, action)}

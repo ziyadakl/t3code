@@ -41,6 +41,8 @@ export const StorageOverview = Schema.Struct({
   totalBytes: NonNegativeInt,
   categories: Schema.Array(StorageOverviewCategory),
   worktrees: Schema.Array(StorageOverviewWorktree),
+  /** Present and true only on servers that understand `saveChanges`; older servers omit it. */
+  canSaveChanges: Schema.optionalKey(Schema.Boolean),
 });
 export type StorageOverview = typeof StorageOverview.Type;
 
@@ -61,7 +63,7 @@ export type StorageRemoveWorktreeInput = typeof StorageRemoveWorktreeInput.Type;
 export const StorageRemoveWorktreeResult = Schema.Struct({
   bytesFreed: Schema.NullOr(NonNegativeInt),
   /** Short sha of the commit that saved the changes; null when nothing was saved. */
-  savedCommit: Schema.NullOr(Schema.String),
+  savedCommit: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 export type StorageRemoveWorktreeResult = typeof StorageRemoveWorktreeResult.Type;
 

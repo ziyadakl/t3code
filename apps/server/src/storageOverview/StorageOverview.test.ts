@@ -233,6 +233,43 @@ describe("StorageOverview", () => {
     ),
   );
 
+  it.live("refuses to save an unignored .env file, unstages it and keeps the folder", () =>
+    run(
+      Effect.gen(function* () {
+        const { service, fs, worktree, command } = yield* fixture;
+        yield* fs.writeFileString(`${worktree}/.env.local`, "KEY=1\n");
+        const error = yield* service
+          .removeWorktree({ path: worktree, allowUncommittedFiles: 1, saveChanges: true })
+          .pipe(Effect.flip);
+        expect(error.message).toContain(".env file isn't ignored");
+        expect(yield* fs.exists(worktree)).toBe(true);
+        expect((yield* command(worktree, ["diff", "--cached", "--name-only"])).stdout).toBe("");
+      }),
+    ),
+  );
+
+  it.live("fills only the missing identity part when saving", () =>
+    run(
+      Effect.gen(function* () {
+        const { service, fs, worktree, command, repo } = yield* fixture;
+        yield* command(repo, ["config", "user.email", ""]);
+        yield* fs.writeFileString(`${worktree}/note.txt`, "x\n");
+        yield* service.removeWorktree({
+          path: worktree,
+          allowUncommittedFiles: 1,
+          saveChanges: true,
+        });
+        const author = (yield* command(repo, [
+          "log",
+          "-1",
+          "--format=%an <%ae>",
+          "feature",
+        ])).stdout.trim();
+        expect(author).toBe("Overview test <t3code@localhost>");
+      }),
+    ),
+  );
+
   it.live("refuses to save changes in a detached worktree and keeps the folder", () =>
     run(
       Effect.gen(function* () {
