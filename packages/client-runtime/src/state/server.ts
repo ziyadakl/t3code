@@ -1294,6 +1294,15 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:trace-diagnostics",
       tag: WS_METHODS.serverGetTraceDiagnostics,
     }),
+    storageOverview: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:storage-overview",
+      tag: WS_METHODS.storageGetOverview,
+    }),
+    removeStorageWorktree: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:remove-storage-worktree",
+      tag: WS_METHODS.storageRemoveWorktree,
+      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
+    }),
     npmRelease: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:npm-release",
       tag: WS_METHODS.serverGetNpmRelease,

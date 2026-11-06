@@ -92,6 +92,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadAutoArchive: Schema.optionalKey(Schema.Boolean),
   storageCleanup: Schema.optionalKey(Schema.Boolean),
   storageCleanupRun: Schema.optionalKey(Schema.Boolean),
+  /** Serves `storage.getOverview` and `storage.removeWorktree` (Settings > Storage). */
+  storageOverview: Schema.optionalKey(Schema.Boolean),
   databaseStorage: Schema.optionalKey(Schema.Boolean),
   otlpEndpointCheck: Schema.optionalKey(Schema.Boolean),
   projectWorktreeCleanup: Schema.optionalKey(Schema.Boolean),
