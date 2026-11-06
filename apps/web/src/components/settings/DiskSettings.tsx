@@ -269,7 +269,7 @@ function MachineStorage({
       });
       // The refusal usually means the list is out of date: close, and measure again.
       setTarget(null);
-      refresh();
+      refreshNow();
     }
   };
 
