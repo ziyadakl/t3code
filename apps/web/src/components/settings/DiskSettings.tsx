@@ -234,7 +234,7 @@ function DeleteWorktreeDialog({
               onClick={() => shown !== null && onConfirm(shown, "save")}
             >
               {pending === "save" ? <Spinner /> : null}
-              Save changes and delete
+              Save &amp; delete
             </Button>
           ) : null}
         </AlertDialogFooter>
