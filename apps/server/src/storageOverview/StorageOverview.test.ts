@@ -188,6 +188,26 @@ describe("StorageOverview", () => {
       ),
   );
 
+  it.live("counts every file inside a new folder, and refuses when one is added there", () =>
+    run(
+      Effect.gen(function* () {
+        const { service, fs, worktree } = yield* fixture;
+        yield* fs.makeDirectory(`${worktree}/generated`);
+        for (const name of ["a.txt", "b.txt", "c.txt"])
+          yield* fs.writeFileString(`${worktree}/generated/${name}`, "unsaved\n");
+        const dirty = yield* service.get({ refresh: true });
+        expect(dirty.worktrees[0]?.uncommittedFiles).toBe(3);
+
+        yield* fs.writeFileString(`${worktree}/generated/d.txt`, "unsaved\n");
+        const error = yield* service
+          .removeWorktree({ path: worktree, allowUncommittedFiles: 3 })
+          .pipe(Effect.flip);
+        expect(error.message).toContain("Files changed since the list loaded");
+        expect(yield* fs.exists(worktree)).toBe(true);
+      }),
+    ),
+  );
+
   it.live("refuses while a terminal is open in the worktree", () =>
     run(
       Effect.gen(function* () {

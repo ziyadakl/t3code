@@ -161,6 +161,22 @@ function WorktreeRow({
   );
 }
 
+/** Names only what survives: a detached worktree has no branch to keep. */
+function WhatStays({ worktree }: { worktree: StorageOverviewWorktree }) {
+  const hasThreads = worktree.threads.length > 0;
+  const hasBranch = worktree.branch !== null;
+  if (!hasThreads && !hasBranch) return null;
+  return (
+    <AlertDialogDescription>
+      {hasThreads && hasBranch
+        ? "Its threads and branch stay; a thread rebuilds the folder when you message it."
+        : hasThreads
+          ? "Its threads stay."
+          : "Its branch stays."}
+    </AlertDialogDescription>
+  );
+}
+
 function DeleteWorktreeDialog({
   worktree,
   pending,
@@ -186,11 +202,7 @@ function DeleteWorktreeDialog({
       <AlertDialogPopup>
         <AlertDialogHeader>
           <AlertDialogTitle>Delete worktree?</AlertDialogTitle>
-          <AlertDialogDescription>
-            {shown !== null && shown.threads.length === 0
-              ? "Its branch stays."
-              : "Its threads and branch stay; a thread rebuilds the folder when you message it."}
-          </AlertDialogDescription>
+          {shown === null ? null : <WhatStays worktree={shown} />}
           {uncommitted > 0 ? (
             <p className="text-sm text-destructive">
               {uncommitted} uncommitted {uncommitted === 1 ? "file" : "files"} will be lost.
@@ -255,6 +267,9 @@ function MachineStorage({
         title: "Could not delete worktree",
         description: failure instanceof Error ? failure.message : String(failure),
       });
+      // The refusal usually means the list is out of date: close, and measure again.
+      setTarget(null);
+      refresh();
     }
   };
 

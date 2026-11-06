@@ -42,6 +42,9 @@ const CACHE_TTL_MS = 60_000;
 const MEASURE_CONCURRENCY = 4;
 const MAX_WALK_ENTRIES = 2_000_000;
 const STAT_BATCH = 256;
+// One line per file, including each file inside a new folder, so the delete
+// dialog's count and the recount before removal match what a forced delete loses.
+const UNCOMMITTED_FILES_STATUS = ["status", "--porcelain", "--untracked-files=all"] as const;
 
 const decodeSession = Schema.decodeUnknownEffect(
   Schema.fromJsonString(OrchestrationV2ProviderSessionJson),
@@ -352,12 +355,7 @@ const make = Effect.gen(function* () {
           const [bytes, status, branchLines] = yield* Effect.all(
             [
               measureWorktree(item.path),
-              gitLines(item.path, [
-                "-c",
-                "status.showUntrackedFiles=normal",
-                "status",
-                "--porcelain",
-              ]),
+              gitLines(item.path, UNCOMMITTED_FILES_STATUS),
               gitLines(item.path, ["rev-parse", "--abbrev-ref", "HEAD"]),
             ],
             { concurrency: "unbounded" },
@@ -513,12 +511,7 @@ const make = Effect.gen(function* () {
           return yield* fail("A provider session is still open in this worktree.");
         if (hasTerminal(worktreePath)) return yield* fail("A terminal is open in this worktree.");
 
-        const status = yield* gitLines(worktreePath, [
-          "-c",
-          "status.showUntrackedFiles=normal",
-          "status",
-          "--porcelain",
-        ]);
+        const status = yield* gitLines(worktreePath, UNCOMMITTED_FILES_STATUS);
         if (status === null) return yield* fail("Could not read the worktree status.");
         if (status.length > input.allowUncommittedFiles)
           return yield* fail("Files changed since the list loaded. Refresh and try again.");
