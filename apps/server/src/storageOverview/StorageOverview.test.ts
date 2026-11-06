@@ -248,6 +248,21 @@ describe("StorageOverview", () => {
     ),
   );
 
+  it.live("refuses a .env inside a folder whose name git would quote", () =>
+    run(
+      Effect.gen(function* () {
+        const { service, fs, worktree } = yield* fixture;
+        yield* fs.makeDirectory(`${worktree}/café`);
+        yield* fs.writeFileString(`${worktree}/café/.env`, "KEY=1\n");
+        const error = yield* service
+          .removeWorktree({ path: worktree, allowUncommittedFiles: 1, saveChanges: true })
+          .pipe(Effect.flip);
+        expect(error.message).toContain(".env file isn't ignored");
+        expect(yield* fs.exists(`${worktree}/café/.env`)).toBe(true);
+      }),
+    ),
+  );
+
   it.live("fills only the missing identity part when saving", () =>
     run(
       Effect.gen(function* () {

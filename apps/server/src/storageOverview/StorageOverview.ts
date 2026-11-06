@@ -352,7 +352,11 @@ const make = Effect.gen(function* () {
       ...((yield* configured("user.email")) ? [] : ["-c", "user.email=t3code@localhost"]),
     ];
     yield* runGit(["add", "-A"]);
-    const staged = (yield* gitLines(worktreePath, ["diff", "--cached", "--name-only"])) ?? [];
+    // -z prints paths raw: without it git quotes non-ASCII paths ("caf\303\251/.env"),
+    // which would slip past the name check. runGit refuses if git fails.
+    const staged = (yield* runGit(["diff", "--cached", "--name-only", "-z"]))
+      .split("\0")
+      .filter(Boolean);
     if (
       staged.some((file) => {
         const name = file.split("/").pop() ?? file;
