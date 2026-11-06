@@ -41,6 +41,8 @@ export const StorageOverview = Schema.Struct({
   totalBytes: NonNegativeInt,
   categories: Schema.Array(StorageOverviewCategory),
   worktrees: Schema.Array(StorageOverviewWorktree),
+  /** Present and true only on servers that understand `saveChanges`; older servers omit it. */
+  canSaveChanges: Schema.optionalKey(Schema.Boolean),
 });
 export type StorageOverview = typeof StorageOverview.Type;
 
@@ -53,11 +55,15 @@ export const StorageRemoveWorktreeInput = Schema.Struct({
   path: Schema.String,
   /** Files the user was told would be lost; the server refuses if more are uncommitted now. */
   allowUncommittedFiles: NonNegativeInt,
+  /** Commit every change on the worktree's own branch (local only) before removing it. */
+  saveChanges: Schema.optionalKey(Schema.Boolean),
 });
 export type StorageRemoveWorktreeInput = typeof StorageRemoveWorktreeInput.Type;
 
 export const StorageRemoveWorktreeResult = Schema.Struct({
   bytesFreed: Schema.NullOr(NonNegativeInt),
+  /** Short sha of the commit that saved the changes; null when nothing was saved. */
+  savedCommit: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 export type StorageRemoveWorktreeResult = typeof StorageRemoveWorktreeResult.Type;
 

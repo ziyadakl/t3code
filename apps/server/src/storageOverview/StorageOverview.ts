@@ -309,6 +309,78 @@ const make = Effect.gen(function* () {
         Effect.orElseSucceed(() => null),
       );
 
+  /** Commits every change on the worktree's own branch (local only) and returns the short sha. */
+  const saveChanges = Effect.fn("StorageOverview.saveChanges")(function* (worktreePath: string) {
+    const runGit = (args: ReadonlyArray<string>) =>
+      git
+        .execute({
+          operation: "StorageOverview.saveChanges",
+          cwd: worktreePath,
+          args,
+          allowNonZeroExit: true,
+          timeoutMs: 120_000,
+          maxOutputBytes: 4 * 1024 * 1024,
+        })
+        .pipe(
+          Effect.mapError(() => fail("Could not save the changes; nothing was deleted.")),
+          Effect.flatMap((result) =>
+            result.exitCode === 0
+              ? Effect.succeed(result.stdout.trim())
+              : Effect.fail(
+                  fail(
+                    result.stderr.trim().split(/\r?\n/)[0]?.slice(0, 300) ||
+                      "Could not save the changes; nothing was deleted.",
+                  ),
+                ),
+          ),
+        );
+
+    const branch = (yield* gitLines(worktreePath, [
+      "rev-parse",
+      "--abbrev-ref",
+      "HEAD",
+    ]))?.[0]?.trim();
+    if (branch === undefined || branch === "" || branch === "HEAD")
+      return yield* fail("This worktree has no branch to save to.");
+
+    const configured = (key: string) =>
+      gitLines(worktreePath, ["config", key]).pipe(
+        Effect.map((lines) => (lines?.[0]?.trim() ?? "") !== ""),
+      );
+    const identity = [
+      ...((yield* configured("user.name")) ? [] : ["-c", "user.name=T3 Code"]),
+      ...((yield* configured("user.email")) ? [] : ["-c", "user.email=t3code@localhost"]),
+    ];
+    yield* runGit(["add", "-A"]);
+    // -z prints paths raw: without it git quotes non-ASCII paths ("caf\303\251/.env"),
+    // which would slip past the name check. runGit refuses if git fails.
+    const staged = (yield* runGit(["diff", "--cached", "--name-only", "-z"]))
+      .split("\0")
+      .filter(Boolean);
+    if (
+      staged.some((file) => {
+        const name = file.split("/").pop() ?? file;
+        return /^\.env(\..+)?$/.test(name) && name !== ".env.example";
+      })
+    ) {
+      yield* runGit(["reset", "-q"]);
+      return yield* fail(
+        "A .env file isn't ignored by git, so it was not saved. Nothing was deleted.",
+      );
+    }
+    yield* runGit([
+      ...identity,
+      "commit",
+      "--no-verify",
+      "-m",
+      "Saved before deleting the worktree",
+    ]);
+    const remaining = yield* gitLines(worktreePath, UNCOMMITTED_FILES_STATUS);
+    if (remaining === null || remaining.length > 0)
+      return yield* fail("Could not save every change; nothing was deleted.");
+    return yield* runGit(["rev-parse", "--short", "HEAD"]);
+  });
+
   const readContext = Effect.gen(function* () {
     const snapshot = yield* projections.getShellSnapshot().pipe(NodeSqliteClient.readOnly);
     const projects = yield* projectStore.listShells();
@@ -418,6 +490,7 @@ const make = Effect.gen(function* () {
       totalBytes: categories.reduce((sum, category) => sum + category.bytes, 0),
       categories,
       worktrees,
+      canSaveChanges: true,
     } satisfies StorageOverviewResult;
   });
 
@@ -516,6 +589,8 @@ const make = Effect.gen(function* () {
         if (status.length > input.allowUncommittedFiles)
           return yield* fail("Files changed since the list loaded. Refresh and try again.");
 
+        const savedCommit = input.saveChanges === true ? yield* saveChanges(worktreePath) : null;
+
         const { projects, threads } = yield* readContext;
         let repository: string | null = null;
         for (const { thread } of threads) {
@@ -557,7 +632,7 @@ const make = Effect.gen(function* () {
           operation: "StorageOverview.removeWorktree",
           cwd: repositoryCwd,
           worktreePath,
-          force: status.length > 0,
+          force: savedCommit === null && status.length > 0,
           execute: git.execute,
           run: Effect.fn("StorageOverview.gitWorktreeRemove")(function* (
             args: ReadonlyArray<string>,
@@ -590,7 +665,7 @@ const make = Effect.gen(function* () {
         yield* gitManager.invalidateStatus(repositoryCwd);
         // Thread rows keep their branch and path so the next message rebuilds the checkout.
         yield* Effect.logInfo("storage overview removed worktree", { worktreePath });
-        return { bytesFreed: knownBytes };
+        return { bytesFreed: knownBytes, savedCommit };
       }),
     );
   }, Effect.mapError(toOverviewError));

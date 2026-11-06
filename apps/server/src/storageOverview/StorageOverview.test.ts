@@ -208,6 +208,98 @@ describe("StorageOverview", () => {
     ),
   );
 
+  it.live("saves changes on the branch, then removes the worktree", () =>
+    run(
+      Effect.gen(function* () {
+        const { service, fs, worktree, command, repo } = yield* fixture;
+        yield* fs.writeFileString(`${worktree}/tracked.txt`, "edited\n");
+        yield* fs.makeDirectory(`${worktree}/generated`);
+        yield* fs.writeFileString(`${worktree}/generated/a.txt`, "alpha\n");
+        yield* fs.writeFileString(`${worktree}/generated/b.txt`, "beta\n");
+
+        const removed = yield* service.removeWorktree({
+          path: worktree,
+          allowUncommittedFiles: 3,
+          saveChanges: true,
+        });
+        expect(removed.savedCommit).not.toBeNull();
+        expect(yield* fs.exists(worktree)).toBe(false);
+        expect((yield* command(repo, ["log", "-1", "--format=%s", "feature"])).stdout.trim()).toBe(
+          "Saved before deleting the worktree",
+        );
+        expect((yield* command(repo, ["show", "feature:generated/a.txt"])).stdout).toBe("alpha\n");
+        expect((yield* command(repo, ["show", "feature:tracked.txt"])).stdout).toBe("edited\n");
+      }),
+    ),
+  );
+
+  it.live("refuses to save an unignored .env file, unstages it and keeps the folder", () =>
+    run(
+      Effect.gen(function* () {
+        const { service, fs, worktree, command } = yield* fixture;
+        yield* fs.writeFileString(`${worktree}/.env.local`, "KEY=1\n");
+        const error = yield* service
+          .removeWorktree({ path: worktree, allowUncommittedFiles: 1, saveChanges: true })
+          .pipe(Effect.flip);
+        expect(error.message).toContain(".env file isn't ignored");
+        expect(yield* fs.exists(worktree)).toBe(true);
+        expect((yield* command(worktree, ["diff", "--cached", "--name-only"])).stdout).toBe("");
+      }),
+    ),
+  );
+
+  it.live("refuses a .env inside a folder whose name git would quote", () =>
+    run(
+      Effect.gen(function* () {
+        const { service, fs, worktree } = yield* fixture;
+        yield* fs.makeDirectory(`${worktree}/café`);
+        yield* fs.writeFileString(`${worktree}/café/.env`, "KEY=1\n");
+        const error = yield* service
+          .removeWorktree({ path: worktree, allowUncommittedFiles: 1, saveChanges: true })
+          .pipe(Effect.flip);
+        expect(error.message).toContain(".env file isn't ignored");
+        expect(yield* fs.exists(`${worktree}/café/.env`)).toBe(true);
+      }),
+    ),
+  );
+
+  it.live("fills only the missing identity part when saving", () =>
+    run(
+      Effect.gen(function* () {
+        const { service, fs, worktree, command, repo } = yield* fixture;
+        yield* command(repo, ["config", "user.email", ""]);
+        yield* fs.writeFileString(`${worktree}/note.txt`, "x\n");
+        yield* service.removeWorktree({
+          path: worktree,
+          allowUncommittedFiles: 1,
+          saveChanges: true,
+        });
+        const author = (yield* command(repo, [
+          "log",
+          "-1",
+          "--format=%an <%ae>",
+          "feature",
+        ])).stdout.trim();
+        expect(author).toBe("Overview test <t3code@localhost>");
+      }),
+    ),
+  );
+
+  it.live("refuses to save changes in a detached worktree and keeps the folder", () =>
+    run(
+      Effect.gen(function* () {
+        const { service, fs, worktree, command } = yield* fixture;
+        yield* command(worktree, ["checkout", "--detach"]);
+        yield* fs.writeFileString(`${worktree}/scratch.txt`, "unsaved\n");
+        const error = yield* service
+          .removeWorktree({ path: worktree, allowUncommittedFiles: 1, saveChanges: true })
+          .pipe(Effect.flip);
+        expect(error.message).toContain("no branch to save to");
+        expect(yield* fs.exists(worktree)).toBe(true);
+      }),
+    ),
+  );
+
   it.live("refuses while a terminal is open in the worktree", () =>
     run(
       Effect.gen(function* () {
