@@ -120,7 +120,6 @@ describe("searchSettings", () => {
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: false,
       hasThreadAutoArchive: false,
-      hasThreadAutoArchive: false,
     });
 
     const gatedIds = new Set<string>([
@@ -156,7 +155,6 @@ describe("searchSettings", () => {
       localEnvironmentDisabled: true,
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: false,
-      hasThreadAutoArchive: false,
       hasThreadAutoArchive: false,
     };
     const results = (hasPeerLinkHost: boolean) =>
