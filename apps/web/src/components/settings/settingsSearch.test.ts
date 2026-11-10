@@ -120,6 +120,7 @@ describe("searchSettings", () => {
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: false,
       hasThreadAutoArchive: false,
+      hasThreadAutoArchive: false,
     });
 
     const gatedIds = new Set<string>([
@@ -156,6 +157,7 @@ describe("searchSettings", () => {
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: false,
       hasThreadAutoArchive: false,
+      hasThreadAutoArchive: false,
     };
     const results = (hasPeerLinkHost: boolean) =>
       searchSettings(
@@ -180,6 +182,7 @@ describe("searchSettings", () => {
       canManageLocalBackend: false,
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: false,
+      hasThreadAutoArchive: false,
     };
     const ids = (hasPrimaryEnvironment: boolean) =>
       searchSettings(

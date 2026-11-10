@@ -22,7 +22,6 @@ describe("auto-archive settings search", () => {
           hasCloudPublicConfig: false,
           hasEnvironment: true,
           hasProviderSettingsEnvironment: true,
-          hasMacProviderSettingsEnvironment: false,
           canManageLocalBackend: false,
           isWslSettingsRowVisible: false,
           hasThreadAutoSettlement: true,

@@ -22,7 +22,6 @@ describe("project groups settings search", () => {
           hasCloudPublicConfig: false,
           hasEnvironment: false,
           hasProviderSettingsEnvironment: false,
-          hasMacProviderSettingsEnvironment: false,
           canManageLocalBackend: false,
           isWslSettingsRowVisible: false,
           hasThreadAutoSettlement: false,
