@@ -61,6 +61,15 @@ try {
   const page = await app.firstWindow({ timeout: STEP_TIMEOUT_MS });
   try {
     step = `finding "${THREAD_TITLE}" in the sidebar`;
+    // The fork folds every sidebar project group at start, and folded groups render no thread rows.
+    const foldedGroup = page.locator(
+      '[data-testid="sidebar-project-group-header"][aria-expanded="false"]',
+      { hasText: "Launch Check" },
+    );
+    await foldedGroup
+      .first()
+      .click({ timeout: 15_000 })
+      .catch(() => {});
     const thread = page.locator("li[data-thread-item]", { hasText: THREAD_TITLE });
     await thread.waitFor({ timeout: STEP_TIMEOUT_MS });
     step = "opening the thread";
