@@ -286,7 +286,11 @@ describe("MessagesTimeline work rows", () => {
       ...Array.from({ length: 12 }, (_, index) =>
         message(`Earlier context ${index}`, {}, `context-${index}`),
       ),
-      message("Progress details\n\n".repeat(50), { role: "assistant", runId }, "progress"),
+      // One-line notes fold under the heading; a long multi-line message would stay visible and
+      // leave no "Worked for" heading to click.
+      ...Array.from({ length: 50 }, (_, index) =>
+        message(`Progress note ${index}`, { role: "assistant", runId }, `progress-${index}`),
+      ),
       message("Done", { role: "assistant", runId }, "final"),
     ];
     await using screen = await render(<MessagesTimeline {...props} timelineEntries={entries} />, {
