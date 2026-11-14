@@ -13,15 +13,16 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { ClaudeProviderCapabilitiesV2 } from "./Adapters/ClaudeAdapterV2.ts";
+import * as EffectWorker from "./EffectWorker.ts";
 import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
-import { previousConversationRun } from "./ThreadRewindTargets.ts";
 import { userFacingDispatchErrorMessage } from "./UserFacingErrors.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 
@@ -183,11 +184,59 @@ const sendAndSettle = (
     });
   });
 
+/** A Claude adapter whose session records each rollback instead of reaching a provider. */
+const makeRollbackRecordingLayer = (
+  rollbacks: Array<ProviderAdapter.ProviderAdapterV2RollbackTarget>,
+) => {
+  const recordingAdapter = {
+    ...adapter,
+    openSession: (sessionInput: { readonly providerSessionId: never }) =>
+      Effect.map(
+        DateTime.now,
+        (now) =>
+          ({
+            instanceId,
+            driver: adapter.driver,
+            providerSessionId: sessionInput.providerSessionId,
+            providerSession: {
+              id: sessionInput.providerSessionId,
+              driver: adapter.driver,
+              providerInstanceId: instanceId,
+              status: "ready",
+              cwd: "/fallback",
+              model: modelSelection.model,
+              capabilities: ClaudeProviderCapabilitiesV2,
+              createdAt: now,
+              updatedAt: now,
+              lastError: null,
+            },
+            events: Stream.empty,
+            rollbackThread: (input: ProviderAdapter.ProviderAdapterV2RollbackThreadInput) =>
+              Effect.sync(() => {
+                rollbacks.push(input.target);
+                return { providerThread: input.providerThread };
+              }),
+          }) as never,
+      ),
+  } as unknown as ProviderAdapter.ProviderAdapterV2["Service"];
+  return Layer.mergeAll(
+    layerDatabase,
+    ProjectionStore.layer.pipe(Layer.provide(layerDatabase)),
+    ProviderReplayHarness.layerWithRegistry(
+      { name: "thread-rewind-rollback" },
+      ProviderAdapterRegistry.layerFromAdapters([recordingAdapter]),
+      { databaseLayer: layerDatabase, runEffectWorker: false },
+    ),
+  );
+};
+
 it.effect(
   "rewinds past cancelled turns Claude never answered, back to the last answered turn",
-  () =>
-    Effect.gen(function* () {
+  () => {
+    const rollbacks: Array<ProviderAdapter.ProviderAdapterV2RollbackTarget> = [];
+    return Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
       const threadId = ThreadId.make("thread:rewind-skips-unanswered");
       yield* createThread(threadId);
       yield* sendAndSettle(threadId, "answered", { status: "completed" });
@@ -203,17 +252,24 @@ it.effect(
         messageId: messageId(threadId, "last"),
         choice: "conversation",
       });
+      yield* worker.drain();
 
       const projection = yield* orchestrator.getThreadProjection(threadId);
-      const last = projection.runs.find((run) => run.userMessageId === messageId(threadId, "last"));
-      // The rewind was accepted: the thread records it as the current one.
-      assert.equal(projection.thread.rollbackRequestId, commandId);
-      // The rewind resumes at the answered run, not at a cancelled one.
-      assert.equal(
-        previousConversationRun(projection, last!)?.userMessageId,
-        messageId(threadId, "answered"),
+      const statusOf = (text: string) =>
+        projection.runs.find((run) => run.userMessageId === messageId(threadId, text))!;
+      const answered = statusOf("answered");
+      // The provider rolled back to the answered run, not to a cancelled one.
+      assert.deepEqual(
+        rollbacks.map((target) => [target.type, target.appRunOrdinal]),
+        [["provider_turn", answered.ordinal]],
       );
-    }).pipe(Effect.provide(layerTest)),
+      assert.equal(projection.providerThreads[0]?.lastRunOrdinal, answered.ordinal);
+      assert.deepEqual(
+        ["answered", "stopped-1", "stopped-2", "last"].map((text) => statusOf(text).status),
+        ["completed", "rolled_back", "rolled_back", "rolled_back"],
+      );
+    }).pipe(Effect.provide(makeRollbackRecordingLayer(rollbacks)));
+  },
 );
 
 it.effect("still refuses when the turn before was answered in a different Claude session", () =>

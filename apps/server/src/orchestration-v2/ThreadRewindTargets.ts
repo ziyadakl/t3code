@@ -52,21 +52,23 @@ export function compareConversationOrder(
 }
 
 /**
- * Whether Claude ever took a turn for `run`. A run stopped before Claude
- * answered has none, so a rewind has nothing to resume at in it.
+ * The provider turn Claude took for `run`; undefined when the user stopped it
+ * first. The previous-run skip and the rewind refusal both read this, so they
+ * cannot disagree.
  */
-function runHasProviderTurn(
+export function providerTurnForRun(
   projection: Pick<ProjectionRecords<"attempts" | "providerTurns">, "attempts" | "providerTurns">,
   run: OrchestrationV2Run,
-): boolean {
-  if (run.activeAttemptId === null) return false;
-  if (latestProviderTurnForAttempt(projection.providerTurns, run.activeAttemptId) !== undefined) {
-    return true;
-  }
-  const providerTurnId = projection.attempts.find(
-    (attempt) => attempt.id === run.activeAttemptId,
-  )?.providerTurnId;
-  return projection.providerTurns.some((turn) => turn.id === providerTurnId);
+): OrchestrationV2ProviderTurn | undefined {
+  if (run.activeAttemptId === null) return undefined;
+  return (
+    latestProviderTurnForAttempt(projection.providerTurns, run.activeAttemptId) ??
+    projection.providerTurns.find(
+      (turn) =>
+        projection.attempts.find((attempt) => attempt.id === run.activeAttemptId)
+          ?.providerTurnId === turn.id,
+    )
+  );
 }
 
 /**
@@ -87,7 +89,7 @@ export function previousConversationRun(
       (candidate) =>
         compareConversationOrder(candidate, run) < 0 &&
         candidate.status !== "rolled_back" &&
-        runHasProviderTurn(projection, candidate),
+        providerTurnForRun(projection, candidate) !== undefined,
     )
     .toSorted(compareConversationOrder)
     .at(-1);

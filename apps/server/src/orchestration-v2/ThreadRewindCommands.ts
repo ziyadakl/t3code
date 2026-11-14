@@ -10,8 +10,6 @@ import {
   type OrchestrationV2DomainEvent,
   type OrchestrationV2InternalCommand,
   type OrchestrationV2ProviderThread,
-  type OrchestrationV2ProviderTurn,
-  type OrchestrationV2Run,
   type OrchestrationV2ServerCommand,
   type OrchestrationV2ThreadProjection,
   type ProviderInstanceId,
@@ -41,6 +39,7 @@ import type { ProviderAdapterRegistryV2 } from "./ProviderAdapterRegistry.ts";
 import {
   NO_FILE_SNAPSHOTS_MESSAGE,
   previousConversationRun,
+  providerTurnForRun,
   runFileCheckpointTurn,
 } from "./ThreadRewindTargets.ts";
 
@@ -90,10 +89,6 @@ export interface ThreadRewindCommandDeps {
     filter?: ProjectionRecordFilter,
   ) => Effect.Effect<ProjectionRecords<K>, OrchestratorProjectionError>;
   readonly hasLiveRun: (projection: Pick<OrchestrationV2ThreadProjection, "runs">) => boolean;
-  readonly providerTurnForRun: (
-    projection: Pick<OrchestrationV2ThreadProjection, "providerTurns" | "attempts">,
-    run: OrchestrationV2Run,
-  ) => OrchestrationV2ProviderTurn | undefined;
   /** The orchestrator's own error classes, passed in so this file never imports it at run time. */
   readonly errors: {
     readonly OrchestratorDispatchError: typeof OrchestratorDispatchError;
@@ -111,7 +106,6 @@ export function makeThreadRewindCommands(deps: ThreadRewindCommandDeps) {
     emit,
     loadProjectionForCommand,
     hasLiveRun,
-    providerTurnForRun,
     errors: {
       OrchestratorDispatchError,
       OrchestratorProjectionError,

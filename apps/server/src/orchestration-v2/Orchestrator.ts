@@ -12550,7 +12550,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     emit,
     loadProjectionForCommand,
     hasLiveRun,
-    providerTurnForRun,
     errors: {
       OrchestratorDispatchError,
       OrchestratorProjectionError,
