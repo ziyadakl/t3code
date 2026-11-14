@@ -863,7 +863,7 @@ const rewindPoints = Effect.fn("rewindPoints")(function* (threadId: ThreadId) {
     .map((message) => {
       const run = records.runs.find((candidate) => candidate.userMessageId === message.id);
       if (run === undefined) return { prompt: message.text, rewind: "none" as const };
-      const previous = previousConversationRun(records.runs, run);
+      const previous = previousConversationRun(records, run);
       return {
         prompt: message.text,
         resumeAfter:

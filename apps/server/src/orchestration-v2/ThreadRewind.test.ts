@@ -1,17 +1,24 @@
 import { assert, it } from "@effect/vitest";
 import {
   CommandId,
+  EventId,
   MessageId,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProviderThreadId,
+  ProviderTurnId,
   ThreadId,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { ClaudeProviderCapabilitiesV2 } from "./Adapters/ClaudeAdapterV2.ts";
+import * as EffectWorker from "./EffectWorker.ts";
+import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
@@ -113,5 +120,182 @@ it.effect("refuses to rewind while a message waits in the queue, even a held one
 
     assert.equal(refusal, "Send or remove your queued messages before rewinding.");
     assert.equal(yield* orchestrator.getThreadEventSequence(threadId), before);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+/**
+ * Sends `text`, then settles its run as the provider would have: `completed`
+ * with a Claude turn on `providerThreadId`, or `cancelled` with none (the
+ * user stopped it before Claude answered).
+ */
+const sendAndSettle = (
+  threadId: ThreadId,
+  text: string,
+  outcome:
+    | { readonly status: "completed"; readonly turnOn?: string }
+    | { readonly status: "cancelled" },
+) =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const eventSink = yield* EventSink.EventSinkV2;
+    yield* send(threadId, text, "start_immediately");
+    const projection = yield* orchestrator.getThreadProjection(threadId);
+    const run = projection.runs.find(
+      (candidate) => candidate.userMessageId === messageId(threadId, text),
+    )!;
+    const attempt = projection.attempts.find((candidate) => candidate.id === run.activeAttemptId)!;
+    const now = yield* DateTime.now;
+    const turn =
+      outcome.status === "completed"
+        ? [
+            {
+              id: EventId.make(`event:${run.id}:turn`),
+              type: "provider-turn.updated" as const,
+              threadId,
+              runId: run.id,
+              occurredAt: now,
+              payload: {
+                id: ProviderTurnId.make(`provider-turn:${run.id}`),
+                providerThreadId: ProviderThreadId.make(outcome.turnOn ?? attempt.providerThreadId),
+                nodeId: attempt.rootNodeId,
+                runAttemptId: attempt.id,
+                nativeTurnRef: null,
+                ordinal: run.ordinal,
+                status: "completed" as const,
+                startedAt: now,
+                completedAt: now,
+              },
+            },
+          ]
+        : [];
+    yield* eventSink.write({
+      commandId: CommandId.make(`settle:${run.id}`),
+      events: [
+        ...turn,
+        {
+          id: EventId.make(`event:${run.id}:done`),
+          type: "run.updated",
+          threadId,
+          runId: run.id,
+          occurredAt: now,
+          payload: { ...run, status: outcome.status, completedAt: now },
+        },
+      ],
+    });
+  });
+
+/** A Claude adapter whose session records each rollback instead of reaching a provider. */
+const makeRollbackRecordingLayer = (
+  rollbacks: Array<ProviderAdapter.ProviderAdapterV2RollbackTarget>,
+) => {
+  const recordingAdapter = {
+    ...adapter,
+    openSession: (sessionInput: { readonly providerSessionId: never }) =>
+      Effect.map(
+        DateTime.now,
+        (now) =>
+          ({
+            instanceId,
+            driver: adapter.driver,
+            providerSessionId: sessionInput.providerSessionId,
+            providerSession: {
+              id: sessionInput.providerSessionId,
+              driver: adapter.driver,
+              providerInstanceId: instanceId,
+              status: "ready",
+              cwd: "/fallback",
+              model: modelSelection.model,
+              capabilities: ClaudeProviderCapabilitiesV2,
+              createdAt: now,
+              updatedAt: now,
+              lastError: null,
+            },
+            events: Stream.empty,
+            rollbackThread: (input: ProviderAdapter.ProviderAdapterV2RollbackThreadInput) =>
+              Effect.sync(() => {
+                rollbacks.push(input.target);
+                return { providerThread: input.providerThread };
+              }),
+          }) as never,
+      ),
+  } as unknown as ProviderAdapter.ProviderAdapterV2["Service"];
+  return Layer.mergeAll(
+    layerDatabase,
+    ProjectionStore.layer.pipe(Layer.provide(layerDatabase)),
+    ProviderReplayHarness.layerWithRegistry(
+      { name: "thread-rewind-rollback" },
+      ProviderAdapterRegistry.layerFromAdapters([recordingAdapter]),
+      { databaseLayer: layerDatabase, runEffectWorker: false },
+    ),
+  );
+};
+
+it.effect(
+  "rewinds past cancelled turns Claude never answered, back to the last answered turn",
+  () => {
+    const rollbacks: Array<ProviderAdapter.ProviderAdapterV2RollbackTarget> = [];
+    return Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+      const threadId = ThreadId.make("thread:rewind-skips-unanswered");
+      yield* createThread(threadId);
+      yield* sendAndSettle(threadId, "answered", { status: "completed" });
+      yield* sendAndSettle(threadId, "stopped-1", { status: "cancelled" });
+      yield* sendAndSettle(threadId, "stopped-2", { status: "cancelled" });
+      yield* sendAndSettle(threadId, "last", { status: "completed" });
+
+      const commandId = CommandId.make("rewind-skips-unanswered");
+      yield* orchestrator.dispatch({
+        type: "thread.rewind",
+        commandId,
+        threadId,
+        messageId: messageId(threadId, "last"),
+        choice: "conversation",
+      });
+      yield* worker.drain();
+
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+      const statusOf = (text: string) =>
+        projection.runs.find((run) => run.userMessageId === messageId(threadId, text))!;
+      const answered = statusOf("answered");
+      // The provider rolled back to the answered run, not to a cancelled one.
+      assert.deepEqual(
+        rollbacks.map((target) => [target.type, target.appRunOrdinal]),
+        [["provider_turn", answered.ordinal]],
+      );
+      assert.equal(projection.providerThreads[0]?.lastRunOrdinal, answered.ordinal);
+      assert.deepEqual(
+        ["answered", "stopped-1", "stopped-2", "last"].map((text) => statusOf(text).status),
+        ["completed", "rolled_back", "rolled_back", "rolled_back"],
+      );
+    }).pipe(Effect.provide(makeRollbackRecordingLayer(rollbacks)));
+  },
+);
+
+it.effect("still refuses when the turn before was answered in a different Claude session", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const threadId = ThreadId.make("thread:rewind-other-session");
+    yield* createThread(threadId);
+    yield* sendAndSettle(threadId, "answered-elsewhere", {
+      status: "completed",
+      turnOn: "provider-thread:another-session",
+    });
+    yield* sendAndSettle(threadId, "last", { status: "completed" });
+
+    const refusal = yield* orchestrator
+      .dispatch({
+        type: "thread.rewind",
+        commandId: CommandId.make("rewind-other-session"),
+        threadId,
+        messageId: messageId(threadId, "last"),
+        choice: "conversation",
+      })
+      .pipe(Effect.flip, Effect.map(userFacingDispatchErrorMessage));
+
+    assert.equal(
+      refusal,
+      "Cannot rewind to this message: the turn before it is not part of the current Claude session.",
+    );
   }).pipe(Effect.provide(layerTest)),
 );

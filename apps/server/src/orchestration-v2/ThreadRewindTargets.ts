@@ -1,4 +1,5 @@
 import {
+  latestProviderTurnForAttempt,
   type MessageId,
   type OrchestrationV2ProviderTurn,
   type OrchestrationV2Run,
@@ -51,18 +52,44 @@ export function compareConversationOrder(
 }
 
 /**
- * The last run before `run` still in the conversation: rewinding to the
- * message of `run` keeps the conversation up to its end. Undefined means the
- * rewind goes back to the thread start.
+ * The provider turn Claude took for `run`; undefined when the user stopped it
+ * first. The previous-run skip and the rewind refusal both read this, so they
+ * cannot disagree.
+ */
+export function providerTurnForRun(
+  projection: Pick<ProjectionRecords<"attempts" | "providerTurns">, "attempts" | "providerTurns">,
+  run: OrchestrationV2Run,
+): OrchestrationV2ProviderTurn | undefined {
+  if (run.activeAttemptId === null) return undefined;
+  return (
+    latestProviderTurnForAttempt(projection.providerTurns, run.activeAttemptId) ??
+    projection.providerTurns.find(
+      (turn) =>
+        projection.attempts.find((attempt) => attempt.id === run.activeAttemptId)
+          ?.providerTurnId === turn.id,
+    )
+  );
+}
+
+/**
+ * The last run before `run` still in the conversation and answered by Claude:
+ * rewinding to the message of `run` keeps the conversation up to its end. A
+ * run stopped before Claude answered is skipped, since it left no turn to
+ * resume at. Undefined means the rewind goes back to the thread start.
  */
 export function previousConversationRun(
-  runs: ReadonlyArray<OrchestrationV2Run>,
+  projection: Pick<
+    ProjectionRecords<"runs" | "attempts" | "providerTurns">,
+    "runs" | "attempts" | "providerTurns"
+  >,
   run: OrchestrationV2Run,
 ): OrchestrationV2Run | undefined {
-  return runs
+  return projection.runs
     .filter(
       (candidate) =>
-        compareConversationOrder(candidate, run) < 0 && candidate.status !== "rolled_back",
+        compareConversationOrder(candidate, run) < 0 &&
+        candidate.status !== "rolled_back" &&
+        providerTurnForRun(projection, candidate) !== undefined,
     )
     .toSorted(compareConversationOrder)
     .at(-1);
