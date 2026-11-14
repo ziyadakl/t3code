@@ -271,7 +271,7 @@ export function makeThreadRewindCommands(deps: ThreadRewindCommandDeps) {
     if (restores.code && runFileCheckpointTurn(projection, run.id) === undefined) {
       return yield* refuse(NO_FILE_SNAPSHOTS_MESSAGE);
     }
-    const previousRun = previousConversationRun(projection.runs, run);
+    const previousRun = previousConversationRun(projection, run);
     const previousTurn =
       previousRun === undefined ? undefined : providerTurnForRun(projection, previousRun);
     if (

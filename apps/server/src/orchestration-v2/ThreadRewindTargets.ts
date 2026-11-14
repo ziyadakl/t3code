@@ -1,4 +1,5 @@
 import {
+  latestProviderTurnForAttempt,
   type MessageId,
   type OrchestrationV2ProviderTurn,
   type OrchestrationV2Run,
@@ -51,18 +52,42 @@ export function compareConversationOrder(
 }
 
 /**
- * The last run before `run` still in the conversation: rewinding to the
- * message of `run` keeps the conversation up to its end. Undefined means the
- * rewind goes back to the thread start.
+ * Whether Claude ever took a turn for `run`. A run stopped before Claude
+ * answered has none, so a rewind has nothing to resume at in it.
+ */
+function runHasProviderTurn(
+  projection: Pick<ProjectionRecords<"attempts" | "providerTurns">, "attempts" | "providerTurns">,
+  run: OrchestrationV2Run,
+): boolean {
+  if (run.activeAttemptId === null) return false;
+  if (latestProviderTurnForAttempt(projection.providerTurns, run.activeAttemptId) !== undefined) {
+    return true;
+  }
+  const providerTurnId = projection.attempts.find(
+    (attempt) => attempt.id === run.activeAttemptId,
+  )?.providerTurnId;
+  return projection.providerTurns.some((turn) => turn.id === providerTurnId);
+}
+
+/**
+ * The last run before `run` still in the conversation and answered by Claude:
+ * rewinding to the message of `run` keeps the conversation up to its end. A
+ * run stopped before Claude answered is skipped, since it left no turn to
+ * resume at. Undefined means the rewind goes back to the thread start.
  */
 export function previousConversationRun(
-  runs: ReadonlyArray<OrchestrationV2Run>,
+  projection: Pick<
+    ProjectionRecords<"runs" | "attempts" | "providerTurns">,
+    "runs" | "attempts" | "providerTurns"
+  >,
   run: OrchestrationV2Run,
 ): OrchestrationV2Run | undefined {
-  return runs
+  return projection.runs
     .filter(
       (candidate) =>
-        compareConversationOrder(candidate, run) < 0 && candidate.status !== "rolled_back",
+        compareConversationOrder(candidate, run) < 0 &&
+        candidate.status !== "rolled_back" &&
+        runHasProviderTurn(projection, candidate),
     )
     .toSorted(compareConversationOrder)
     .at(-1);

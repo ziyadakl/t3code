@@ -175,7 +175,7 @@ export const layer: Layer.Layer<
       if (run.status === "rolled_back") {
         return { type: "completed" as const, notice: ALREADY_REWOUND_MESSAGE };
       }
-      const targetOrdinal = previousConversationRun(projection.runs, run)?.ordinal ?? 0;
+      const targetOrdinal = previousConversationRun(projection, run)?.ordinal ?? 0;
       const rewindConversation = checkpointRollback.rollbackConversation({
         threadId: input.threadId,
         source: rollbackSourceFromProjection(projection, {
