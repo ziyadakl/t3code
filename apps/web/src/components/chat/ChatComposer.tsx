@@ -3454,7 +3454,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 <ComposerContextActionsContext
                   value={{
                     ...composerContextActions,
-                    noteSkills: { provider: selectedProvider, skills: selectedProviderSkills },
+                    // Only the Claude driver runs a skill named in a quote's note.
+                    ...(selectedProvider === "claudeAgent"
+                      ? {
+                          noteSkills: {
+                            provider: selectedProvider,
+                            skills: selectedProviderSkills,
+                          },
+                        }
+                      : {}),
                   }}
                 >
                   <ComposerPromptEditor

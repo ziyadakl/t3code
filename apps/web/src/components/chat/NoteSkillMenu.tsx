@@ -120,6 +120,8 @@ export function useNoteSkillMenu({
   return {
     onKeyDown,
     syncCursor,
+    // A pick keeps focus (rows take mousedown), so a blur means the user left the note box.
+    onBlur: () => setCursor(null),
     textareaProps: open
       ? {
           "aria-controls": listId,

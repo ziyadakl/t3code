@@ -161,11 +161,16 @@ describe("planClaudeSkillDispatch", () => {
     const note = quote("please /review this, not /unknown");
     expect(planClaudeSkillDispatch(note, SKILLS)).toEqual({
       leadingText: note,
-      commandText: "/review",
+      commandText: "/review this, not /unknown",
     });
     expect(planClaudeSkillDispatch(`$implement it ${note} then go`, SKILLS)).toEqual({
       leadingText: `/implement it ${note} then go`,
-      commandText: "/review then go",
+      commandText: "/review this, not /unknown then go",
+    });
+    const perf = quote("/review  focus on perf\n");
+    expect(planClaudeSkillDispatch(`${perf}\n then go `, SKILLS)).toEqual({
+      leadingText: `${perf}\n then go`,
+      commandText: "/review focus on perf then go",
     });
     expect(planClaudeSkillDispatch(`${note} then /implement`, SKILLS)?.commandText).toBe(
       "/implement",

@@ -97,6 +97,7 @@ export function AssistantCitationCommentEditor({
           skillMenu.syncCursor(event.currentTarget);
         }}
         onSelect={(event) => skillMenu.syncCursor(event.currentTarget)}
+        onBlur={skillMenu.onBlur}
         onKeyDown={(event) => {
           if (skillMenu.onKeyDown(event)) return;
           if (

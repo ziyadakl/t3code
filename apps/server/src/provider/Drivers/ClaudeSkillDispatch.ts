@@ -46,17 +46,21 @@ export function planClaudeSkillDispatch(
       if (!skill) return [];
       const start = (match.index ?? 0) + (match[1]?.length ?? 0);
       const end = (match.index ?? 0) + match[0].length;
-      return [{ name, skill, start, end, text: `/${name}` }];
+      return [{ name, skill, start, end, text: `/${name}`, noteArgs: undefined }];
     });
   // A note's link stays verbatim: it is the quote, and its text is not a typed `/name`.
   const noteMentions = collectAssistantCitations(prompt).flatMap(({ citation, start, end }) => {
-    const mention = [...(citation.comment ?? "").matchAll(TYPED_SLASH_PATTERN)]
-      .map((match) => ({ name: match[2] ?? "", skill: skills.get(match[2] ?? "") }))
+    const comment = citation.comment ?? "";
+    const mention = [...comment.matchAll(TYPED_SLASH_PATTERN)]
+      .map((match) => ({
+        name: match[2] ?? "",
+        skill: skills.get(match[2] ?? ""),
+        args: comment.slice((match.index ?? 0) + match[0].length).trim(),
+      }))
       .findLast((candidate) => candidate.skill !== undefined);
     if (!mention?.skill) return [];
-    return [
-      { name: mention.name, skill: mention.skill, start, end, text: prompt.slice(start, end) },
-    ];
+    const { name, skill, args } = mention;
+    return [{ name, skill, start, end, text: prompt.slice(start, end), noteArgs: args }];
   });
   const mentions = [...typedMentions, ...noteMentions].sort(
     (left, right) => left.start - right.start,
@@ -81,12 +85,18 @@ export function planClaudeSkillDispatch(
   }
   promptWithInlineSlashes = `${promptWithInlineSlashes}${prompt.slice(cursor)}`.trimEnd();
 
+  if (last.noteArgs !== undefined) {
+    // The quote goes ahead; the note's own words, then the text after the quote, are the args.
+    return {
+      leadingText: promptWithInlineSlashes,
+      commandText: [`/${last.name}`, last.noteArgs, prompt.slice(last.end).trim()]
+        .filter((part) => part.length > 0)
+        .join(" "),
+    };
+  }
   return {
-    // A note's skill still needs its quote sent ahead of the command.
     leadingText:
-      prompt.slice(0, last.start).trim().length > 0 || last.text !== `/${last.name}`
-        ? promptWithInlineSlashes
-        : undefined,
+      prompt.slice(0, last.start).trim().length > 0 ? promptWithInlineSlashes : undefined,
     commandText: `/${last.name}${prompt.slice(last.end)}`.trimEnd(),
   };
 }

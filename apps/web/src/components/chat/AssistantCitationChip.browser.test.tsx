@@ -57,6 +57,7 @@ function mount(
   sourceAnchor: AssistantCitationSourceAnchor | undefined,
   onSave: () => boolean,
   chipCitation: AssistantCitation = citation,
+  { withSkills = true } = {},
 ) {
   function Composer() {
     const [open, setOpen] = useState(true);
@@ -69,14 +70,18 @@ function mount(
           openFile: () => {},
           openMention: () => {},
           openPullRequest: () => {},
-          noteSkills: {
-            provider: ProviderDriverKind.make("claude"),
-            skills: ["triage", "review"].map((name) => ({
-              name,
-              path: `/skills/${name}/SKILL.md`,
-              enabled: true,
-            })),
-          },
+          ...(withSkills
+            ? {
+                noteSkills: {
+                  provider: ProviderDriverKind.make("claudeAgent"),
+                  skills: ["triage", "review"].map((name) => ({
+                    name,
+                    path: `/skills/${name}/SKILL.md`,
+                    enabled: true,
+                  })),
+                },
+              }
+            : {}),
         }}
       >
         <AssistantCitationChip
@@ -292,5 +297,54 @@ describe("citation comment skill list", () => {
 
     await userEvent.keyboard("{Escape}");
     await vi.waitFor(() => expect(textarea()).toBeNull());
+  });
+
+  it("picks with ArrowDown then Enter, and with a click", async () => {
+    using _source = setup();
+    await using _screen = await mount(
+      undefined,
+      vi.fn(() => true),
+    );
+    await vi.waitFor(() => expect(document.activeElement).toBe(textarea()));
+    await userEvent.keyboard("/");
+    await vi.waitFor(() => expect(options()).toHaveLength(2));
+    await userEvent.keyboard("{ArrowDown}{Enter}");
+    expect(textarea()?.value).toBe("/review ");
+
+    await userEvent.keyboard("/");
+    await vi.waitFor(() => expect(options()).toHaveLength(2));
+    const rows = document.querySelectorAll<HTMLElement>(
+      "[data-note-skill-menu] [data-composer-item-id]",
+    );
+    await userEvent.click(rows[0]!);
+    expect(textarea()?.value).toBe("/review /triage ");
+    expect(document.activeElement).toBe(textarea());
+  });
+
+  it("closes the list when the note box loses focus", async () => {
+    using _source = setup();
+    await using _screen = await mount(
+      undefined,
+      vi.fn(() => true),
+    );
+    await vi.waitFor(() => expect(document.activeElement).toBe(textarea()));
+    await userEvent.keyboard("/");
+    await vi.waitFor(() => expect(options()).toHaveLength(2));
+    await act(async () => textarea()!.blur());
+    expect(options()).toEqual([]);
+  });
+
+  it("opens no list without the provider's note skills", async () => {
+    using _source = setup();
+    await using _screen = await mount(
+      undefined,
+      vi.fn(() => true),
+      citation,
+      { withSkills: false },
+    );
+    await vi.waitFor(() => expect(document.activeElement).toBe(textarea()));
+    await userEvent.keyboard("/tri");
+    expect(textarea()?.value).toBe("/tri");
+    expect(options()).toEqual([]);
   });
 });

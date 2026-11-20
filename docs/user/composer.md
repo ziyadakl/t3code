@@ -142,8 +142,8 @@ delete it like other inline context. Copying, reloading, and restoring a
 with its quote, and sending tells the agent which words were quoted and which comment you wrote.
 The quoted text and comment count toward the message limit.
 
-Type `/` in a comment to pick one of the selected provider's skills. With Claude, a skill named
-in a comment runs as if you had typed it where the quote sits.
+With Claude, type `/` in a comment to pick a skill. A skill named in a comment runs where the
+quote sits, with the comment's words after it as its arguments.
 
 Mobile displays saved quotes and comments, but does not create citations or
 navigate to their sources.
