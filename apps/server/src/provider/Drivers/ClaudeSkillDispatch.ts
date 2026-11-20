@@ -1,12 +1,13 @@
 /**
- * Turns a skill mention anywhere in a prompt (`$skill` chip or typed `/skill`) into the slash
- * invocation Claude Code runs. stream-json expands only a last text block starting with `/`,
- * one skill per message, so earlier mentions are rewritten to inline `/name`.
+ * Turns a skill mention anywhere in a prompt (`$skill` chip, typed `/skill`, or `/skill` in a
+ * quote's note) into the slash invocation Claude Code runs. stream-json expands only a last text
+ * block starting with `/`, one skill per message, so earlier mentions are rewritten to `/name`.
  *
  * @module provider/Drivers/ClaudeSkillDispatch
  */
 import type { ServerProviderSkill } from "@t3tools/contracts";
 
+import { collectAssistantCitations } from "@t3tools/shared/assistantCitations";
 import { SKILL_MENTION_PATTERN, SKILL_NAME_SOURCE } from "@t3tools/shared/composerInlineTokens";
 
 /**
@@ -37,16 +38,29 @@ export function planClaudeSkillDispatch(
 ): ClaudeSkillDispatch | undefined {
   // `$name` uses the composer's own pattern, so a rendered chip and a
   // dispatched skill are always the same set; a typed `/name` joins them.
-  const mentions = [SKILL_MENTION_PATTERN, TYPED_SLASH_PATTERN]
+  const typedMentions = [SKILL_MENTION_PATTERN, TYPED_SLASH_PATTERN]
     .flatMap((pattern) => [...prompt.matchAll(pattern)])
     .flatMap((match) => {
       const name = match[2] ?? "";
       const skill = skills.get(name);
       if (!skill) return [];
       const start = (match.index ?? 0) + (match[1]?.length ?? 0);
-      return [{ name, skill, start, end: (match.index ?? 0) + match[0].length }];
-    })
-    .sort((left, right) => left.start - right.start);
+      const end = (match.index ?? 0) + match[0].length;
+      return [{ name, skill, start, end, text: `/${name}` }];
+    });
+  // A note's link stays verbatim: it is the quote, and its text is not a typed `/name`.
+  const noteMentions = collectAssistantCitations(prompt).flatMap(({ citation, start, end }) => {
+    const mention = [...(citation.comment ?? "").matchAll(TYPED_SLASH_PATTERN)]
+      .map((match) => ({ name: match[2] ?? "", skill: skills.get(match[2] ?? "") }))
+      .findLast((candidate) => candidate.skill !== undefined);
+    if (!mention?.skill) return [];
+    return [
+      { name: mention.name, skill: mention.skill, start, end, text: prompt.slice(start, end) },
+    ];
+  });
+  const mentions = [...typedMentions, ...noteMentions].sort(
+    (left, right) => left.start - right.start,
+  );
   const last = mentions.at(-1);
   if (!last) {
     return undefined;
@@ -58,7 +72,7 @@ export function planClaudeSkillDispatch(
   let promptWithInlineSlashes = "";
   let cursor = 0;
   for (const mention of mentions) {
-    promptWithInlineSlashes += `${prompt.slice(cursor, mention.start)}/${mention.name}`;
+    promptWithInlineSlashes += `${prompt.slice(cursor, mention.start)}${mention.text}`;
     if (mention.skill.userInvocationOnly === true && !annotated.has(mention.name)) {
       promptWithInlineSlashes += ` [The user invoked this skill. Follow the instructions at: ${mention.skill.path}]`;
       annotated.add(mention.name);
@@ -68,8 +82,11 @@ export function planClaudeSkillDispatch(
   promptWithInlineSlashes = `${promptWithInlineSlashes}${prompt.slice(cursor)}`.trimEnd();
 
   return {
+    // A note's skill still needs its quote sent ahead of the command.
     leadingText:
-      prompt.slice(0, last.start).trim().length > 0 ? promptWithInlineSlashes : undefined,
+      prompt.slice(0, last.start).trim().length > 0 || last.text !== `/${last.name}`
+        ? promptWithInlineSlashes
+        : undefined,
     commandText: `/${last.name}${prompt.slice(last.end)}`.trimEnd(),
   };
 }
