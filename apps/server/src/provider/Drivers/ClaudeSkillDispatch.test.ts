@@ -1,3 +1,5 @@
+import { EnvironmentId, MessageId, ThreadId } from "@t3tools/contracts";
+import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
 import { describe, expect, it } from "vite-plus/test";
 
 import { planClaudeSkillDispatch, type ClaudeSkillTarget } from "./ClaudeSkillDispatch.ts";
@@ -140,5 +142,39 @@ describe("planClaudeSkillDispatch", () => {
       leadingText: `/interrogate [The user invoked this skill. Follow the instructions at: ${skillPath("interrogate")}] then /interrogate then /implement and /implement the fixes`,
       commandText: "/implement the fixes",
     });
+  });
+
+  it("dispatches a skill named in a quote's note, at the quote's position", () => {
+    const quote = (comment: string) =>
+      serializeAssistantCitation({
+        version: 1,
+        environmentId: EnvironmentId.make("env"),
+        threadId: ThreadId.make("thread"),
+        messageId: MessageId.make("message"),
+        text: "the flaky test",
+        start: 0,
+        end: 14,
+        prefix: "",
+        suffix: "",
+        comment,
+      });
+    const note = quote("please /review this, not /unknown");
+    expect(planClaudeSkillDispatch(note, SKILLS)).toEqual({
+      leadingText: note,
+      commandText: "/review this, not /unknown",
+    });
+    expect(planClaudeSkillDispatch(`$implement it ${note} then go`, SKILLS)).toEqual({
+      leadingText: `/implement it ${note} then go`,
+      commandText: "/review this, not /unknown then go",
+    });
+    const perf = quote("/review  focus on perf\n");
+    expect(planClaudeSkillDispatch(`${perf}\n then go `, SKILLS)).toEqual({
+      leadingText: `${perf}\n then go`,
+      commandText: "/review focus on perf then go",
+    });
+    expect(planClaudeSkillDispatch(`${note} then /implement`, SKILLS)?.commandText).toBe(
+      "/implement",
+    );
+    expect(planClaudeSkillDispatch(quote("see /etc/hosts and /unknown"), SKILLS)).toBeUndefined();
   });
 });
