@@ -3451,7 +3451,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     onPreviewFileIdChange={setPreviewFileId}
                   />
                 ) : null}
-                <ComposerContextActionsContext value={composerContextActions}>
+                <ComposerContextActionsContext
+                  value={{
+                    ...composerContextActions,
+                    noteSkills: { provider: selectedProvider, skills: selectedProviderSkills },
+                  }}
+                >
                   <ComposerPromptEditor
                     draftKey={composerDraftTargetKey}
                     // Switching threads lands focus here, so the label names the thread.

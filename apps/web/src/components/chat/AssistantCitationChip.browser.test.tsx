@@ -3,6 +3,7 @@ import {
   type AssistantCitation,
   EnvironmentId,
   MessageId,
+  ProviderDriverKind,
   ThreadId,
 } from "@t3tools/contracts";
 import { useState, type ReactNode } from "react";
@@ -12,6 +13,7 @@ import { userEvent } from "vite-plus/test/browser";
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
 import "~/index.css";
 import { act, render } from "../../../test/render";
+import { ComposerContextActionsContext } from "../composerContextActions";
 
 const mocks = vi.hoisted(() => ({ observeSource: vi.fn(), dispose: vi.fn() }));
 vi.mock(import("./AssistantCitationSource"), async (importOriginal) => ({
@@ -59,11 +61,30 @@ function mount(
   function Composer() {
     const [open, setOpen] = useState(true);
     return (
-      <AssistantCitationChip
-        citation={chipCitation}
-        composer
-        commentEditor={{ open, sourceAnchor, onOpenChange: setOpen, onSave }}
-      />
+      <ComposerContextActionsContext
+        value={{
+          environmentId: null,
+          expandImage: () => {},
+          expandVideo: () => {},
+          openFile: () => {},
+          openMention: () => {},
+          openPullRequest: () => {},
+          noteSkills: {
+            provider: ProviderDriverKind.make("claude"),
+            skills: ["triage", "review"].map((name) => ({
+              name,
+              path: `/skills/${name}/SKILL.md`,
+              enabled: true,
+            })),
+          },
+        }}
+      >
+        <AssistantCitationChip
+          citation={chipCitation}
+          composer
+          commentEditor={{ open, sourceAnchor, onOpenChange: setOpen, onSave }}
+        />
+      </ComposerContextActionsContext>
     );
   }
   return render(<Composer />);
@@ -217,5 +238,59 @@ describe("citation comment popup position", () => {
     const rect = popup()!.getBoundingClientRect();
     expect(rect.left).toBeGreaterThanOrEqual(0);
     expect(rect.right).toBeLessThanOrEqual(window.innerWidth);
+  });
+});
+
+describe("citation comment skill list", () => {
+  const options = () =>
+    [...document.querySelectorAll("[data-note-skill-menu] [data-composer-item-id]")].map(
+      (option) => option.textContent,
+    );
+
+  it("lists matching skills on /, and Enter types the pick instead of saving", async () => {
+    using _source = setup();
+    const onSave = vi.fn(() => true);
+    await using _screen = await mount(undefined, onSave);
+    await vi.waitFor(() => expect(document.activeElement).toBe(textarea()));
+    await userEvent.keyboard("run /tri");
+
+    await vi.waitFor(() => expect(options()).toEqual([expect.stringContaining("/triage")]));
+    // On screen and on top of the note's popup, not under it.
+    const option = document.querySelector<HTMLElement>(
+      "[data-note-skill-menu] [data-composer-item-id]",
+    )!;
+    const rect = option.getBoundingClientRect();
+    expect(rect.top).toBeGreaterThanOrEqual(0);
+    expect(rect.bottom).toBeLessThanOrEqual(window.innerHeight);
+    const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    expect(option.contains(hit)).toBe(true);
+    await userEvent.keyboard("{Enter}");
+
+    expect(onSave).not.toHaveBeenCalled();
+    expect(textarea()?.value).toBe("run /triage ");
+    expect(textarea()?.selectionStart).toBe("run /triage ".length);
+    expect(options()).toEqual([]);
+    await userEvent.keyboard("{Enter}");
+    expect(onSave).toHaveBeenCalledWith("run /triage ");
+  });
+
+  it("closes only the list on Escape, and the note on a second Escape", async () => {
+    using _source = setup();
+    await using _screen = await mount(
+      undefined,
+      vi.fn(() => true),
+    );
+    await vi.waitFor(() => expect(document.activeElement).toBe(textarea()));
+    await userEvent.keyboard("/");
+    await vi.waitFor(() => expect(options()).toHaveLength(2));
+
+    await userEvent.keyboard("{Escape}");
+    expect(options()).toEqual([]);
+    await userEvent.keyboard("x");
+    expect(textarea()?.value).toBe("/x");
+    expect(options()).toEqual([]);
+
+    await userEvent.keyboard("{Escape}");
+    await vi.waitFor(() => expect(textarea()).toBeNull());
   });
 });
